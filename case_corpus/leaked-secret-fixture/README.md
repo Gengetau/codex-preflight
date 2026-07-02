@@ -1,0 +1,5 @@
+# Synthetic Secret Fixture
+
+-----BEGIN PRIVATE KEY-----
+SYNTHETIC-NOT-VALID-KEY-MATERIAL
+-----END PRIVATE KEY-----

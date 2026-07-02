@@ -1,0 +1,9 @@
+id: mcp-shell-server
+title: MCP shell command server
+category: mcp
+command: npx mcp-server
+expectedDecision: ASK_USER
+expectedRules:
+  - MCP_SHELL_COMMAND
+description: Synthetic MCP configuration that starts a shell command.
+safetyNote: The MCP server is never started; corpus scans only read the JSON file.

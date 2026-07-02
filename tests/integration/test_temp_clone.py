@@ -51,6 +51,7 @@ def test_clone_repo_uses_optional_temp_dir_and_keep_temp(
 
 
 def test_clone_cleanup_error_warns_to_stderr(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -69,7 +70,7 @@ def test_clone_cleanup_error_warns_to_stderr(
     monkeypatch.setattr("codex_preflight_core.repo.temp_clone.subprocess.run", fake_run)
     monkeypatch.setattr("codex_preflight_core.repo.temp_clone._cleanup_tree", fail_cleanup)
 
-    with clone_repo_to_temp("https://github.com/example/repo.git"):
+    with clone_repo_to_temp("https://github.com/example/repo.git", temp_dir=tmp_path):
         pass
 
     assert "Warning: failed to remove temporary clone" in capsys.readouterr().err

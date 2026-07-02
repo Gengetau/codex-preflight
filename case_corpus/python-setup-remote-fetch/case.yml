@@ -1,0 +1,9 @@
+id: python-setup-remote-fetch
+title: Python setup remote fetch pattern
+category: dependency-install
+command: pip install .
+expectedDecision: ASK_USER
+expectedRules:
+  - PYTHON_SETUP_REMOTE_FETCH
+description: Synthetic setup.py that contains a remote fetch call inspired by unsafe install-time behavior.
+safetyNote: The URL is example.invalid and the fixture is never executed by tests or corpus scans.

@@ -8,15 +8,17 @@ import typer
 
 from codex_preflight_cli.exec_wrapper import run_checked_command
 from codex_preflight_core import __version__
+from codex_preflight_core.batch import render_batch_markdown, scan_batch
 from codex_preflight_core.cache.paths import scan_cache_path, trust_cache_path
 from codex_preflight_core.cache.scan_cache import ScanCache
 from codex_preflight_core.cache.trust_cache import TrustCache
 from codex_preflight_core.command.classifier import classify_command
+from codex_preflight_core.corpus import load_cases, render_corpus_markdown, scan_corpus
 from codex_preflight_core.policy.decision import EXIT_CODES, Decision
 from codex_preflight_core.preflight import run_preflight
 from codex_preflight_core.repo.fingerprint import compute_critical_fingerprint
 from codex_preflight_core.repo.identity import resolve_repo_identity
-from codex_preflight_core.repo.temp_clone import clone_repo_to_temp
+from codex_preflight_core.repo.temp_clone import RepoCloneError, clone_repo_to_temp, resolve_cloned_commit
 from codex_preflight_core.report.markdown_renderer import render_markdown_report
 from codex_preflight_core.scanner.engine import list_rule_ids
 
@@ -27,10 +29,14 @@ app = typer.Typer(
 rules_app = typer.Typer(help="Inspect static scanner rules.")
 trust_app = typer.Typer(help="Manage local command trust approvals.")
 cache_app = typer.Typer(help="Manage local scan cache.")
+corpus_app = typer.Typer(help="Scan synthetic historical attack-pattern fixtures.")
+batch_app = typer.Typer(help="Scan a YAML list of external repositories.")
 
 app.add_typer(rules_app, name="rules")
 app.add_typer(trust_app, name="trust")
 app.add_typer(cache_app, name="cache")
+app.add_typer(corpus_app, name="corpus")
+app.add_typer(batch_app, name="batch")
 
 
 @app.callback()
@@ -75,6 +81,14 @@ def preflight(
         bool,
         typer.Option("--keep-temp", help="Keep temporary clone for debugging."),
     ] = False,
+    ref: Annotated[
+        str | None,
+        typer.Option("--ref", help="Branch, tag, or commit to scan for --repo."),
+    ] = None,
+    depth: Annotated[
+        int,
+        typer.Option("--depth", help="Git clone/fetch depth for --repo."),
+    ] = 1,
     temp_dir: Annotated[
         Path | None,
         typer.Option("--temp-dir", help="Directory to create temporary clones under."),
@@ -84,8 +98,23 @@ def preflight(
     if not cwd and not repo:
         cwd = "."
     if repo:
-        with clone_repo_to_temp(repo, keep_temp=keep_temp, temp_dir=temp_dir) as cloned:
-            report = run_preflight(cloned, command, use_cache=not no_cache)
+        try:
+            with clone_repo_to_temp(repo, ref=ref, depth=depth, keep_temp=keep_temp, temp_dir=temp_dir) as cloned:
+                report = run_preflight(
+                    cloned,
+                    command,
+                    use_cache=not no_cache,
+                    allow_trust=False,
+                    source_metadata={
+                        "sourceType": "github",
+                        "cloneUrl": repo,
+                        "requestedRef": ref,
+                        "resolvedCommit": resolve_cloned_commit(cloned),
+                    },
+                )
+        except RepoCloneError as error:
+            typer.echo(str(error), err=True)
+            raise typer.Exit(2) from error
     else:
         report = run_preflight(Path(cwd or "."), command, use_cache=not no_cache)
     rendered = json.dumps(report, indent=2) if format == "json" else render_markdown_report(report)
@@ -168,6 +197,50 @@ def clear_cache() -> None:
     """Clear local scan cache."""
     ScanCache(scan_cache_path()).clear()
     typer.echo("Scan cache cleared.")
+
+
+@corpus_app.command("list")
+def list_corpus() -> None:
+    """List bundled synthetic corpus cases."""
+    for case in load_cases():
+        typer.echo(f"{case.id}\t{case.expected_decision}\t{case.title}")
+
+
+@corpus_app.command("scan")
+def scan_corpus_command(
+    format: Annotated[
+        str,
+        typer.Option("--format", help="Report format: json or markdown."),
+    ] = "markdown",
+    case: Annotated[
+        str | None,
+        typer.Option("--case", help="Scan a single corpus case id."),
+    ] = None,
+) -> None:
+    """Scan bundled synthetic corpus cases and compare expectations."""
+    try:
+        result = scan_corpus(case_id=case)
+    except ValueError as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(2) from error
+    rendered = json.dumps(result, indent=2) if format == "json" else render_corpus_markdown(result)
+    typer.echo(rendered)
+    raise typer.Exit(0 if result["passed"] else 1)
+
+
+@batch_app.command("scan")
+def scan_batch_command(
+    config: Annotated[Path, typer.Argument(help="YAML file describing public repositories.")],
+    format: Annotated[
+        str,
+        typer.Option("--format", help="Report format: json or markdown."),
+    ] = "markdown",
+) -> None:
+    """Scan external repositories from a YAML batch file."""
+    result = scan_batch(config, clone_repo_to_temp, resolve_cloned_commit)
+    rendered = json.dumps(result, indent=2) if format == "json" else render_batch_markdown(result)
+    typer.echo(rendered)
+    raise typer.Exit(0 if result["passed"] else 1)
 
 
 def _parse_ttl(value: str) -> timedelta:

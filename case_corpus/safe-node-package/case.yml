@@ -1,0 +1,8 @@
+id: safe-node-package
+title: Safe node package
+category: safe
+command: npm install
+expectedDecision: ALLOW
+expectedRules: []
+description: Minimal package fixture without lifecycle scripts or risky instructions.
+safetyNote: Contains no executable lifecycle scripts and is only scanned statically.

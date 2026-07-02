@@ -1,0 +1,9 @@
+id: github-actions-pull-request-target
+title: GitHub Actions pull_request_target trigger
+category: github-actions
+command: gh workflow run synthetic.yml
+expectedDecision: ASK_USER
+expectedRules:
+  - GHA_PULL_REQUEST_TARGET
+description: Synthetic workflow using pull_request_target, a historically sensitive trigger.
+safetyNote: The workflow is never executed; the file is parsed as text only.

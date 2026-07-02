@@ -1,0 +1,6 @@
+repos:
+  - name: octocat-hello-world
+    url: https://github.com/octocat/Hello-World.git
+    ref: master
+    command: cat README
+    expected: ALLOW

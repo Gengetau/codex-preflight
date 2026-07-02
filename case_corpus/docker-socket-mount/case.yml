@@ -1,0 +1,9 @@
+id: docker-socket-mount
+title: Docker socket mount
+category: docker
+command: docker compose up
+expectedDecision: ASK_USER
+expectedRules:
+  - DOCKER_SOCKET_MOUNT
+description: Synthetic compose file with Docker socket access.
+safetyNote: The compose file is never started; it exists only for static scanning.

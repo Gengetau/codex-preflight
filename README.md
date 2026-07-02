@@ -16,6 +16,9 @@ This repository contains a working V1 CLI:
 ```bash
 codex-preflight --help
 codex-preflight preflight --cwd . --command "pnpm install" --format json
+codex-preflight preflight --repo https://github.com/octocat/Hello-World.git --ref master --command "cat README" --format json
+codex-preflight corpus scan
+codex-preflight batch scan examples/public-repos.yml --format markdown
 codex-preflight rules list
 codex-preflight trust list
 codex-preflight cache clear
@@ -84,6 +87,31 @@ codex-preflight exec --cwd demo_repos/malicious_postinstall --format markdown --
 
 Expected result: exit code `30` with a Markdown report; `pnpm install` is not executed.
 
+Scan a public repository without running its code:
+
+```bash
+codex-preflight preflight --repo https://github.com/octocat/Hello-World.git --ref master --command "cat README" --format json
+```
+
+Expected result: a JSON report with `repo.sourceType` set to `github` and clone metadata such as
+`cloneUrl`, `requestedRef`, and `resolvedCommit`.
+
+Run the safe synthetic historical-pattern corpus:
+
+```bash
+codex-preflight corpus scan
+```
+
+Expected result: all case expectations pass.
+
+Run an optional public repository batch scan:
+
+```bash
+codex-preflight batch scan examples/public-repos.yml --format markdown
+```
+
+Batch scans are for manual checks and are not part of CI by default.
+
 ## Trust And Cache
 
 `ALLOW` scan reports can be cached by repository identity, head commit, critical-file
@@ -118,5 +146,5 @@ ruff check .
 
 Codex Preflight is a local static heuristic scanner. It does not execute MCP servers, run package
 install scripts, provide a cloud service, replace a full SAST or dependency-audit product, or
-prove that a repository is safe. It is meant to catch common high-signal hazards before an agent
-runs commands.
+prove that a repository is safe. It is not a CVE scanner or malware dynamic analyzer. It is meant
+to catch common high-signal hazards before an agent runs commands.

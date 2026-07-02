@@ -16,7 +16,13 @@ POLICY_VERSION = "default-v1"
 RULESET_VERSION = "2026.07.02"
 
 
-def run_preflight(cwd: Path, command: str, use_cache: bool = True) -> dict[str, Any]:
+def run_preflight(
+    cwd: Path,
+    command: str,
+    use_cache: bool = True,
+    allow_trust: bool = True,
+    source_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     scan_path = cwd.resolve()
     identity = resolve_repo_identity(cwd)
     classification = classify_command(command)
@@ -38,16 +44,19 @@ def run_preflight(cwd: Path, command: str, use_cache: bool = True) -> dict[str, 
             }
             return cached
 
-    try:
-        trust = TrustCache(trust_cache_path()).match(
-            repo_id=identity.repo_id,
-            head_commit=identity.head_commit,
-            critical_fingerprint=fingerprint,
-            command_scope=classification.scope.value,
-            policy_version=POLICY_VERSION,
-            ruleset_version=RULESET_VERSION,
-        )
-    except OSError:
+    if allow_trust:
+        try:
+            trust = TrustCache(trust_cache_path()).match(
+                repo_id=identity.repo_id,
+                head_commit=identity.head_commit,
+                critical_fingerprint=fingerprint,
+                command_scope=classification.scope.value,
+                policy_version=POLICY_VERSION,
+                ruleset_version=RULESET_VERSION,
+            )
+        except OSError:
+            trust = None
+    else:
         trust = None
     if trust:
         cache_status = {
@@ -74,6 +83,7 @@ def run_preflight(cwd: Path, command: str, use_cache: bool = True) -> dict[str, 
         findings=findings,
         policy=policy,
         cache_status=cache_status,
+        source_metadata=source_metadata,
     )
     if use_cache and not trust:
         try:

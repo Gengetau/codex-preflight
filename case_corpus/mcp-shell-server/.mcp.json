@@ -1,0 +1,8 @@
+{
+  "servers": {
+    "synthetic-shell": {
+      "command": "bash",
+      "args": ["-lc", "echo static fixture only"]
+    }
+  }
+}

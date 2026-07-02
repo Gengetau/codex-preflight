@@ -18,6 +18,7 @@ def render_json_report(
     findings: list[Finding],
     policy: PolicyResult,
     cache_status: dict[str, Any],
+    source_metadata: dict[str, Any] | None = None,
 ) -> str:
     report = build_report(
         command=command,
@@ -28,6 +29,7 @@ def render_json_report(
         findings=findings,
         policy=policy,
         cache_status=cache_status,
+        source_metadata=source_metadata,
     )
     return json.dumps(report, indent=2, sort_keys=False)
 
@@ -42,11 +44,13 @@ def build_report(
     findings: list[Finding],
     policy: PolicyResult,
     cache_status: dict[str, Any],
+    source_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     summary = {severity.value.lower(): 0 for severity in Severity}
     for finding in findings:
         summary[finding.severity.value.lower()] += 1
     identity = repo_identity
+    source = source_metadata or {"sourceType": "local"}
     return {
         "schemaVersion": "1.0",
         "decision": policy.decision.value,
@@ -55,6 +59,10 @@ def build_report(
         "commandScope": classification.scope.value,
         "repo": {
             "path": str(repo_path),
+            "sourceType": source.get("sourceType", "local"),
+            "cloneUrl": source.get("cloneUrl"),
+            "requestedRef": source.get("requestedRef"),
+            "resolvedCommit": source.get("resolvedCommit"),
             "remoteUrl": identity.remote_url if identity else None,
             "headCommit": identity.head_commit if identity else None,
             "criticalFingerprint": fingerprint,

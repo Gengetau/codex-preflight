@@ -1,0 +1,8 @@
+name: Synthetic
+on:
+  pull_request_target:
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo static fixture only

@@ -1,0 +1,9 @@
+id: leaked-secret-fixture
+title: Synthetic private key marker
+category: secrets
+command: cat README.md
+expectedDecision: BLOCK
+expectedRules:
+  - SECRET_PRIVATE_KEY
+description: Synthetic private-key header used to verify secret-like marker detection.
+safetyNote: This is not a real key; it contains no valid key material.

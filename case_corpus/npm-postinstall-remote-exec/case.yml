@@ -1,0 +1,9 @@
+id: npm-postinstall-remote-exec
+title: NPM postinstall remote shell pattern
+category: dependency-install
+command: npm install
+expectedDecision: BLOCK
+expectedRules:
+  - NODE_LIFECYCLE_REMOTE_EXEC
+description: Synthetic package lifecycle script that resembles historical remote shell installer patterns.
+safetyNote: Uses example.invalid and must never be executed; this fixture is for static scanning only.
