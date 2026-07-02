@@ -1,0 +1,7 @@
+services:
+  app:
+    image: docker:latest
+    privileged: true
+    network_mode: host
+    volumes:
+      - "/:/host"

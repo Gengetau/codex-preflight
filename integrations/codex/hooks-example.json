@@ -1,0 +1,5 @@
+{
+  "preflight": {
+    "command": "codex-preflight preflight --cwd . --command \"<planned-command>\" --format json"
+  }
+}

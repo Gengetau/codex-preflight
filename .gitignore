@@ -1,0 +1,14 @@
+codex-preflight-v1-project-doc.md
+codex-preflight-loop-engineering.md
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+tmp/
+pytest-tmp/
+test-tmp/
+.ruff_cache/
+.venv/
+dist/
+build/
+*.egg-info/

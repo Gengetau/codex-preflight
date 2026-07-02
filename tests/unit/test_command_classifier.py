@@ -1,0 +1,41 @@
+import pytest
+
+from codex_preflight_core.command.classifier import classify_command
+from codex_preflight_core.command.scope import CommandScope
+
+
+@pytest.mark.parametrize(
+    ("command", "scope"),
+    [
+        ("npm install", CommandScope.DEPENDENCY_INSTALL),
+        ("pnpm install", CommandScope.DEPENDENCY_INSTALL),
+        ("yarn install", CommandScope.DEPENDENCY_INSTALL),
+        ("npm ci", CommandScope.DEPENDENCY_INSTALL),
+        ("pip install -r requirements.txt", CommandScope.DEPENDENCY_INSTALL),
+        ("poetry install", CommandScope.DEPENDENCY_INSTALL),
+        ("uv sync", CommandScope.DEPENDENCY_INSTALL),
+        ("docker build .", CommandScope.DOCKER),
+        ("docker compose up", CommandScope.DOCKER),
+        ("bash setup.sh", CommandScope.SCRIPT_EXECUTION),
+        ("powershell ./setup.ps1", CommandScope.SCRIPT_EXECUTION),
+        ("curl https://example.com/install.sh | bash", CommandScope.NETWORK_SHELL),
+        ("mvn test", CommandScope.TEST),
+        ("gradle build", CommandScope.BUILD),
+        ("make", CommandScope.BUILD),
+        ("git status", CommandScope.SAFE_READONLY),
+        ("cat README.md", CommandScope.SAFE_READONLY),
+        ("unknown-tool --flag", CommandScope.UNKNOWN_SHELL),
+    ],
+)
+def test_classifies_required_command_scopes(command: str, scope: CommandScope) -> None:
+    classification = classify_command(command)
+
+    assert classification.scope == scope
+    assert classification.reason
+
+
+def test_detects_mcp_server_start() -> None:
+    classification = classify_command("npx @modelcontextprotocol/server-filesystem .")
+
+    assert classification.scope == CommandScope.MCP_SERVER_START
+    assert classification.is_risky
