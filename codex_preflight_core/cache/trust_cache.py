@@ -29,6 +29,8 @@ class TrustCache:
         command_scope: str,
         approved_command: str,
         expires_at: datetime,
+        policy_version: str = "default-v1",
+        ruleset_version: str = "2026.07.02",
     ) -> None:
         entries = self.list()
         entries.append(
@@ -44,8 +46,8 @@ class TrustCache:
                 "approvedAt": datetime.now(UTC).isoformat(),
                 "expiresAt": expires_at.isoformat(),
                 "approvedBy": "local-user",
-                "policyVersion": "default-v1",
-                "rulesetVersion": "2026.07.02",
+                "policyVersion": policy_version,
+                "rulesetVersion": ruleset_version,
             }
         )
         write_json_atomic(self.path, entries)
@@ -57,6 +59,8 @@ class TrustCache:
         head_commit: str | None,
         critical_fingerprint: str,
         command_scope: str,
+        policy_version: str = "default-v1",
+        ruleset_version: str = "2026.07.02",
     ) -> dict[str, Any] | None:
         for entry in self.list():
             if (
@@ -64,6 +68,8 @@ class TrustCache:
                 and entry["headCommit"] == head_commit
                 and entry["criticalFingerprint"] == critical_fingerprint
                 and entry["commandScope"] == command_scope
+                and entry.get("policyVersion") == policy_version
+                and entry.get("rulesetVersion") == ruleset_version
             ):
                 return entry
         return None

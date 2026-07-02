@@ -24,7 +24,46 @@ codex-preflight cache clear
 The scanner reads repository files statically, classifies the planned command, evaluates rule
 findings through a policy engine, and returns a structured decision.
 
-## Example
+## Quick Start
+
+Install locally:
+
+```bash
+pip install -e ".[dev]"
+codex-preflight --help
+```
+
+Run a scan before a command:
+
+```bash
+codex-preflight preflight --cwd . --command "pytest" --format json
+```
+
+Wrap command execution:
+
+```bash
+codex-preflight exec --cwd . --format markdown -- pytest
+```
+
+The exec wrapper runs the command only when preflight returns `ALLOW` or `WARN`. It prints a
+readable report and exits without running the command for `ASK_USER` or `BLOCK`.
+
+## Dogfooding Workflow
+
+When working on this project, run preflight before tests, lint, package installation, Docker,
+shell scripts, MCP startup, or commands in unfamiliar repositories:
+
+```bash
+codex-preflight preflight --cwd . --command "pytest -q" --format json --no-cache
+pytest -q
+
+codex-preflight preflight --cwd . --command "ruff check . --no-cache" --format json --no-cache
+ruff check . --no-cache
+```
+
+If the decision is `ASK_USER` or `BLOCK`, stop and inspect the report before continuing.
+
+## Examples
 
 ```bash
 codex-preflight preflight --cwd demo_repos/malicious_postinstall --command "pnpm install" --format json
@@ -33,16 +72,51 @@ codex-preflight preflight --cwd demo_repos/malicious_postinstall --command "pnpm
 Expected result: `BLOCK`, because package installation would execute a remote shell pipeline
 through a lifecycle script.
 
-## Development
+```bash
+codex-preflight preflight --cwd demo_repos/safe_node_app --command "pnpm install" --format json
+```
 
-Install locally:
+Expected result: `ALLOW`.
 
 ```bash
-pip install -e ".[dev]"
+codex-preflight exec --cwd demo_repos/malicious_postinstall --format markdown -- pnpm install
 ```
+
+Expected result: exit code `30` with a Markdown report; `pnpm install` is not executed.
+
+## Trust And Cache
+
+`ALLOW` scan reports can be cached by repository identity, head commit, critical-file
+fingerprint, command scope, policy version, and ruleset version. Local trust approvals use the
+same scope, so approval is invalidated by policy or ruleset changes, relevant file changes, or a
+different command scope.
+
+Use:
+
+```bash
+codex-preflight trust approve --cwd . --command "pnpm install" --ttl 7d
+codex-preflight trust list
+codex-preflight trust revoke --cwd .
+codex-preflight cache clear
+```
+
+## Development
 
 Run tests:
 
 ```bash
 pytest
 ```
+
+Run lint:
+
+```bash
+ruff check .
+```
+
+## Limitations
+
+Codex Preflight is a local static heuristic scanner. It does not execute MCP servers, run package
+install scripts, provide a cloud service, replace a full SAST or dependency-audit product, or
+prove that a repository is safe. It is meant to catch common high-signal hazards before an agent
+runs commands.

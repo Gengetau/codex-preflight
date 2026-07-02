@@ -75,12 +75,16 @@ def preflight(
         bool,
         typer.Option("--keep-temp", help="Keep temporary clone for debugging."),
     ] = False,
+    temp_dir: Annotated[
+        Path | None,
+        typer.Option("--temp-dir", help="Directory to create temporary clones under."),
+    ] = None,
 ) -> None:
     """Evaluate whether a planned command should run."""
     if not cwd and not repo:
         cwd = "."
     if repo:
-        with clone_repo_to_temp(repo, keep_temp=keep_temp) as cloned:
+        with clone_repo_to_temp(repo, keep_temp=keep_temp, temp_dir=temp_dir) as cloned:
             report = run_preflight(cloned, command, use_cache=not no_cache)
     else:
         report = run_preflight(Path(cwd or "."), command, use_cache=not no_cache)
@@ -102,9 +106,13 @@ def exec_command(
         Path,
         typer.Option("--cwd", help="Local repository path to scan and run in."),
     ] = Path("."),
+    format: Annotated[
+        str,
+        typer.Option("--format", help="Blocked report format: json or markdown."),
+    ] = "markdown",
 ) -> None:
     """Wrap command execution with a preflight check."""
-    raise typer.Exit(run_checked_command(cwd, command))
+    raise typer.Exit(run_checked_command(cwd, command, report_format=format))
 
 
 @rules_app.command("list")
@@ -139,6 +147,8 @@ def approve_trust(
         command_scope=classification.scope.value,
         approved_command=command,
         expires_at=datetime.now(UTC) + _parse_ttl(ttl),
+        policy_version="default-v1",
+        ruleset_version="2026.07.02",
     )
     typer.echo("Trust approval stored.")
 

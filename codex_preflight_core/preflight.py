@@ -5,6 +5,7 @@ from codex_preflight_core.cache.paths import scan_cache_path, trust_cache_path
 from codex_preflight_core.cache.scan_cache import ScanCache
 from codex_preflight_core.cache.trust_cache import TrustCache
 from codex_preflight_core.command.classifier import classify_command
+from codex_preflight_core.policy.decision import Decision, PolicyResult
 from codex_preflight_core.policy.engine import evaluate_policy
 from codex_preflight_core.repo.fingerprint import compute_critical_fingerprint
 from codex_preflight_core.repo.identity import RepoIdentity, resolve_repo_identity
@@ -43,6 +44,8 @@ def run_preflight(cwd: Path, command: str, use_cache: bool = True) -> dict[str, 
             head_commit=identity.head_commit,
             critical_fingerprint=fingerprint,
             command_scope=classification.scope.value,
+            policy_version=POLICY_VERSION,
+            ruleset_version=RULESET_VERSION,
         )
     except OSError:
         trust = None
@@ -55,6 +58,13 @@ def run_preflight(cwd: Path, command: str, use_cache: bool = True) -> dict[str, 
 
     findings = scan_repository(scan_path)
     policy = evaluate_policy(findings, classification)
+    if trust:
+        policy = PolicyResult(
+            decision=Decision.ALLOW,
+            risk_score=policy.risk_score,
+            reason="Command allowed by matching scoped user approval.",
+            agent_instruction="Proceed normally. A matching scoped user approval was found.",
+        )
     report = build_report(
         command=command,
         classification=classification,
@@ -65,7 +75,7 @@ def run_preflight(cwd: Path, command: str, use_cache: bool = True) -> dict[str, 
         policy=policy,
         cache_status=cache_status,
     )
-    if use_cache:
+    if use_cache and not trust:
         try:
             scan_cache.store(cache_key, report)
         except OSError:

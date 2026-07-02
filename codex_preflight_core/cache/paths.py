@@ -1,7 +1,11 @@
+import os
 from pathlib import Path
 
 
 def default_cache_dir() -> Path:
+    override = os.environ.get("CODEX_PREFLIGHT_HOME")
+    if override:
+        return Path(override)
     return Path.home() / ".codex-preflight"
 
 
