@@ -1,6 +1,6 @@
 # Release History
 
-## v1.4.0
+## v0.1.4
 
 Codex plugin packaging:
 
