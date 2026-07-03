@@ -61,7 +61,7 @@ planned command
   -> JSON / Markdown report
 ```
 
-V1.3.1 uses bounded safe reads and never executes repository code. Reachability follows only
+v0.1.3.1 uses bounded safe reads and never executes repository code. Reachability follows only
 statically visible local paths inside the repository and reports missing, dynamic, outside-repo,
 symlink, oversized, binary, or incomplete paths as uncertainty.
 
@@ -106,7 +106,7 @@ readable report and exits without running the command for `ASK_USER` or `BLOCK`.
 
 ## Codex Plugin Usage
 
-Codex Preflight remains a Python CLI project. v1.4.0 adds Codex plugin packaging around the
+Codex Preflight remains a Python CLI project. v0.1.4 adds Codex plugin packaging around the
 existing CLI so Codex can discover the guidance as a skill.
 
 The plugin is skill-based:
