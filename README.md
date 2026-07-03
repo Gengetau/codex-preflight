@@ -26,7 +26,8 @@ codex-preflight cache clear
 
 The scanner reads repository files statically, classifies the planned command, builds a best-effort
 execution graph for reachable local scripts/files, evaluates rule findings through a policy
-engine, and returns a structured decision.
+engine, and returns a structured decision. Reachability uses bounded safe reads and does not
+execute repository code.
 
 ## Quick Start
 
@@ -156,5 +157,5 @@ to catch common high-signal hazards before an agent runs commands.
 V1.2.1 fixes known structural bypasses around nested critical files, composite command
 classification, unsafe clone protocols, and trust revocation scope. V1.3 adds best-effort static
 reachability for indirect local execution and treats missing, dynamic, outside-repository, unknown,
-or incompletely scanned high-risk paths as `ASK_USER` at minimum. The scanner remains static and
-heuristic.
+symlink, oversized, binary, or incompletely scanned high-risk paths as `ASK_USER` at minimum. The
+scanner remains static and heuristic.

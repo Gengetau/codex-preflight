@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from codex_preflight_core.command.classifier import classify_command
 from codex_preflight_core.preflight import run_preflight
 from codex_preflight_core.reachability.resolver import build_execution_graph
@@ -132,3 +134,95 @@ def test_safe_readonly_command_stays_low_risk(tmp_path: Path) -> None:
     assert report["executionGraph"]["nodes"]
     assert report["executionGraph"]["capabilities"] == []
     assert report["executionGraph"]["uncertainties"] == []
+
+
+def test_reachability_skips_fixture_marker_directories(tmp_path: Path) -> None:
+    fixture = tmp_path / "fixtures"
+    write_file(fixture / ".codex-preflight-fixtures", "")
+    write_file(fixture / "package.json", '{"scripts": {"postinstall": "node scripts/setup.js"}}')
+    write_file(fixture / "scripts" / "setup.js", "child_process.exec('echo static')\n")
+
+    graph = build_execution_graph(tmp_path, "pnpm install", classify_command("pnpm install"))
+
+    assert "JS_CHILD_PROCESS_EXEC" not in rule_ids(graph)
+    assert not any(node.file == Path("fixtures/package.json") for node in graph.nodes)
+
+
+def test_oversized_reachable_target_is_uncertain_not_scanned(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("codex_preflight_core.reachability.resolver.REACHABILITY_MAX_FILE_SIZE", 64)
+    write_file(tmp_path / "package.json", '{"scripts": {"postinstall": "node scripts/large.js"}}')
+    write_file(tmp_path / "scripts" / "large.js", "child_process.exec('echo static')\n" + ("a" * 128))
+
+    graph = build_execution_graph(tmp_path, "pnpm install", classify_command("pnpm install"))
+
+    assert "SCRIPT_PARSE_UNCERTAIN" in rule_ids(graph)
+    assert "JS_CHILD_PROCESS_EXEC" not in rule_ids(graph)
+
+
+def test_binary_reachable_target_is_uncertain_not_scanned(tmp_path: Path) -> None:
+    write_file(tmp_path / "package.json", '{"scripts": {"postinstall": "node scripts/binary.js"}}')
+    write_file(tmp_path / "scripts" / "binary.js", "child_process.exec('echo static')\n\x00")
+
+    graph = build_execution_graph(tmp_path, "pnpm install", classify_command("pnpm install"))
+
+    assert "SCRIPT_PARSE_UNCERTAIN" in rule_ids(graph)
+    assert "JS_CHILD_PROCESS_EXEC" not in rule_ids(graph)
+
+
+def test_outside_reachable_target_is_not_scanned(tmp_path: Path) -> None:
+    outside = tmp_path.parent / "outside.js"
+    write_file(tmp_path / "package.json", '{"scripts": {"postinstall": "node ../outside.js"}}')
+    write_file(outside, "child_process.exec('echo static')\n")
+
+    graph = build_execution_graph(tmp_path, "pnpm install", classify_command("pnpm install"))
+
+    assert "SCRIPT_TARGET_OUTSIDE_REPO" in rule_ids(graph)
+    assert "JS_CHILD_PROCESS_EXEC" not in rule_ids(graph)
+
+
+def test_reachable_symlink_target_is_uncertain_not_scanned(tmp_path: Path) -> None:
+    write_file(tmp_path / "package.json", '{"scripts": {"postinstall": "node scripts/link.js"}}')
+    write_file(tmp_path / "real.js", "child_process.exec('echo static')\n")
+    link = tmp_path / "scripts" / "link.js"
+    link.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        link.symlink_to(tmp_path / "real.js")
+    except OSError as error:
+        pytest.skip(f"symlink creation is unavailable: {error}")
+
+    graph = build_execution_graph(tmp_path, "pnpm install", classify_command("pnpm install"))
+
+    assert "SCRIPT_PARSE_UNCERTAIN" in rule_ids(graph)
+    assert "JS_CHILD_PROCESS_EXEC" not in rule_ids(graph)
+
+
+@pytest.mark.parametrize(
+    ("command", "script_name"),
+    [
+        ("npm test", "test"),
+        ("npm start", "start"),
+        ("npm build", "build"),
+    ],
+)
+def test_npm_shorthand_commands_reach_package_scripts(
+    tmp_path: Path,
+    command: str,
+    script_name: str,
+) -> None:
+    write_file(
+        tmp_path / "package.json",
+        f'{{"scripts": {{"{script_name}": "node scripts/{script_name}.js"}}}}',
+    )
+    write_file(tmp_path / "scripts" / f"{script_name}.js", "child_process.exec('echo static')\n")
+
+    report = run_preflight(tmp_path, command, use_cache=False)
+
+    assert report["decision"] in {"ASK_USER", "BLOCK"}
+    assert "JS_CHILD_PROCESS_EXEC" in [finding["ruleId"] for finding in report["findings"]]
+    assert any(
+        node["label"] == f"package.json scripts.{script_name}"
+        for node in report["executionGraph"]["nodes"]
+    )

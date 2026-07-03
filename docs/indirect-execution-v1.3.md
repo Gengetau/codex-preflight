@@ -29,10 +29,15 @@ The resolver follows these command scopes:
   `prepare`, `prepack`, `postpack`) and local scripts they reference.
 - Script execution: `bash`, `sh`, `python`, `node`, `powershell`, and `pwsh` local targets.
 - Docker: compose files and statically visible Dockerfiles.
-- Build: `make` and `npm/pnpm/yarn run <script>`.
+- Build/test package scripts: `make`, `npm/pnpm/yarn run <script>`, and shorthand commands such
+  as `npm test`, `npm start`, and `npm build`.
 
 Only relative in-repository paths are followed. Absolute paths and paths outside the repository
 become uncertainty findings instead of being scanned.
+
+Reachable files are read through the same bounded safe reader used by the scanner. Oversized,
+binary, unreadable, and symlink targets are reported as uncertainty instead of being directly read.
+Directories marked with `.codex-preflight-fixtures` are skipped during reachability traversal.
 
 ## Policy
 
@@ -45,7 +50,7 @@ exceeded, the report includes `SCRIPT_CHAIN_DEPTH_EXCEEDED`.
 
 ## Limitations
 
-The scanner is still static and heuristic. It cannot prove a repository is safe, evaluate all
-language semantics, resolve dynamic imports, or model runtime environment changes. V1.3 closes
-known indirection gaps by surfacing reachable local scripts and uncertainty rather than treating
-unknown paths as safe.
+The scanner is still static, heuristic, and best-effort. It never executes repository code, and it
+cannot prove a repository is safe, evaluate all language semantics, resolve dynamic imports, or
+model runtime environment changes. V1.3 closes known indirection gaps by surfacing reachable local
+scripts and uncertainty rather than treating unknown paths as safe.
