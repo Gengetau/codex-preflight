@@ -20,6 +20,8 @@ class ScanCache:
         return None
 
     def store(self, key: dict[str, str | None], report: dict[str, Any]) -> None:
+        if report.get("decision") not in {"ALLOW", "WARN"}:
+            return
         entries = [
             entry
             for entry in self._load()

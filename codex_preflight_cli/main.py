@@ -165,7 +165,7 @@ def approve_trust(
 ) -> None:
     """Approve a scoped command for a repository."""
     identity = resolve_repo_identity(Path(cwd))
-    fingerprint = compute_critical_fingerprint(identity.path)
+    fingerprint = compute_critical_fingerprint(identity.path, command=command)
     classification = classify_command(command)
     TrustCache(trust_cache_path()).approve(
         repo_id=identity.repo_id,
@@ -185,11 +185,20 @@ def approve_trust(
 @trust_app.command("revoke")
 def revoke_trust(
     cwd: Annotated[str, typer.Option("--cwd", help="Repository path to revoke.")],
+    command: Annotated[
+        str | None,
+        typer.Option("--command", help="Only revoke approvals for this command scope."),
+    ] = None,
 ) -> None:
     """Revoke trust approvals for a repository."""
     identity = resolve_repo_identity(Path(cwd))
-    TrustCache(trust_cache_path()).revoke(identity.path)
-    typer.echo("Trust approvals revoked.")
+    command_scope = classify_command(command).scope.value if command else None
+    removed = TrustCache(trust_cache_path()).revoke_identity(identity.repo_id, command_scope=command_scope)
+    if removed:
+        suffix = "" if removed == 1 else "s"
+        typer.echo(f"Revoked {removed} trust approval{suffix}.")
+    else:
+        typer.echo("No matching trust approvals found.")
 
 
 @cache_app.command("clear")

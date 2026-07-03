@@ -18,6 +18,10 @@ Options:
 - `--temp-dir`: parent directory for temporary clones.
 - `--keep-temp`: preserve the clone and print its path to stderr for debugging.
 
+By default external scans only allow `https://` clone URLs. Local paths, `file://`, `ssh://`,
+`git://`, `ext::`, and values starting with `-` are rejected before git is invoked. Clone and fetch
+also run with git protocol restrictions for `ext`, `file`, and `ssh`.
+
 Reports for external repositories include:
 
 - `repo.sourceType`: `github`

@@ -9,7 +9,10 @@ def test_clone_repo_to_temp_scans_mocked_git_repository(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def fake_run(args: list[str], **kwargs: object) -> object:
-        assert args[:3] == ["git", "clone", "--depth"]
+        assert args[0] == "git"
+        assert "protocol.ext.allow=never" in args
+        assert "clone" in args
+        assert "--depth" in args
         target = Path(args[-1])
         target.mkdir(parents=True)
         (target / "README.md").write_text("hello", encoding="utf-8")

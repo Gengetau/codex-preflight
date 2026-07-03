@@ -16,7 +16,7 @@ class PythonSetupRule:
 
     def scan(self, root: Path, relative_path: Path, text: str) -> list[Finding]:
         _ = root
-        if relative_path.as_posix() != "setup.py":
+        if relative_path.name != "setup.py":
             return []
         for pattern in REMOTE_FETCH_PATTERNS:
             match = pattern.search(text)

@@ -24,7 +24,7 @@ class AgentInstructionRule:
     def scan(self, root: Path, relative_path: Path, text: str) -> list[Finding]:
         _ = root
         normalized = relative_path.as_posix()
-        if normalized not in {"README.md", "AGENTS.md", "CLAUDE.md"} and not (
+        if relative_path.name not in {"README.md", "AGENTS.md", "CLAUDE.md"} and not (
             normalized.startswith(".cursor/rules")
             or normalized == ".github/copilot-instructions.md"
         ):

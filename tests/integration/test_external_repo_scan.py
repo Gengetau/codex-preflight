@@ -70,7 +70,7 @@ def test_clone_repo_to_temp_uses_ref_depth_and_reports_clear_errors(
 
     def fake_run(args: list[str], **kwargs: object) -> object:
         calls.append(args)
-        target = Path(args[-1]) if args[:2] == ["git", "clone"] else None
+        target = Path(args[-1]) if "clone" in args else None
         if target is not None:
             target.mkdir(parents=True)
             (target / "README.md").write_text("hello", encoding="utf-8")
@@ -92,9 +92,28 @@ def test_clone_repo_to_temp_uses_ref_depth_and_reports_clear_errors(
     ) as cloned:
         assert (cloned / "README.md").exists()
 
-    assert calls[0][:5] == ["git", "clone", "--depth", "3", "https://github.com/example/repo.git"]
-    assert Path(calls[0][5]).name == "repo"
-    assert calls[1][:6] == ["git", "-C", str(cloned), "fetch", "--depth", "3"]
+    assert calls[0][:7] == [
+        "git",
+        "-c",
+        "protocol.ext.allow=never",
+        "-c",
+        "protocol.file.allow=never",
+        "-c",
+        "protocol.ssh.allow=never",
+    ]
+    assert calls[0][-4:-1] == ["--depth", "3", "https://github.com/example/repo.git"]
+    assert Path(calls[0][-1]).name == "repo"
+    assert calls[1][:8] == [
+        "git",
+        "-c",
+        "protocol.ext.allow=never",
+        "-c",
+        "protocol.file.allow=never",
+        "-c",
+        "protocol.ssh.allow=never",
+        "-C",
+    ]
+    assert calls[1][8:12] == [str(cloned), "fetch", "--depth", "3"]
     assert calls[1][-2:] == ["origin", "v1.2.3"]
     assert calls[2] == ["git", "-C", str(cloned), "checkout", "--detach", "FETCH_HEAD"]
 

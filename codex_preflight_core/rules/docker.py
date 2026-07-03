@@ -15,7 +15,7 @@ class DockerRule:
     def scan(self, root: Path, relative_path: Path, text: str) -> list[Finding]:
         _ = root
         normalized = relative_path.as_posix()
-        if normalized not in {"Dockerfile", "docker-compose.yml", "compose.yaml", "compose.yml"}:
+        if relative_path.name not in {"Dockerfile", "docker-compose.yml", "compose.yaml", "compose.yml"}:
             return []
         lowered = text.lower()
         findings: list[Finding] = []

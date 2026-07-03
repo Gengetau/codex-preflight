@@ -6,11 +6,22 @@ import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from urllib.parse import urlparse
 from uuid import uuid4
 
 
 class RepoCloneError(RuntimeError):
     pass
+
+
+GIT_PROTOCOL_HARDENING = [
+    "-c",
+    "protocol.ext.allow=never",
+    "-c",
+    "protocol.file.allow=never",
+    "-c",
+    "protocol.ssh.allow=never",
+]
 
 
 @contextmanager
@@ -21,6 +32,7 @@ def clone_repo_to_temp(
     keep_temp: bool = False,
     temp_dir: Path | None = None,
 ) -> Iterator[Path]:
+    validate_clone_url(repo)
     temporary_directory: tempfile.TemporaryDirectory[str] | None = None
     if keep_temp:
         parent = _manual_temp_parent(temp_dir)
@@ -37,12 +49,12 @@ def clone_repo_to_temp(
     target = parent / "repo"
     try:
         _run_git(
-            ["git", "clone", "--depth", str(depth), repo, str(target)],
+            ["git", *GIT_PROTOCOL_HARDENING, "clone", "--depth", str(depth), repo, str(target)],
             error_prefix=f"Unable to clone repository {repo}",
         )
         if ref:
             _run_git(
-                ["git", "-C", str(target), "fetch", "--depth", str(depth), "origin", ref],
+                ["git", *GIT_PROTOCOL_HARDENING, "-C", str(target), "fetch", "--depth", str(depth), "origin", ref],
                 error_prefix=f"Unable to fetch ref {ref} from {repo}",
             )
             _run_git(
@@ -75,6 +87,20 @@ def resolve_cloned_commit(path: Path) -> str | None:
     if result.returncode != 0:
         return None
     return result.stdout.strip() or None
+
+
+def validate_clone_url(repo: str) -> None:
+    candidate = repo.strip()
+    lowered = candidate.lower()
+    if not candidate or candidate.startswith("-"):
+        raise RepoCloneError(f"Unsupported clone URL: {repo}")
+    if lowered.startswith(("ext::", "file://", "ssh://", "git://")):
+        raise RepoCloneError(f"Unsupported clone URL: {repo}")
+    parsed = urlparse(candidate)
+    if parsed.scheme != "https":
+        raise RepoCloneError(f"Unsupported clone URL: {repo}. Only https:// clone URLs are allowed.")
+    if Path(candidate).is_absolute():
+        raise RepoCloneError(f"Unsupported clone URL: {repo}")
 
 
 def _run_git(args: list[str], error_prefix: str) -> None:

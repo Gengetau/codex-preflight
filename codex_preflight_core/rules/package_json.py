@@ -32,7 +32,7 @@ class PackageJsonRule:
 
     def scan(self, root: Path, relative_path: Path, text: str) -> list[Finding]:
         _ = root
-        if relative_path.as_posix() != "package.json":
+        if relative_path.name != "package.json":
             return []
         try:
             data = json.loads(text)

@@ -26,7 +26,7 @@ def run_preflight(
     scan_path = cwd.resolve()
     identity = resolve_repo_identity(cwd)
     classification = classify_command(command)
-    fingerprint = compute_critical_fingerprint(scan_path)
+    fingerprint = compute_critical_fingerprint(scan_path, command=command)
     cache_key = _cache_key(identity, fingerprint, classification.scope.value)
     cache_status = {"usedScanCache": False, "usedTrustCache": False, "cacheReason": None}
 
@@ -65,7 +65,7 @@ def run_preflight(
             "cacheReason": "matching scoped user approval",
         }
 
-    findings = scan_repository(scan_path)
+    findings = scan_repository(scan_path, command=command)
     policy = evaluate_policy(findings, classification)
     if trust:
         policy = PolicyResult(

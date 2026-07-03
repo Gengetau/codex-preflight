@@ -25,10 +25,10 @@ DEFAULT_RULES: tuple[Rule, ...] = (
 )
 
 
-def scan_repository(root: Path, rules: tuple[Rule, ...] = DEFAULT_RULES) -> list[Finding]:
+def scan_repository(root: Path, rules: tuple[Rule, ...] = DEFAULT_RULES, command: str | None = None) -> list[Finding]:
     root = root.resolve()
     findings: list[Finding] = []
-    for relative in collect_critical_files(root):
+    for relative in collect_critical_files(root, command=command):
         result = read_text_safely(root, relative)
         if result.text is None:
             continue

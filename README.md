@@ -114,7 +114,7 @@ Batch scans are for manual checks and are not part of CI by default.
 
 ## Trust And Cache
 
-`ALLOW` scan reports can be cached by repository identity, head commit, critical-file
+`ALLOW` and `WARN` scan reports can be cached by repository identity, head commit, critical-file
 fingerprint, command scope, policy version, and ruleset version. Local trust approvals use the
 same scope, so approval is invalidated by policy or ruleset changes, relevant file changes, or a
 different command scope.
@@ -148,3 +148,7 @@ Codex Preflight is a local static heuristic scanner. It does not execute MCP ser
 install scripts, provide a cloud service, replace a full SAST or dependency-audit product, or
 prove that a repository is safe. It is not a CVE scanner or malware dynamic analyzer. It is meant
 to catch common high-signal hazards before an agent runs commands.
+
+V1.2.1 fixes known structural bypasses around nested critical files, composite command
+classification, unsafe clone protocols, and trust revocation scope. The scanner remains static and
+heuristic.

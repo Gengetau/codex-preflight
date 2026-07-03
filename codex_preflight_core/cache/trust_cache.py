@@ -77,3 +77,17 @@ class TrustCache:
     def revoke(self, path: Path) -> None:
         target = str(path)
         write_json_atomic(self.path, [entry for entry in self.list() if entry["path"] != target])
+
+    def revoke_identity(self, repo_id: str, command_scope: str | None = None) -> int:
+        entries = self.list()
+        kept = [
+            entry
+            for entry in entries
+            if not (
+                entry["repoId"] == repo_id
+                and (command_scope is None or entry["commandScope"] == command_scope)
+            )
+        ]
+        removed = len(entries) - len(kept)
+        write_json_atomic(self.path, kept)
+        return removed

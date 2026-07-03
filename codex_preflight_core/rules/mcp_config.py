@@ -15,7 +15,7 @@ class McpConfigRule:
     def scan(self, root: Path, relative_path: Path, text: str) -> list[Finding]:
         _ = root
         normalized = relative_path.as_posix()
-        if normalized not in {".mcp.json", "mcp.json"} and not normalized.startswith(".mcp/"):
+        if relative_path.name not in {".mcp.json", "mcp.json"} and not normalized.startswith(".mcp/"):
             return []
         lowered = text.lower()
         findings: list[Finding] = []

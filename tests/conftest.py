@@ -17,7 +17,13 @@ def _git_ceiling(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture
 def tmp_path(request: pytest.FixtureRequest, _git_ceiling: None) -> Iterator[Path]:
     safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", request.node.nodeid)
-    path = ROOT / "test-tmp" / f"{safe_name}-{uuid4().hex}"
+    temp_root = ROOT / "test-tmp"
+    temp_root.mkdir(exist_ok=True)
+    (temp_root / ".codex-preflight-fixtures").write_text(
+        "Pytest temporary files for this repository; skip during whole-repo preflight.\n",
+        encoding="utf-8",
+    )
+    path = temp_root / f"{safe_name}-{uuid4().hex}"
     if path.exists():
         shutil.rmtree(path, ignore_errors=True)
     path.mkdir(parents=True)
