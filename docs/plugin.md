@@ -4,10 +4,15 @@ Codex Preflight is packaged as a Codex-recognizable plugin while preserving the 
 
 ## Shape
 
-The plugin packaging files are:
+The plugin package files at the repository root are:
 
 - `.codex-plugin/plugin.json`: plugin manifest.
 - `skills/codex-preflight/SKILL.md`: Codex skill instructions.
+
+The Codex marketplace wrapper files are:
+
+- `.agents/plugins/marketplace.json`: marketplace root manifest.
+- `.agents/plugins/plugins/codex-preflight/`: plugin package referenced by the marketplace entry.
 
 The manifest declares the real skill directory through `skills: "./skills/"`. It does not declare
 MCP servers or Apps because this repository does not implement those integrations.
@@ -28,6 +33,22 @@ Codex must not ignore `ASK_USER` or `BLOCK`. It also must not create trust appro
 user explicitly asks for a scoped approval.
 
 ## Marketplace Notes
+
+To add this repository through the Codex UI "Add marketplace" flow, use:
+
+- Source: `https://github.com/Gengetau/codex-preflight.git`
+- Git ref: `master`
+- Sparse path: `.agents/plugins`
+
+Do not use sparse path `.codex-plugin` when adding a marketplace. `.codex-plugin/plugin.json` is
+the plugin manifest. `.agents/plugins/marketplace.json` is the marketplace root manifest.
+
+Do not use `git@github.com:Gengetau/codex-preflight.git` unless SSH host keys and credentials are
+configured in the Codex runtime. If SSH fails with "Host key verification failed", use the HTTPS
+source URL above.
+
+If Codex reports that the marketplace root does not contain a supported manifest, the selected
+sparse path is not a marketplace root. Use `.agents/plugins` for this repository.
 
 Local plugin installation and refresh behavior depends on the user's Codex plugin marketplace
 setup. The official Plugin Creator workflow recommends using the plugin manifest, marketplace

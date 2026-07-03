@@ -1,5 +1,17 @@
 # Release History
 
+## v0.1.7
+
+Codex marketplace wrapper:
+
+- Added a repository-local marketplace wrapper at `.agents/plugins/marketplace.json`.
+- Added a marketplace-packaged plugin copy at `.agents/plugins/plugins/codex-preflight`.
+- Documented Codex UI marketplace installation with HTTPS source and `.agents/plugins` sparse path.
+- Documented the difference between plugin root manifests and marketplace root manifests.
+- Added marketplace packaging tests.
+- Bumped Python package, core package, and Codex plugin manifest versions to `0.1.7`.
+- Kept MCP and App integration intentionally undeclared.
+
 ## v0.1.6
 
 Codex plugin marketplace polish:

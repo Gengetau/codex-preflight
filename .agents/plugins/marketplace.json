@@ -1,0 +1,20 @@
+{
+  "name": "codex-preflight",
+  "interface": {
+    "displayName": "Codex Preflight"
+  },
+  "plugins": [
+    {
+      "name": "codex-preflight",
+      "source": {
+        "source": "local",
+        "path": "./plugins/codex-preflight"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
