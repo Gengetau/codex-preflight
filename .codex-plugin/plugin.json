@@ -1,0 +1,35 @@
+{
+  "name": "codex-preflight",
+  "version": "0.1.4",
+  "description": "Local-first pre-execution repository risk scanner for Codex-style coding agents.",
+  "author": {
+    "name": "Gengetau",
+    "url": "https://github.com/Gengetau"
+  },
+  "repository": "https://github.com/Gengetau/codex-preflight",
+  "keywords": [
+    "codex",
+    "preflight",
+    "security",
+    "static-analysis",
+    "cli"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Codex Preflight",
+    "shortDescription": "Local command safety preflight for Codex-style coding agents.",
+    "longDescription": "Codex Preflight is a local-first, command-aware, execution-chain preflight guard. It statically scans repositories before risky commands run and returns ALLOW, WARN, ASK_USER, or BLOCK decisions with JSON and Markdown reports.",
+    "developerName": "Gengetau",
+    "category": "Productivity",
+    "capabilities": [
+      "Static analysis",
+      "Local-first",
+      "Command safety"
+    ],
+    "defaultPrompt": [
+      "Run Codex Preflight before this install command.",
+      "Check whether this Docker command is safe to run.",
+      "Preflight this shell command in the current repo."
+    ]
+  }
+}

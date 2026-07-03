@@ -1,5 +1,16 @@
 # Release History
 
+## v1.4.0
+
+Codex plugin packaging:
+
+- Added `.codex-plugin/plugin.json`.
+- Added the English `skills/codex-preflight/SKILL.md` Codex skill.
+- Added plugin packaging tests.
+- Preserved existing Python CLI behavior.
+- Kept MCP and App integration intentionally undeclared because this release does not implement
+  real MCP servers or Apps.
+
 ## v1.3.1
 
 Reachability safety polish:

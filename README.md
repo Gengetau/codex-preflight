@@ -104,6 +104,40 @@ codex-preflight exec --cwd . --format markdown -- pytest
 The exec wrapper runs the command only when preflight returns `ALLOW` or `WARN`. It prints a
 readable report and exits without running the command for `ASK_USER` or `BLOCK`.
 
+## Codex Plugin Usage
+
+Codex Preflight remains a Python CLI project. v1.4.0 adds Codex plugin packaging around the
+existing CLI so Codex can discover the guidance as a skill.
+
+The plugin is skill-based:
+
+- `.codex-plugin/plugin.json`: Codex plugin manifest.
+- `skills/codex-preflight/SKILL.md`: English skill instructions for when and how Codex should call
+  `codex-preflight`.
+
+The plugin does not currently provide MCP or App integration, and the manifest intentionally does
+not declare `mcpServers` or `apps`.
+
+When Codex is about to run a risky command in a local or unfamiliar repository, it should run:
+
+```bash
+codex-preflight preflight --cwd . --command "<planned command>" --format markdown
+```
+
+Codex must respect the resulting decision:
+
+- `ALLOW`: the command may proceed.
+- `WARN`: summarize the warning before proceeding.
+- `ASK_USER`: stop and ask the user.
+- `BLOCK`: do not run the command.
+
+Local marketplace registration depends on the user's Codex plugin setup. The official plugin
+creator workflow uses `.codex-plugin/plugin.json`, optional local marketplace entries, cachebuster
+updates for local plugin iteration, and a new Codex thread after reinstall so updated skills are
+picked up.
+
+More details are in [docs/plugin.md](docs/plugin.md).
+
 ## Demo Examples
 
 Safe dependency install:
