@@ -11,7 +11,7 @@ Codex plugin packaging:
 - Kept MCP and App integration intentionally undeclared because this release does not implement
   real MCP servers or Apps.
 
-## v1.3.1
+## v0.1.3.1
 
 Reachability safety polish:
 
@@ -21,7 +21,7 @@ Reachability safety polish:
   uncertainty instead of reading them directly.
 - Added `npm test`, `npm start`, and `npm build` shorthand script resolution.
 
-## v1.3
+## v0.1.3
 
 Indirect execution reachability:
 
@@ -31,7 +31,7 @@ Indirect execution reachability:
 - Added capability and uncertainty findings for reachable Node.js, Python, shell, and Docker paths.
 - Added conservative policy handling for unknown or incomplete high-risk execution paths.
 
-## v1.2.2
+## v0.1.2.2
 
 Composite command target collection fix:
 
@@ -40,7 +40,7 @@ Composite command target collection fix:
   `git status && bash install.sh`.
 - Preserved in-repository path and symlink safety checks.
 
-## v1.2.1
+## v0.1.2.1
 
 Security bypass fixes:
 
@@ -50,7 +50,7 @@ Security bypass fixes:
 - Fixed trust revoke scope to match repository identity.
 - Cached only `ALLOW` and `WARN` scan reports.
 
-## v1.2
+## v0.1.2
 
 External and corpus scanning:
 
@@ -59,7 +59,7 @@ External and corpus scanning:
 - Added batch scan support for configured public repositories.
 - Expanded documentation around external scan and corpus safety.
 
-## v1.1
+## v0.1.1
 
 Dogfood and UX hardening:
 
@@ -68,7 +68,7 @@ Dogfood and UX hardening:
 - Added `exec` wrapper report UX improvements.
 - Added CI and dogfooding workflows.
 
-## v1.0
+## v0.1.0
 
 CLI scanner MVP:
 
