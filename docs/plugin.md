@@ -1,7 +1,6 @@
 # Codex Plugin Packaging
 
-v0.1.4 packages Codex Preflight as a Codex-recognizable plugin while preserving the existing Python
-CLI.
+Codex Preflight is packaged as a Codex-recognizable plugin while preserving the existing Python CLI.
 
 ## Shape
 
@@ -28,15 +27,16 @@ codex-preflight preflight --cwd . --command "<planned command>" --format markdow
 Codex must not ignore `ASK_USER` or `BLOCK`. It also must not create trust approvals unless the
 user explicitly asks for a scoped approval.
 
-## Local Marketplace Notes
+## Marketplace Notes
 
 Local plugin installation and refresh behavior depends on the user's Codex plugin marketplace
-setup. The official plugin creator workflow recommends using the plugin manifest, marketplace
+setup. The official Plugin Creator workflow recommends using the plugin manifest, marketplace
 entries when needed, cachebuster updates for local plugin iteration, reinstalling the plugin, and
 starting a new Codex thread so the updated skill is loaded.
 
-This repository does not hand-edit a marketplace file as part of v0.1.4. If a user wants local
-marketplace registration, use the official plugin creator workflow for their selected marketplace.
+This repository does not declare fake MCP servers, Apps, screenshots, logos, privacy policy URLs, or
+terms URLs. If a user wants local marketplace registration, use the official Plugin Creator workflow
+for their selected marketplace.
 
 ## Limits
 

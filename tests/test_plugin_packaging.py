@@ -51,6 +51,22 @@ def test_manifest_declares_only_real_components() -> None:
     assert not (ROOT / ".app.json").exists()
 
 
+def test_manifest_has_marketplace_ready_presentation_metadata() -> None:
+    manifest = load_manifest()
+    interface = manifest["interface"]
+
+    assert manifest["homepage"].startswith("https://github.com/Gengetau/codex-preflight")
+    assert manifest["repository"] == "https://github.com/Gengetau/codex-preflight"
+    assert "command-safety" in manifest["keywords"]
+    assert interface["displayName"] == "Codex Preflight"
+    assert interface["category"] == "Productivity"
+    assert interface["brandColor"].startswith("#")
+    assert interface["websiteURL"] == "https://github.com/Gengetau/codex-preflight"
+    assert len(interface["defaultPrompt"]) <= 3
+    assert all(0 < len(prompt) <= 128 for prompt in interface["defaultPrompt"])
+    assert {"Static analysis", "Local-first", "Command gating"} <= set(interface["capabilities"])
+
+
 def test_plugin_files_have_no_placeholders_or_chinese_text() -> None:
     paths = [MANIFEST, SKILL, ROOT / "docs" / "plugin.md"]
     todo_marker = "TO" + "DO"

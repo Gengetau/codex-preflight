@@ -1,5 +1,16 @@
 # Release History
 
+## v0.1.6
+
+Codex plugin marketplace polish:
+
+- Bumped the Python package, core package, and Codex plugin manifest versions to `0.1.6`.
+- Added marketplace-ready plugin presentation metadata using real repository URLs.
+- Kept MCP and App integration intentionally undeclared because this release does not implement
+  those components.
+- Updated plugin documentation to avoid stale release-specific wording.
+- Added tests for marketplace presentation metadata.
+
 ## v0.1.5
 
 Analysis budget hardening and reachability cleanup:

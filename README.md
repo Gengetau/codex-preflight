@@ -106,8 +106,8 @@ readable report and exits without running the command for `ASK_USER` or `BLOCK`.
 
 ## Codex Plugin Usage
 
-Codex Preflight remains a Python CLI project. v0.1.4 adds Codex plugin packaging around the
-existing CLI so Codex can discover the guidance as a skill.
+Codex Preflight remains a Python CLI project and is also packaged as a skill-based Codex plugin so
+Codex can discover the guidance before running risky repository commands.
 
 The plugin is skill-based:
 
@@ -131,8 +131,8 @@ Codex must respect the resulting decision:
 - `ASK_USER`: stop and ask the user.
 - `BLOCK`: do not run the command.
 
-Local marketplace registration depends on the user's Codex plugin setup. The official plugin
-creator workflow uses `.codex-plugin/plugin.json`, optional local marketplace entries, cachebuster
+Local marketplace registration depends on the user's Codex plugin setup. The official Plugin
+Creator workflow uses `.codex-plugin/plugin.json`, optional local marketplace entries, cachebuster
 updates for local plugin iteration, and a new Codex thread after reinstall so updated skills are
 picked up.
 
