@@ -1,6 +1,6 @@
 # Codex Plugin Packaging
 
-v1.4.0 packages Codex Preflight as a Codex-recognizable plugin while preserving the existing Python
+v0.1.4 packages Codex Preflight as a Codex-recognizable plugin while preserving the existing Python
 CLI.
 
 ## Shape
@@ -35,7 +35,7 @@ setup. The official plugin creator workflow recommends using the plugin manifest
 entries when needed, cachebuster updates for local plugin iteration, reinstalling the plugin, and
 starting a new Codex thread so the updated skill is loaded.
 
-This repository does not hand-edit a marketplace file as part of v1.4.0. If a user wants local
+This repository does not hand-edit a marketplace file as part of v0.1.4. If a user wants local
 marketplace registration, use the official plugin creator workflow for their selected marketplace.
 
 ## Limits
