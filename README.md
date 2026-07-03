@@ -9,10 +9,10 @@
 Local-first, command-aware, pre-execution, execution-chain preflight for Codex-style AI coding
 agents.
 
-Codex Preflight statically scans a repository before risky commands run, classifies the planned
-command, builds a best-effort execution graph of reachable local scripts/files, detects dangerous
-capabilities and uncertainty, and returns `ALLOW`, `WARN`, `ASK_USER`, or `BLOCK` decisions with
-JSON/Markdown reports.
+Codex Preflight statically scans a repository before risky commands run, analyzes the planned
+command itself, builds a best-effort execution graph of reachable local scripts/files, detects
+dangerous capabilities and uncertainty, and returns `ALLOW`, `WARN`, `ASK_USER`, or `BLOCK`
+decisions with JSON/Markdown reports.
 
 ## Why This Exists
 
@@ -37,6 +37,8 @@ local indirection, surfaces uncertainty, and gives the user a decision with evid
 - Local repository preflight.
 - External GitHub repository scan via `--repo`.
 - Composite command classification.
+- Planned-command risk findings for remote shell pipelines, encoded PowerShell, dangerous Docker
+  flags and mounts, and inline interpreter execution.
 - Nested monorepo critical file collection.
 - Package lifecycle detection.
 - Shell, Docker, GitHub Actions, MCP, agent instruction, and secret checks.
@@ -53,6 +55,7 @@ local indirection, surfaces uncertainty, and gives the user a decision with evid
 ```text
 planned command
   -> command classifier
+  -> command self-risk analysis
   -> critical file collection
   -> static scanner rules
   -> reachability execution graph

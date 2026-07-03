@@ -1,5 +1,19 @@
 # Release History
 
+## v0.1.8
+
+Command self-risk hardening:
+
+- Added planned-command risk analysis so dangerous commands can produce findings even in empty
+  repositories.
+- Added command findings for remote shell pipelines, encoded PowerShell, dangerous Docker flags,
+  sensitive Docker mounts, broad-access server startup patterns, and inline interpreter execution.
+- Integrated command findings into policy evaluation and JSON/Markdown reports.
+- Fixed `codex-preflight exec` command serialization so preflight scans a quoted representation of
+  the argv that will be executed.
+- Added regression tests for command self-risk and exec blocking behavior.
+- Preserved CLI, Codex plugin, and marketplace packaging behavior.
+
 ## v0.1.7
 
 Codex marketplace wrapper:

@@ -5,6 +5,7 @@ from codex_preflight_core.cache.paths import scan_cache_path, trust_cache_path
 from codex_preflight_core.cache.scan_cache import ScanCache
 from codex_preflight_core.cache.trust_cache import TrustCache
 from codex_preflight_core.command.classifier import classify_command
+from codex_preflight_core.command.risk import analyze_command_risk
 from codex_preflight_core.policy.decision import Decision, PolicyResult
 from codex_preflight_core.policy.engine import evaluate_policy
 from codex_preflight_core.reachability.resolver import build_execution_graph
@@ -67,7 +68,8 @@ def run_preflight(
         }
 
     graph = build_execution_graph(scan_path, command, classification)
-    findings = scan_repository(scan_path, command=command)
+    findings = analyze_command_risk(command, cwd=scan_path)
+    findings.extend(scan_repository(scan_path, command=command))
     findings.extend(graph.to_findings())
     findings = _dedupe_findings(findings)
     policy = evaluate_policy(findings, classification)
