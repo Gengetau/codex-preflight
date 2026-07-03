@@ -2,6 +2,8 @@ import os
 import shlex
 from pathlib import Path
 
+from codex_preflight_core.command.classifier import split_shell_segments
+
 CRITICAL_BASENAMES = {
     ".env",
     "package.json",
@@ -80,6 +82,13 @@ def _is_safe_file(root: Path, path: Path) -> bool:
 def _command_target_files(root: Path, command: str | None) -> list[Path]:
     if not command:
         return []
+    targets: set[Path] = set()
+    for segment in split_shell_segments(command):
+        targets.update(_command_target_files_for_segment(root, segment))
+    return sorted(targets, key=lambda item: item.as_posix())
+
+
+def _command_target_files_for_segment(root: Path, command: str) -> list[Path]:
     try:
         parts = shlex.split(command, posix=False)
     except ValueError:

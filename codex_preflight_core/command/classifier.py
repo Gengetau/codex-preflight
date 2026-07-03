@@ -35,7 +35,7 @@ def _split(command: str) -> list[str]:
 
 
 def classify_command(command: str) -> CommandClassification:
-    segments = _split_shell_segments(command)
+    segments = split_shell_segments(command)
     if len(segments) > 1:
         classifications = [_classify_single(segment) for segment in segments]
         riskiest = max(classifications, key=lambda item: RISK_ORDER[item.scope])
@@ -93,7 +93,7 @@ def _classify_single(command: str) -> CommandClassification:
     return CommandClassification(command, CommandScope.UNKNOWN_SHELL, "Unknown shell command.")
 
 
-def _split_shell_segments(command: str) -> list[str]:
+def split_shell_segments(command: str) -> list[str]:
     segments: list[str] = []
     current: list[str] = []
     quote: str | None = None
@@ -122,6 +122,9 @@ def _split_shell_segments(command: str) -> list[str]:
         index += 1
     _append_segment(segments, current)
     return segments
+
+
+_split_shell_segments = split_shell_segments
 
 
 def _append_segment(segments: list[str], current: list[str]) -> None:
