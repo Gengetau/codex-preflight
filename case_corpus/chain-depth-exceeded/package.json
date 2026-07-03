@@ -1,0 +1,7 @@
+{
+  "name": "synthetic-chain-depth-exceeded",
+  "version": "1.0.0",
+  "scripts": {
+    "postinstall": "bash scripts/one.sh"
+  }
+}

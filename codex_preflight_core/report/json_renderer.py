@@ -19,6 +19,7 @@ def render_json_report(
     policy: PolicyResult,
     cache_status: dict[str, Any],
     source_metadata: dict[str, Any] | None = None,
+    execution_graph: dict[str, Any] | None = None,
 ) -> str:
     report = build_report(
         command=command,
@@ -30,6 +31,7 @@ def render_json_report(
         policy=policy,
         cache_status=cache_status,
         source_metadata=source_metadata,
+        execution_graph=execution_graph,
     )
     return json.dumps(report, indent=2, sort_keys=False)
 
@@ -45,6 +47,7 @@ def build_report(
     policy: PolicyResult,
     cache_status: dict[str, Any],
     source_metadata: dict[str, Any] | None = None,
+    execution_graph: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     summary = {severity.value.lower(): 0 for severity in Severity}
     for finding in findings:
@@ -71,5 +74,13 @@ def build_report(
         "reason": policy.reason,
         "agentInstruction": policy.agent_instruction,
         "findings": [finding.to_report() for finding in findings],
+        "executionGraph": execution_graph
+        or {
+            "entryCommand": command,
+            "nodes": [],
+            "edges": [],
+            "capabilities": [],
+            "uncertainties": [],
+        },
         "cache": cache_status,
     }

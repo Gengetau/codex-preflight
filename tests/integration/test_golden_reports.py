@@ -37,9 +37,13 @@ def test_key_demo_repo_json_reports_are_stable() -> None:
             "prompt_injection_readme": {
                 "commandScope": "script_execution",
                 "decision": "ASK_USER",
-                "riskScore": 50,
-                "ruleIds": ["AGENT_IGNORE_INSTRUCTIONS", "AGENT_UNSAFE_COMMAND_REQUEST"],
-                "summary": {"critical": 0, "high": 2, "info": 0, "low": 0, "medium": 0},
+                "riskScore": 60,
+                "ruleIds": [
+                    "AGENT_IGNORE_INSTRUCTIONS",
+                    "AGENT_UNSAFE_COMMAND_REQUEST",
+                    "SCRIPT_TARGET_MISSING",
+                ],
+                "summary": {"critical": 0, "high": 2, "info": 0, "low": 0, "medium": 1},
             },
             "risky_docker_compose": {
                 "commandScope": "docker",

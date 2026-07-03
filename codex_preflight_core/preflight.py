@@ -7,6 +7,7 @@ from codex_preflight_core.cache.trust_cache import TrustCache
 from codex_preflight_core.command.classifier import classify_command
 from codex_preflight_core.policy.decision import Decision, PolicyResult
 from codex_preflight_core.policy.engine import evaluate_policy
+from codex_preflight_core.reachability.resolver import build_execution_graph
 from codex_preflight_core.repo.fingerprint import compute_critical_fingerprint
 from codex_preflight_core.repo.identity import RepoIdentity, resolve_repo_identity
 from codex_preflight_core.report.json_renderer import build_report
@@ -65,7 +66,10 @@ def run_preflight(
             "cacheReason": "matching scoped user approval",
         }
 
+    graph = build_execution_graph(scan_path, command, classification)
     findings = scan_repository(scan_path, command=command)
+    findings.extend(graph.to_findings())
+    findings = _dedupe_findings(findings)
     policy = evaluate_policy(findings, classification)
     if trust:
         policy = PolicyResult(
@@ -84,6 +88,7 @@ def run_preflight(
         policy=policy,
         cache_status=cache_status,
         source_metadata=source_metadata,
+        execution_graph=graph.to_report(),
     )
     if use_cache and not trust:
         try:
@@ -102,3 +107,22 @@ def _cache_key(identity: RepoIdentity, fingerprint: str, command_scope: str) -> 
         "policyVersion": POLICY_VERSION,
         "rulesetVersion": RULESET_VERSION,
     }
+
+
+def _dedupe_findings(findings: list) -> list:
+    direct_shell_downloads = {
+        finding.file
+        for finding in findings
+        if finding.rule_id in {"SHELL_CURL_PIPE_BASH", "SHELL_WGET_PIPE_SH"}
+    }
+    seen: set[tuple[str, str]] = set()
+    deduped = []
+    for finding in findings:
+        if finding.rule_id == "SHELL_DOWNLOAD_CAPABILITY" and finding.file in direct_shell_downloads:
+            continue
+        key = (finding.rule_id, finding.file)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(finding)
+    return deduped

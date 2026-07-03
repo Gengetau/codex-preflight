@@ -1,0 +1,7 @@
+{
+  "name": "synthetic-package-script-to-shell-script",
+  "version": "1.0.0",
+  "scripts": {
+    "postinstall": "bash scripts/install.sh"
+  }
+}

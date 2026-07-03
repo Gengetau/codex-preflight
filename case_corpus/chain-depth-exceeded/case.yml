@@ -1,0 +1,11 @@
+id: chain-depth-exceeded
+title: Package lifecycle script chain exceeds static depth
+category: uncertainty
+command: pnpm install
+expectedDecision: ASK_USER
+expectedRules:
+  - NODE_POSTINSTALL_SCRIPT
+  - SCRIPT_INDIRECT_EXECUTION
+  - SCRIPT_CHAIN_DEPTH_EXCEEDED
+description: A lifecycle script follows a chain of local shell scripts longer than the static reachability limit.
+safetyNote: The scripts contain only static local references and are never executed.

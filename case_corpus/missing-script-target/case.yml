@@ -1,0 +1,11 @@
+id: missing-script-target
+title: Package lifecycle references a missing local target
+category: uncertainty
+command: pnpm install
+expectedDecision: ASK_USER
+expectedRules:
+  - NODE_POSTINSTALL_SCRIPT
+  - SCRIPT_INDIRECT_EXECUTION
+  - SCRIPT_TARGET_MISSING
+description: A lifecycle script references a local script path that does not exist.
+safetyNote: The fixture contains no executable target; it only exercises static uncertainty handling.

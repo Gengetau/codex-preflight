@@ -75,11 +75,13 @@ def _classify_single(command: str) -> CommandClassification:
     if first == "docker":
         return CommandClassification(command, CommandScope.DOCKER, "Docker command.")
 
-    if first in {"bash", "sh", "powershell", "pwsh"}:
-        return CommandClassification(command, CommandScope.SCRIPT_EXECUTION, "Shell script execution.")
+    if first in {"bash", "sh", "powershell", "pwsh", "python", "node"}:
+        return CommandClassification(command, CommandScope.SCRIPT_EXECUTION, "Local script execution.")
 
     if first in {"pytest"} or first in {"mvn"} and second == "test":
         return CommandClassification(command, CommandScope.TEST, "Test command.")
+    if first in {"npm", "pnpm", "yarn"} and second == "run":
+        return CommandClassification(command, CommandScope.BUILD, "Package script command.")
     if first in {"make", "gradle"} or first == "mvn" and second in {"package", "compile"}:
         return CommandClassification(command, CommandScope.BUILD, "Build command.")
 

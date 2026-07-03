@@ -1,0 +1,9 @@
+id: shell-source-indirection
+title: Shell command sources another local file
+category: reachability
+command: bash scripts/install.sh
+expectedDecision: ASK_USER
+expectedRules:
+  - SHELL_SOURCE_INDIRECTION
+description: A direct shell command reaches a source directive to another local script.
+safetyNote: The shell files contain inert echo-only content and are only scanned statically.

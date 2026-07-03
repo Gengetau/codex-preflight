@@ -1,0 +1,12 @@
+id: package-script-to-python-network
+title: Package lifecycle reaches Python network access
+category: reachability
+command: yarn install
+expectedDecision: ASK_USER
+expectedRules:
+  - NODE_POSTINSTALL_SCRIPT
+  - PYTHON_SETUP_REMOTE_FETCH
+  - SCRIPT_INDIRECT_EXECUTION
+  - PYTHON_NETWORK_ACCESS
+description: A package lifecycle script invokes a local Python file that references an inert documentation URL.
+safetyNote: The Python file is never executed and uses example.invalid.

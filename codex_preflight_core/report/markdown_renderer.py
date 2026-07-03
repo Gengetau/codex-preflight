@@ -39,6 +39,26 @@ def render_markdown_report(report_json: str | dict[str, Any]) -> str:
                 "",
             ]
         )
+    graph = report.get("executionGraph", {})
+    lines.extend(["## Execution Chain", ""])
+    entry = graph.get("entryCommand", report["command"])
+    lines.append(str(entry))
+    nodes_by_id = {node["id"]: node for node in graph.get("nodes", [])}
+    for edge in graph.get("edges", []):
+        node = nodes_by_id.get(edge["to"], {})
+        label = node.get("label", edge["to"])
+        lines.append(f"  -> {label} ({edge['reason']})")
+    for capability in graph.get("capabilities", []):
+        lines.append(f"  -> {capability['ruleId']} detected in `{capability['file']}`")
+    if not graph.get("edges") and not graph.get("capabilities"):
+        lines.append("No reachable local execution chain detected.")
+    lines.extend(["", "## Uncertainty", ""])
+    if not graph.get("uncertainties"):
+        lines.append("No reachability uncertainty detected.")
+    for item in graph.get("uncertainties", []):
+        location = f" `{item['file']}`" if item.get("file") else ""
+        lines.append(f"- {item['ruleId']}:{location} {item['reason']}")
+    lines.append("")
     lines.extend(
         [
             "## Cache",

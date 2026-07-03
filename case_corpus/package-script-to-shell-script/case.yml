@@ -1,0 +1,11 @@
+id: package-script-to-shell-script
+title: Package lifecycle reaches shell source indirection
+category: reachability
+command: npm install
+expectedDecision: ASK_USER
+expectedRules:
+  - NODE_POSTINSTALL_SCRIPT
+  - SCRIPT_INDIRECT_EXECUTION
+  - SHELL_SOURCE_INDIRECTION
+description: A package lifecycle script invokes a local shell script that sources another local file.
+safetyNote: The shell files contain inert echo-only content and are only scanned statically.

@@ -1,0 +1,11 @@
+id: nested-node-child-process
+title: Nested package lifecycle reaches Node child process
+category: reachability
+command: pnpm install
+expectedDecision: ASK_USER
+expectedRules:
+  - NODE_POSTINSTALL_SCRIPT
+  - SCRIPT_INDIRECT_EXECUTION
+  - JS_CHILD_PROCESS_EXEC
+description: A nested package lifecycle script points to a local Node.js file that references child process execution.
+safetyNote: The fixture is static text only and is never installed or executed.

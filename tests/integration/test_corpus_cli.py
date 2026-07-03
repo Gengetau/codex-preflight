@@ -12,17 +12,43 @@ CASE_ROOT = ROOT / "case_corpus"
 
 
 EXPECTED_CASES = {
+    "chain-depth-exceeded": (
+        "ASK_USER",
+        ["NODE_POSTINSTALL_SCRIPT", "SCRIPT_INDIRECT_EXECUTION", "SCRIPT_CHAIN_DEPTH_EXCEEDED"],
+    ),
+    "docker-compose-to-dockerfile-run": (
+        "BLOCK",
+        ["DOCKER_REMOTE_SCRIPT_EXEC", "DOCKER_REACHABLE_RUN_REMOTE_EXEC"],
+    ),
     "npm-postinstall-remote-exec": ("BLOCK", ["NODE_LIFECYCLE_REMOTE_EXEC"]),
+    "missing-script-target": (
+        "ASK_USER",
+        ["NODE_POSTINSTALL_SCRIPT", "SCRIPT_INDIRECT_EXECUTION", "SCRIPT_TARGET_MISSING"],
+    ),
+    "nested-node-child-process": (
+        "ASK_USER",
+        ["NODE_POSTINSTALL_SCRIPT", "SCRIPT_INDIRECT_EXECUTION", "JS_CHILD_PROCESS_EXEC"],
+    ),
+    "node-dynamic-eval": ("ASK_USER", ["JS_DYNAMIC_EVAL"]),
+    "package-script-to-python-network": (
+        "ASK_USER",
+        ["NODE_POSTINSTALL_SCRIPT", "PYTHON_SETUP_REMOTE_FETCH", "SCRIPT_INDIRECT_EXECUTION", "PYTHON_NETWORK_ACCESS"],
+    ),
+    "package-script-to-shell-script": (
+        "ASK_USER",
+        ["NODE_POSTINSTALL_SCRIPT", "SCRIPT_INDIRECT_EXECUTION", "SHELL_SOURCE_INDIRECTION"],
+    ),
     "python-setup-remote-fetch": ("ASK_USER", ["PYTHON_SETUP_REMOTE_FETCH"]),
     "prompt-injection-readme": (
         "ASK_USER",
-        ["AGENT_IGNORE_INSTRUCTIONS", "AGENT_UNSAFE_COMMAND_REQUEST"],
+        ["AGENT_IGNORE_INSTRUCTIONS", "AGENT_UNSAFE_COMMAND_REQUEST", "SCRIPT_TARGET_MISSING"],
     ),
     "mcp-shell-server": ("ASK_USER", ["MCP_SHELL_COMMAND"]),
     "docker-socket-mount": ("ASK_USER", ["DOCKER_SOCKET_MOUNT"]),
     "github-actions-pull-request-target": ("ASK_USER", ["GHA_PULL_REQUEST_TARGET"]),
     "leaked-secret-fixture": ("BLOCK", ["SECRET_PRIVATE_KEY"]),
     "safe-node-package": ("ALLOW", []),
+    "shell-source-indirection": ("ASK_USER", ["SHELL_SOURCE_INDIRECTION"]),
 }
 
 

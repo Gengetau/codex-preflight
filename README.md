@@ -24,8 +24,9 @@ codex-preflight trust list
 codex-preflight cache clear
 ```
 
-The scanner reads repository files statically, classifies the planned command, evaluates rule
-findings through a policy engine, and returns a structured decision.
+The scanner reads repository files statically, classifies the planned command, builds a best-effort
+execution graph for reachable local scripts/files, evaluates rule findings through a policy
+engine, and returns a structured decision.
 
 ## Quick Start
 
@@ -41,6 +42,9 @@ Run a scan before a command:
 ```bash
 codex-preflight preflight --cwd . --command "pytest" --format json
 ```
+
+JSON reports include `executionGraph` with reachable nodes, edges, capabilities, and uncertainty.
+Markdown reports include an `Execution Chain` section for human review.
 
 Wrap command execution:
 
@@ -150,5 +154,7 @@ prove that a repository is safe. It is not a CVE scanner or malware dynamic anal
 to catch common high-signal hazards before an agent runs commands.
 
 V1.2.1 fixes known structural bypasses around nested critical files, composite command
-classification, unsafe clone protocols, and trust revocation scope. The scanner remains static and
+classification, unsafe clone protocols, and trust revocation scope. V1.3 adds best-effort static
+reachability for indirect local execution and treats missing, dynamic, outside-repository, unknown,
+or incompletely scanned high-risk paths as `ASK_USER` at minimum. The scanner remains static and
 heuristic.

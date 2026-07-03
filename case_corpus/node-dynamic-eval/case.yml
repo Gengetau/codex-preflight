@@ -1,0 +1,9 @@
+id: node-dynamic-eval
+title: Direct Node command reaches dynamic eval
+category: reachability
+command: node tools/setup.js
+expectedDecision: ASK_USER
+expectedRules:
+  - JS_DYNAMIC_EVAL
+description: A direct Node command reaches a local JavaScript file that references dynamic evaluation.
+safetyNote: The JavaScript file is inert static text and is only scanned.

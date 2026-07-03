@@ -6,5 +6,6 @@ expectedDecision: ASK_USER
 expectedRules:
   - AGENT_IGNORE_INSTRUCTIONS
   - AGENT_UNSAFE_COMMAND_REQUEST
+  - SCRIPT_TARGET_MISSING
 description: Synthetic README that imitates unsafe agent steering instructions.
 safetyNote: Contains only inert text and is scanned statically.

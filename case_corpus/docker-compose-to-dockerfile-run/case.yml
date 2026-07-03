@@ -1,0 +1,10 @@
+id: docker-compose-to-dockerfile-run
+title: Docker compose reaches Dockerfile remote shell pattern
+category: reachability
+command: docker compose up
+expectedDecision: BLOCK
+expectedRules:
+  - DOCKER_REMOTE_SCRIPT_EXEC
+  - DOCKER_REACHABLE_RUN_REMOTE_EXEC
+description: A compose file references a Docker build context whose Dockerfile contains an inert remote shell pattern.
+safetyNote: The Docker fixture is never built or run and uses example.invalid.

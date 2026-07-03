@@ -1,0 +1,7 @@
+{
+  "name": "synthetic-package-script-to-python-network",
+  "version": "1.0.0",
+  "scripts": {
+    "postinstall": "python scripts/setup.py"
+  }
+}
