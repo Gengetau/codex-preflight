@@ -1,0 +1,11 @@
+id: wide-fanout-exceeded
+title: Package lifecycle script exceeds static node budget through wide fanout
+category: uncertainty
+command: pnpm install
+expectedDecision: ASK_USER
+expectedRules:
+  - NODE_POSTINSTALL_SCRIPT
+  - SCRIPT_INDIRECT_EXECUTION
+  - SCRIPT_NODE_BUDGET_EXCEEDED
+description: A lifecycle script fans out to more local script targets than the static node budget can inspect.
+safetyNote: The scripts are static text fixtures and are never executed.

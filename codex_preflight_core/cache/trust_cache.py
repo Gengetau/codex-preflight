@@ -74,10 +74,6 @@ class TrustCache:
                 return entry
         return None
 
-    def revoke(self, path: Path) -> None:
-        target = str(path)
-        write_json_atomic(self.path, [entry for entry in self.list() if entry["path"] != target])
-
     def revoke_identity(self, repo_id: str, command_scope: str | None = None) -> int:
         entries = self.list()
         kept = [

@@ -49,6 +49,10 @@ EXPECTED_CASES = {
     "leaked-secret-fixture": ("BLOCK", ["SECRET_PRIVATE_KEY"]),
     "safe-node-package": ("ALLOW", []),
     "shell-source-indirection": ("ASK_USER", ["SHELL_SOURCE_INDIRECTION"]),
+    "wide-fanout-exceeded": (
+        "ASK_USER",
+        ["NODE_POSTINSTALL_SCRIPT", "SCRIPT_INDIRECT_EXECUTION", "SCRIPT_NODE_BUDGET_EXCEEDED"],
+    ),
 }
 
 

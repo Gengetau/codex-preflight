@@ -1,7 +1,9 @@
+import json
 import os
 from pathlib import Path
 
 import codex_preflight_core.reachability.docker as docker
+import codex_preflight_core.reachability.node_package as node_package
 import codex_preflight_core.reachability.nodejs as nodejs
 import codex_preflight_core.reachability.python as python
 import codex_preflight_core.reachability.shell as shell
@@ -9,7 +11,6 @@ import codex_preflight_core.reachability.uncertainty as uncertainty
 from codex_preflight_core.command.classifier import CommandClassification, split_shell_segments
 from codex_preflight_core.command.scope import CommandScope
 from codex_preflight_core.reachability.graph import Capability, ExecutionEdge, ExecutionGraph, ExecutionNode
-from codex_preflight_core.reachability.node_package import LIFECYCLE_SCRIPTS
 from codex_preflight_core.repo.collector import FIXTURE_MARKER, SKIP_DIRS
 from codex_preflight_core.scanner.finding import Severity
 from codex_preflight_core.scanner.safe_reader import MAX_FILE_SIZE, read_text_safely
@@ -31,6 +32,7 @@ class ReachabilityResolver:
         self.classification = classification
         self.graph = ExecutionGraph(entry_command=command)
         self.visited_files: set[Path] = set()
+        self.node_budget_exhausted = False
 
     def build(self) -> ExecutionGraph:
         entry = self._add_node("command", self.command, command=self.command)
@@ -48,8 +50,10 @@ class ReachabilityResolver:
 
     def _resolve_dependency_install(self, parent: ExecutionNode) -> None:
         for package_file in self._walk_files({"package.json"}):
-            for name, command in self._package_scripts(package_file, LIFECYCLE_SCRIPTS):
+            for name, command in self._package_scripts(package_file, node_package.LIFECYCLE_SCRIPTS):
                 label = f"{package_file.as_posix()} scripts.{name}"
+                if not self._has_node_budget(package_file, label):
+                    return
                 node = self._add_node(
                     "package-script",
                     label,
@@ -82,9 +86,12 @@ class ReachabilityResolver:
             if script_name:
                 for package_file in self._walk_files({"package.json"}):
                     for name, command in self._package_scripts(package_file, {script_name}):
+                        label = f"{package_file.as_posix()} scripts.{name}"
+                        if not self._has_node_budget(package_file, label):
+                            return
                         node = self._add_node(
                             "package-script",
-                            f"{package_file.as_posix()} scripts.{name}",
+                            label,
                             file=package_file,
                             command=command,
                         )
@@ -98,6 +105,8 @@ class ReachabilityResolver:
                         )
             elif parts and parts[0].lower() == "make":
                 for makefile in self._walk_files({"Makefile"}):
+                    if not self._has_node_budget(makefile, makefile.as_posix()):
+                        return
                     node = self._add_node("makefile", makefile.as_posix(), file=makefile, language="make")
                     self._add_edge(parent, node, "make command reads Makefile")
                     self._scan_file(makefile, node, 0)
@@ -107,6 +116,8 @@ class ReachabilityResolver:
         names = {"Dockerfile"} if "build" in lowered else docker.COMPOSE_NAMES | {"Dockerfile"}
         for relative in self._walk_files(names):
             if relative.name == "Dockerfile" or relative.name in docker.COMPOSE_NAMES:
+                if not self._has_node_budget(relative, relative.as_posix()):
+                    return
                 node = self._add_node("file", relative.as_posix(), file=relative, language="docker")
                 self._add_edge(parent, node, "docker command reads configuration")
                 text = self._read(relative)
@@ -145,8 +156,7 @@ class ReachabilityResolver:
         if depth >= MAX_CHAIN_DEPTH:
             self.graph.uncertainties.append(uncertainty.chain_depth_exceeded(parent.file))
             return
-        if len(self.graph.nodes) >= MAX_NODES:
-            self.graph.uncertainties.append(uncertainty.chain_depth_exceeded(parent.file))
+        if not self._has_node_budget(parent.file, target):
             return
         target_path = Path(target.strip("\"'"))
         if target_path.is_absolute():
@@ -166,6 +176,8 @@ class ReachabilityResolver:
             return
         if not resolved.is_file():
             self.graph.uncertainties.append(uncertainty.missing_target(target, parent.file))
+            return
+        if not self._has_node_budget(parent.file, relative.as_posix()):
             return
         node = self._add_node("file", relative.as_posix(), file=relative, language=_language_for(relative))
         self._add_edge(parent, node, reason)
@@ -210,20 +222,30 @@ class ReachabilityResolver:
         if text is None:
             self.graph.uncertainties.append(uncertainty.parse_uncertain("Could not read package.json.", relative))
             return []
-        import json
-
         try:
-            data = json.loads(text)
+            scripts = node_package.package_scripts(relative, names, text, raise_parse_error=True)
         except json.JSONDecodeError:
             self.graph.uncertainties.append(uncertainty.parse_uncertain("Could not parse package.json.", relative))
             return []
-        scripts = data.get("scripts", {})
-        if not isinstance(scripts, dict):
-            return []
-        return [(name, command) for name, command in scripts.items() if name in names and isinstance(command, str)]
+        return [(script.name, script.command) for script in scripts]
 
     def _read(self, relative: Path) -> str | None:
         return read_text_safely(self.root, relative, max_size=REACHABILITY_MAX_FILE_SIZE).text
+
+    def _has_node_budget(self, file: Path | None, pending_label: str) -> bool:
+        if len(self.graph.nodes) < MAX_NODES:
+            return True
+        if not self.node_budget_exhausted:
+            self.node_budget_exhausted = True
+            self.graph.uncertainties.append(
+                uncertainty.node_budget_exceeded(
+                    max_nodes=MAX_NODES,
+                    current_nodes=len(self.graph.nodes),
+                    pending_label=pending_label,
+                    file=file,
+                )
+            )
+        return False
 
     def _add_node(
         self,

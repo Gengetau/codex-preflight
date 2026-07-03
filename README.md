@@ -179,6 +179,8 @@ Generated demo reports live in [docs/examples](docs/examples/README.md).
 
 JSON reports include `executionGraph` with reachable nodes, edges, capabilities, and uncertainty.
 Markdown reports include `Execution Chain` and `Uncertainty` sections for human review.
+Large reports are capped to keep agent output bounded; when detail is omitted, the report includes
+an explicit `REPORT_SIZE_BUDGET_EXCEEDED` uncertainty summary.
 
 ## External Repository Scan
 
@@ -256,4 +258,5 @@ Codex Preflight is static, heuristic, and best-effort. It does not prove a repos
 not execute code, and does not replace SAST, dependency audit tools, malware sandboxes, or CVE
 scanners. Dynamic runtime behavior may still evade static analysis. Unknown, dynamic, missing,
 outside-repository, symlink, oversized, binary, or incompletely scanned high-risk paths are
-escalated conservatively.
+escalated conservatively. Very large graphs or finding sets may be summarized with explicit
+report-budget uncertainty instead of unbounded detail.

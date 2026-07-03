@@ -54,6 +54,25 @@ def chain_depth_exceeded(file: Path | None = None) -> Uncertainty:
     )
 
 
+def node_budget_exceeded(
+    *,
+    max_nodes: int,
+    current_nodes: int,
+    pending_label: str,
+    file: Path | None = None,
+) -> Uncertainty:
+    return Uncertainty(
+        rule_id="SCRIPT_NODE_BUDGET_EXCEEDED",
+        severity=Severity.HIGH,
+        file=file,
+        reason=(
+            "Static reachability exceeded the maximum node budget "
+            f"({current_nodes}/{max_nodes}); omitted reachable target: {pending_label}"
+        ),
+        recommendation="Treat the execution graph as incomplete and manually inspect omitted reachable paths.",
+    )
+
+
 def dynamic_command(command: str, file: Path | None = None) -> Uncertainty:
     return Uncertainty(
         rule_id="SCRIPT_DYNAMIC_COMMAND_CONSTRUCTION",

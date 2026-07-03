@@ -2,6 +2,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from codex_preflight_core.cache import atomic_json
 from codex_preflight_core.cache.atomic_json import read_json, write_json_atomic
 from codex_preflight_core.cache.scan_cache import ScanCache
 from codex_preflight_core.cache.trust_cache import TrustCache
@@ -68,7 +69,7 @@ def test_trust_cache_scopes_by_command_scope_and_expiry(tmp_path: Path) -> None:
         command_scope="docker",
     ) is None
     assert len(cache.list()) == 1
-    cache.revoke(Path("repo"))
+    assert cache.revoke_identity("repo") == 1
     assert cache.list() == []
 
 
@@ -109,6 +110,11 @@ def test_trust_cache_scopes_by_policy_and_ruleset(tmp_path: Path) -> None:
     )
 
 
+def test_trust_cache_has_identity_based_public_revoke_api() -> None:
+    assert not hasattr(TrustCache, "revoke")
+    assert hasattr(TrustCache, "revoke_identity")
+
+
 def test_corrupt_json_is_backed_up_and_default_is_returned(tmp_path: Path) -> None:
     path = tmp_path / "scan-cache.json"
     path.write_text("{not-json", encoding="utf-8")
@@ -127,3 +133,23 @@ def test_write_json_atomic_replaces_target_and_leaves_no_temp_files(tmp_path: Pa
 
     assert json.loads(path.read_text(encoding="utf-8")) == [{"decision": "ALLOW"}]
     assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_write_json_atomic_uses_direct_writer_on_windows(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    path = tmp_path / "cache.json"
+    calls = []
+
+    def fake_direct_writer(target: Path, data: object) -> None:
+        calls.append((target, data))
+        target.write_text(json.dumps(data), encoding="utf-8")
+
+    monkeypatch.setattr(atomic_json.os, "name", "nt")
+    monkeypatch.setattr(atomic_json, "_write_json_direct", fake_direct_writer)
+
+    atomic_json.write_json_atomic(path, [{"decision": "ALLOW"}])
+
+    assert calls == [(path, [{"decision": "ALLOW"}])]
+    assert json.loads(path.read_text(encoding="utf-8")) == [{"decision": "ALLOW"}]

@@ -12,17 +12,31 @@ class PackageScript:
     command: str
 
 
-def package_scripts(package_file: Path, names: set[str]) -> list[PackageScript]:
+def package_scripts(
+    package_file: Path,
+    names: set[str],
+    text: str | None = None,
+    *,
+    raise_parse_error: bool = False,
+) -> list[PackageScript]:
     try:
-        data = json.loads(package_file.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        data = json.loads(_read_package_text(package_file) if text is None else text)
+    except json.JSONDecodeError:
+        if raise_parse_error:
+            raise
         return []
     scripts = data.get("scripts", {})
     if not isinstance(scripts, dict):
         return []
-    relative = Path(package_file.name) if not package_file.is_absolute() else package_file
     return [
-        PackageScript(relative, name, command)
+        PackageScript(package_file, name, command)
         for name, command in scripts.items()
         if name in names and isinstance(command, str)
     ]
+
+
+def _read_package_text(package_file: Path) -> str:
+    try:
+        return package_file.read_text(encoding="utf-8")
+    except OSError:
+        return ""

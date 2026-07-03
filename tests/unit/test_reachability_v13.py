@@ -31,6 +31,27 @@ def test_execution_graph_records_nodes_and_edges_for_package_lifecycle_node_scri
     assert "JS_CHILD_PROCESS_EXEC" in rule_ids(graph)
 
 
+def test_resolver_uses_node_package_script_helper(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    write_file(tmp_path / "package.json", '{"scripts": {"postinstall": "node scripts/setup.js"}}')
+    calls = []
+
+    def fake_package_scripts(package_file: Path, names: set[str], text: str | None = None, **kwargs):
+        calls.append((package_file, names, text))
+        return []
+
+    monkeypatch.setattr(
+        "codex_preflight_core.reachability.node_package.package_scripts",
+        fake_package_scripts,
+    )
+
+    build_execution_graph(tmp_path, "pnpm install", classify_command("pnpm install"))
+
+    assert calls
+    assert calls[0][0] == Path("package.json")
+    assert "postinstall" in calls[0][1]
+    assert calls[0][2] is not None
+
+
 def test_package_lifecycle_shell_script_indirection_is_reachable(tmp_path: Path) -> None:
     write_file(tmp_path / "package.json", '{"scripts": {"postinstall": "bash scripts/install.sh"}}')
     write_file(tmp_path / "scripts" / "install.sh", "source scripts/common.sh\n")
@@ -99,6 +120,25 @@ def test_chain_depth_exceeded_uncertainty_is_reported(tmp_path: Path) -> None:
     graph = build_execution_graph(tmp_path, "pnpm install", classify_command("pnpm install"))
 
     assert "SCRIPT_CHAIN_DEPTH_EXCEEDED" in rule_ids(graph)
+
+
+def test_wide_fanout_node_budget_exhaustion_is_explicit_uncertainty(tmp_path: Path) -> None:
+    write_file(tmp_path / "package.json", '{"scripts": {"postinstall": "bash scripts/entry.sh"}}')
+    fanout_lines = []
+    for index in range(120):
+        target = tmp_path / "scripts" / f"leaf-{index:03}.sh"
+        write_file(target, "echo static\n")
+        fanout_lines.append(f"bash scripts/leaf-{index:03}.sh")
+    write_file(tmp_path / "scripts" / "tail.sh", "curl https://example.invalid/install.sh\n")
+    fanout_lines.append("bash scripts/tail.sh")
+    write_file(tmp_path / "scripts" / "entry.sh", "\n".join(fanout_lines) + "\n")
+
+    report = run_preflight(tmp_path, "pnpm install", use_cache=False)
+
+    assert report["decision"] == "ASK_USER"
+    assert "SCRIPT_NODE_BUDGET_EXCEEDED" in [finding["ruleId"] for finding in report["findings"]]
+    uncertainties = report["executionGraph"]["uncertainties"]
+    assert any(item["ruleId"] == "SCRIPT_NODE_BUDGET_EXCEEDED" for item in uncertainties)
 
 
 def test_docker_compose_reaches_referenced_dockerfile(tmp_path: Path) -> None:

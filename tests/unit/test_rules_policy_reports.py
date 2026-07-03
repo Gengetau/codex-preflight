@@ -7,6 +7,7 @@ from codex_preflight_core.policy.engine import evaluate_policy
 from codex_preflight_core.report.json_renderer import render_json_report
 from codex_preflight_core.report.markdown_renderer import render_markdown_report
 from codex_preflight_core.scanner.engine import scan_repository
+from codex_preflight_core.scanner.finding import Finding, Severity
 
 
 def test_package_lifecycle_remote_exec_blocks_dependency_install(tmp_path: Path) -> None:
@@ -99,3 +100,75 @@ def test_reports_include_agent_instruction_and_required_fields(tmp_path: Path) -
     assert parsed["summary"]["high"] >= 1
     assert "ASK_USER" in markdown
     assert "AGENT_UNSAFE_COMMAND_REQUEST" in markdown
+
+
+def test_report_budget_caps_details_and_keeps_highest_severity(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("codex_preflight_core.report.json_renderer.REPORT_MAX_FINDINGS", 2)
+    monkeypatch.setattr("codex_preflight_core.report.json_renderer.REPORT_MAX_GRAPH_NODES", 2)
+    monkeypatch.setattr("codex_preflight_core.report.json_renderer.REPORT_MAX_GRAPH_EDGES", 1)
+    monkeypatch.setattr("codex_preflight_core.report.json_renderer.REPORT_MAX_GRAPH_UNCERTAINTIES", 1)
+
+    findings = [
+        Finding("LOW_ONE", Severity.LOW, "low", "a.txt", 1, "a", "low", "review"),
+        Finding("LOW_TWO", Severity.LOW, "low", "b.txt", 1, "b", "low", "review"),
+        Finding("SECRET_PRIVATE_KEY", Severity.CRITICAL, "key", "id_rsa", 1, "private key", "critical", "remove"),
+    ]
+    classification = classify_command("bash setup.sh")
+    policy = evaluate_policy(findings, classification)
+    execution_graph = {
+        "entryCommand": "bash setup.sh",
+        "nodes": [
+            {"id": f"n{index}", "type": "file", "label": f"node-{index}", "file": None}
+            for index in range(4)
+        ],
+        "edges": [
+            {"from": "n0", "to": f"n{index}", "reason": "fanout"}
+            for index in range(1, 4)
+        ],
+        "capabilities": [],
+        "uncertainties": [
+            {
+                "ruleId": "SCRIPT_PARSE_UNCERTAIN",
+                "severity": "MEDIUM",
+                "file": None,
+                "reason": "one",
+                "recommendation": "review",
+            },
+            {
+                "ruleId": "SCRIPT_UNKNOWN_INTERPRETER",
+                "severity": "MEDIUM",
+                "file": None,
+                "reason": "two",
+                "recommendation": "review",
+            },
+        ],
+    }
+
+    rendered = render_json_report(
+        command="bash setup.sh",
+        classification=classification,
+        repo_path=tmp_path,
+        repo_identity=None,
+        fingerprint="sha256:test",
+        findings=findings,
+        policy=policy,
+        cache_status={"usedScanCache": False, "usedTrustCache": False, "cacheReason": None},
+        execution_graph=execution_graph,
+    )
+    report = json.loads(rendered)
+    markdown = render_markdown_report(report)
+
+    assert report["decision"] == "BLOCK"
+    assert [finding["ruleId"] for finding in report["findings"]] == ["SECRET_PRIVATE_KEY", "LOW_ONE"]
+    assert report["reportLimits"]["findings"]["omitted"] == 1
+    assert report["reportLimits"]["executionGraph"]["nodes"]["omitted"] == 2
+    assert report["reportLimits"]["executionGraph"]["edges"]["omitted"] == 2
+    assert report["reportLimits"]["executionGraph"]["uncertainties"]["omitted"] == 1
+    assert any(
+        item["ruleId"] == "REPORT_SIZE_BUDGET_EXCEEDED"
+        for item in report["executionGraph"]["uncertainties"]
+    )
+    assert "REPORT_SIZE_BUDGET_EXCEEDED" in markdown

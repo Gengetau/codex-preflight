@@ -1,5 +1,17 @@
 # Release History
 
+## v0.1.5
+
+Analysis budget hardening and reachability cleanup:
+
+- Added a wide-fanout reachability budget regression case.
+- Reported reachability node budget exhaustion as explicit `SCRIPT_NODE_BUDGET_EXCEEDED`
+  uncertainty.
+- Added report-size caps with explicit `REPORT_SIZE_BUDGET_EXCEEDED` summary uncertainty.
+- Consolidated Node package script extraction through the reachability package helper.
+- Removed the legacy path-based trust revoke API in favor of identity-based revocation.
+- Added Windows Python 3.12 CI coverage.
+
 ## v0.1.4
 
 Codex plugin packaging:

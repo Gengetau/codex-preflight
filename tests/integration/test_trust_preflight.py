@@ -113,7 +113,7 @@ def test_trust_allow_is_not_reused_after_revoke_via_scan_cache(
     )
 
     trusted_report = run_preflight(repo, "pnpm install", use_cache=True)
-    trust_cache.revoke(repo)
+    assert trust_cache.revoke_identity(identity.repo_id) == 1
     revoked_report = run_preflight(repo, "pnpm install", use_cache=True)
 
     assert trusted_report["decision"] == "ALLOW"
