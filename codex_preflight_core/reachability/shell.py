@@ -8,7 +8,7 @@ from codex_preflight_core.rules.base import line_number
 from codex_preflight_core.scanner.finding import Severity
 
 LOCAL_INTERPRETERS = {"bash", "sh", "python", "node", "powershell", "pwsh"}
-SHELL_EXTENSIONS = {".sh", ".bash", ".zsh", ".ps1"}
+SHELL_EXTENSIONS = {".sh", ".bash", ".zsh", ".ps1", ".bat", ".cmd"}
 
 
 @dataclass(frozen=True)

@@ -81,3 +81,23 @@ def dynamic_command(command: str, file: Path | None = None) -> Uncertainty:
         reason=f"Dynamic command construction may hide execution targets: {command}",
         recommendation="Review dynamic command construction before execution.",
     )
+
+
+def external_package_execution(reason: str, file: Path | None = None) -> Uncertainty:
+    return Uncertainty(
+        rule_id="SCRIPT_EXTERNAL_PACKAGE_EXECUTION",
+        severity=Severity.MEDIUM,
+        file=file,
+        reason=reason,
+        recommendation="Review external package or tool execution before running this command.",
+    )
+
+
+def task_runner_unresolved(reason: str, file: Path | None = None) -> Uncertainty:
+    return Uncertainty(
+        rule_id="SCRIPT_TASK_RUNNER_UNRESOLVED",
+        severity=Severity.MEDIUM,
+        file=file,
+        reason=reason,
+        recommendation="Review task runner configuration manually before execution.",
+    )

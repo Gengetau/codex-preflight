@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 
+import codex_preflight_core.reachability.command_parser as command_parser
 import codex_preflight_core.reachability.docker as docker
 import codex_preflight_core.reachability.node_package as node_package
 import codex_preflight_core.reachability.nodejs as nodejs
@@ -46,6 +47,9 @@ class ReachabilityResolver:
             self._resolve_docker(entry)
         elif scope in {CommandScope.BUILD, CommandScope.TEST}:
             self._resolve_build(entry)
+        elif scope in {CommandScope.UNKNOWN_SHELL, CommandScope.MCP_SERVER_START}:
+            for segment in split_shell_segments(self.command):
+                self._resolve_command_references(segment, entry, Path("."), 0, "command target")
         return self.graph
 
     def _resolve_dependency_install(self, parent: ExecutionNode) -> None:
@@ -136,13 +140,73 @@ class ReachabilityResolver:
         depth: int,
         reason: str,
     ) -> None:
-        references = shell.local_references(command)
-        if not references and self._looks_dynamic(command):
-            self.graph.uncertainties.append(uncertainty.dynamic_command(command, parent.file))
-        elif not references and self._looks_like_unknown_local_command(command):
-            self.graph.uncertainties.append(uncertainty.unknown_interpreter(command, parent.file))
-        for reference in references:
+        parsed = command_parser.parse_reachable_command(command)
+        found_static_reference = bool(
+            parsed.local_paths or parsed.nested_commands or parsed.package_scripts or parsed.python_modules
+        )
+        for parsed_uncertainty in parsed.uncertainties:
+            self.graph.uncertainties.append(self._parsed_uncertainty(parsed_uncertainty, parent.file))
+        for nested in parsed.nested_commands:
+            for segment in split_shell_segments(nested):
+                self._resolve_command_references(segment, parent, base_dir, depth, reason)
+        for script_name in parsed.package_scripts:
+            self._resolve_package_script(script_name, parent, base_dir, depth, reason)
+        for module_name in parsed.python_modules:
+            self._follow_python_module(module_name, parent, base_dir, depth, reason)
+        for reference in parsed.local_paths:
             self._follow_target(reference.target, parent, base_dir, depth, reason if reason else reference.reason)
+        if not found_static_reference and not parsed.uncertainties and self._looks_dynamic(command):
+            self.graph.uncertainties.append(uncertainty.dynamic_command(command, parent.file))
+        elif (
+            not found_static_reference
+            and not parsed.uncertainties
+            and self._looks_like_unknown_local_command(command)
+        ):
+            self.graph.uncertainties.append(uncertainty.unknown_interpreter(command, parent.file))
+
+    def _resolve_package_script(
+        self,
+        script_name: str,
+        parent: ExecutionNode,
+        base_dir: Path,
+        depth: int,
+        reason: str,
+    ) -> None:
+        package_files = [base_dir / "package.json"] if (self.root / base_dir / "package.json").is_file() else []
+        package_files.extend(
+            package_file for package_file in self._walk_files({"package.json"}) if package_file not in package_files
+        )
+        for package_file in package_files:
+            for name, command in self._package_scripts(package_file, {script_name}):
+                label = f"{package_file.as_posix()} scripts.{name}"
+                if not self._has_node_budget(package_file, label):
+                    return
+                node = self._add_node("package-script", label, file=package_file, command=command)
+                self._add_edge(parent, node, reason if reason else "package script command")
+                self._resolve_command_references(
+                    command,
+                    node,
+                    package_file.parent,
+                    depth,
+                    "package script invokes local script",
+                )
+
+    def _follow_python_module(
+        self,
+        module_name: str,
+        parent: ExecutionNode,
+        base_dir: Path,
+        depth: int,
+        reason: str,
+    ) -> None:
+        module_path = Path(module_name.replace(".", "/"))
+        candidates = [module_path.with_suffix(".py"), module_path / "__main__.py"]
+        for candidate in candidates:
+            raw = self._resolve_candidate(base_dir, candidate, None)
+            if raw.is_file():
+                self._follow_target(candidate.as_posix(), parent, base_dir, depth, reason or "python -m module target")
+                return
+        self.graph.uncertainties.append(uncertainty.missing_target(module_name, parent.file))
 
     def _follow_target(
         self,
@@ -300,6 +364,17 @@ class ReachabilityResolver:
             return False
         return "/" in parts[1] or "\\" in parts[1] or Path(parts[1]).suffix
 
+    def _parsed_uncertainty(
+        self,
+        parsed_uncertainty: command_parser.CommandUncertainty,
+        file: Path | None,
+    ):
+        if parsed_uncertainty.rule_id == "SCRIPT_EXTERNAL_PACKAGE_EXECUTION":
+            return uncertainty.external_package_execution(parsed_uncertainty.reason, file)
+        if parsed_uncertainty.rule_id == "SCRIPT_TASK_RUNNER_UNRESOLVED":
+            return uncertainty.task_runner_unresolved(parsed_uncertainty.reason, file)
+        return uncertainty.parse_uncertain(parsed_uncertainty.reason, file)
+
     def _resolve_candidate(self, base_dir: Path, target_path: Path, fallback_dir: Path | None) -> Path:
         first = self.root / base_dir / target_path
         if first.is_file() or fallback_dir is None:
@@ -310,7 +385,7 @@ class ReachabilityResolver:
 
 def _capabilities_for(relative: Path, text: str) -> list[Capability]:
     suffix = relative.suffix.lower()
-    if suffix in {".js", ".mjs", ".cjs"}:
+    if suffix in {".js", ".mjs", ".cjs", ".ts", ".tsx"}:
         return nodejs.node_capabilities(relative, text)
     if suffix == ".py":
         return python.python_capabilities(relative, text)
@@ -335,7 +410,7 @@ def _package_script_name(parts: list[str]) -> str | None:
 
 def _language_for(relative: Path) -> str | None:
     suffix = relative.suffix.lower()
-    if suffix in {".js", ".mjs", ".cjs"}:
+    if suffix in {".js", ".mjs", ".cjs", ".ts", ".tsx"}:
         return "nodejs"
     if suffix == ".py":
         return "python"

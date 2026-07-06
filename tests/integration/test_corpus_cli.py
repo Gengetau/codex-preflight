@@ -43,7 +43,7 @@ EXPECTED_CASES = {
         "ASK_USER",
         ["AGENT_IGNORE_INSTRUCTIONS", "AGENT_UNSAFE_COMMAND_REQUEST", "SCRIPT_TARGET_MISSING"],
     ),
-    "mcp-shell-server": ("ASK_USER", ["MCP_SHELL_COMMAND"]),
+    "mcp-shell-server": ("ASK_USER", ["MCP_SHELL_COMMAND", "SCRIPT_EXTERNAL_PACKAGE_EXECUTION"]),
     "docker-socket-mount": ("ASK_USER", ["DOCKER_SOCKET_MOUNT"]),
     "github-actions-pull-request-target": ("ASK_USER", ["GHA_PULL_REQUEST_TARGET"]),
     "leaked-secret-fixture": ("BLOCK", ["SECRET_PRIVATE_KEY"]),

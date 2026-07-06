@@ -39,6 +39,8 @@ local indirection, surfaces uncertainty, and gives the user a decision with evid
 - Composite command classification.
 - Planned-command risk findings for remote shell pipelines, encoded PowerShell, dangerous Docker
   flags and mounts, and inline interpreter execution.
+- Reachability parsing for common wrappers such as shell `-c`, interpreter flags, `env`,
+  package-manager wrappers, PowerShell, `cmd /c`, and Windows-style paths.
 - Nested monorepo critical file collection.
 - Package lifecycle detection.
 - Shell, Docker, GitHub Actions, MCP, agent instruction, and secret checks.

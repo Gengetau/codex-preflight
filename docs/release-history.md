@@ -1,5 +1,20 @@
 # Release History
 
+## v0.1.9
+
+Reachability parser precision:
+
+- Improved reachability parsing for shell `-c` command forms.
+- Added support for Python and Node interpreter flags that previously hid reachable scripts.
+- Added environment-wrapper handling for commands such as `env VAR=value bash script.sh`.
+- Improved package-manager and task-runner wrapper handling with explicit uncertainty where local
+  resolution is not possible.
+- Added first-pass Windows command-form handling for PowerShell, `cmd /c`, and backslash paths.
+- Added regression tests for interpreter flags, shell `-c`, environment wrappers,
+  package-manager wrappers, Windows command forms, and mixed path separators.
+- Preserved command self-risk behavior, CLI behavior, Codex plugin packaging, and marketplace
+  packaging.
+
 ## v0.1.8
 
 Command self-risk hardening:
