@@ -1,5 +1,18 @@
 # Release History
 
+## v0.1.10
+
+Policy matrix and decision calibration:
+
+- Added an explicit policy matrix mapping known rule IDs and command scopes to minimum decisions.
+- Migrated hard-block and user-review policy behavior into tested matrix entries.
+- Added policy coverage tests for known scanner, command-risk, reachability capability, uncertainty,
+  and report-only rule IDs.
+- Made hard-block behavior, safe-readonly downgrade behavior, and `CRITICAL` severity behavior
+  explicit through tests.
+- Preserved command self-risk behavior, reachability parser behavior, CLI behavior, Codex plugin
+  packaging, and marketplace packaging.
+
 ## v0.1.9.1
 
 Reachability parser edge-case cleanup:
