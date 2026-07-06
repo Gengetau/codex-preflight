@@ -115,6 +115,7 @@ POLICY_MATRIX: dict[str, PolicyMatrixEntry] = {
         _ask("PYTHON_SUBPROCESS_EXEC", "Reachable Python code can start subprocesses."),
         _ask("SCRIPT_CHAIN_DEPTH_EXCEEDED", "Reachability exceeded static chain-depth budget."),
         _ask("SCRIPT_DYNAMIC_COMMAND_CONSTRUCTION", "Reachable command construction is dynamic."),
+        _ask("SCRIPT_DYNAMIC_MODULE_REFERENCE", "Reachable Node.js module reference is dynamic."),
         _ask("SCRIPT_EXTERNAL_PACKAGE_EXECUTION", "Command reaches external package or tool execution."),
         _ask("SCRIPT_INDIRECT_EXECUTION", "Dependency or script execution reaches another local script."),
         _ask("SCRIPT_NODE_BUDGET_EXCEEDED", "Reachability exceeded static node budget."),

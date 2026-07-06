@@ -1,7 +1,7 @@
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from codex_preflight_core.scanner.finding import Finding, Severity
+from codex_preflight_core.scanner.finding import Finding, Severity, evidence_metadata
 
 
 @dataclass(frozen=True)
@@ -49,7 +49,7 @@ class Capability:
             "capability": self.capability,
             "evidence": self.evidence,
             "recommendation": self.recommendation,
-        }
+        } | evidence_metadata(self.rule_id, self.file.as_posix(), "Reachable execution capability detected")
 
     def to_finding(self) -> Finding:
         return Finding(

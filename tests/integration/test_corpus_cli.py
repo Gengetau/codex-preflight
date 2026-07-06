@@ -45,8 +45,20 @@ EXPECTED_CASES = {
     ),
     "mcp-shell-server": ("ASK_USER", ["MCP_SHELL_COMMAND", "SCRIPT_EXTERNAL_PACKAGE_EXECUTION"]),
     "docker-socket-mount": ("ASK_USER", ["DOCKER_SOCKET_MOUNT"]),
+    "evidence-prompt-injection-snippet": (
+        "ASK_USER",
+        ["NODE_POSTINSTALL_SCRIPT", "SCRIPT_INDIRECT_EXECUTION", "JS_CHILD_PROCESS_EXEC"],
+    ),
     "github-actions-pull-request-target": ("ASK_USER", ["GHA_PULL_REQUEST_TARGET"]),
     "leaked-secret-fixture": ("BLOCK", ["SECRET_PRIVATE_KEY"]),
+    "node-dynamic-require-uncertain": (
+        "ASK_USER",
+        ["NODE_POSTINSTALL_SCRIPT", "SCRIPT_INDIRECT_EXECUTION", "JS_ENV_ACCESS", "SCRIPT_DYNAMIC_MODULE_REFERENCE"],
+    ),
+    "node-require-payload-chain": (
+        "ASK_USER",
+        ["NODE_POSTINSTALL_SCRIPT", "SCRIPT_INDIRECT_EXECUTION", "JS_CHILD_PROCESS_EXEC"],
+    ),
     "safe-node-package": ("ALLOW", []),
     "shell-source-indirection": ("ASK_USER", ["SHELL_SOURCE_INDIRECTION"]),
     "wide-fanout-exceeded": (

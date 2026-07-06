@@ -83,6 +83,16 @@ def dynamic_command(command: str, file: Path | None = None) -> Uncertainty:
     )
 
 
+def dynamic_module_reference(file: Path | None = None) -> Uncertainty:
+    return Uncertainty(
+        rule_id="SCRIPT_DYNAMIC_MODULE_REFERENCE",
+        severity=Severity.HIGH,
+        file=file,
+        reason="Dynamic Node.js module reference could not be resolved statically.",
+        recommendation="Review dynamic require/import paths before execution.",
+    )
+
+
 def external_package_execution(reason: str, file: Path | None = None) -> Uncertainty:
     return Uncertainty(
         rule_id="SCRIPT_EXTERNAL_PACKAGE_EXECUTION",

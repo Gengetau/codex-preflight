@@ -1,0 +1,1 @@
+{"scripts": {"postinstall": "node src/internal/setup.js"}}

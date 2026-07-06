@@ -41,6 +41,8 @@ local indirection, surfaces uncertainty, and gives the user a decision with evid
   flags and mounts, and inline interpreter execution.
 - Reachability parsing for common wrappers such as shell `-c`, interpreter flags, `env`,
   package-manager wrappers, PowerShell, `cmd /c`, and Windows-style paths.
+- Cross-file Node.js module reachability for local `require()` and `import` chains.
+- Evidence trust-boundary labels for repository-controlled snippets.
 - Nested monorepo critical file collection.
 - Package lifecycle detection.
 - Shell, Docker, GitHub Actions, MCP, agent instruction, and secret checks.
@@ -66,7 +68,7 @@ planned command
   -> JSON / Markdown report
 ```
 
-v0.1.3.1 uses bounded safe reads and never executes repository code. Reachability follows only
+v0.1.12 uses bounded safe reads and never executes repository code. Reachability follows only
 statically visible local paths inside the repository and reports missing, dynamic, outside-repo,
 symlink, oversized, binary, or incomplete paths as uncertainty.
 
@@ -124,8 +126,8 @@ The plugin is skill-based:
 - `.agents/plugins/plugins/codex-preflight/`: marketplace-packaged copy of the plugin referenced by
   the marketplace root.
 
-The plugin does not currently provide MCP or App integration, and the manifest intentionally does
-not declare `mcpServers` or `apps`.
+The Codex plugin manifest does not currently declare MCP or App integration, and it intentionally
+does not declare `mcpServers` or `apps`.
 
 When Codex is about to run a risky command in a local or unfamiliar repository, it should run:
 
@@ -158,6 +160,15 @@ After marketplace or plugin updates, reinstall or refresh according to the offic
 workflow and start a new Codex thread if skill loading is thread-scoped.
 
 More details are in [docs/plugin.md](docs/plugin.md).
+
+## MCP
+
+The first MCP-facing package is read-only and local-path-only. It exposes static preflight checks
+and bundled corpus scans, but does not expose remote repository clone, command execution, trust
+approval, trust revoke, or cache mutation tools. Evidence snippets from repositories are marked as
+untrusted data.
+
+See [docs/mcp.md](docs/mcp.md) for MCP safety notes.
 
 ## Demo Examples
 

@@ -1,0 +1,11 @@
+id: node-require-payload-chain
+title: Node package lifecycle follows require chain to payload
+category: reachability
+command: npm install
+expectedDecision: ASK_USER
+expectedRules:
+  - NODE_POSTINSTALL_SCRIPT
+  - SCRIPT_INDIRECT_EXECUTION
+  - JS_CHILD_PROCESS_EXEC
+description: A package lifecycle script reaches a local Node.js file that requires a payload module with child process execution.
+safetyNote: The fixture contains inert static text and is never installed or executed.

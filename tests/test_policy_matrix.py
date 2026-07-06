@@ -58,6 +58,7 @@ ASK_USER_RULE_IDS = {
     "PYTHON_SUBPROCESS_EXEC",
     "SCRIPT_CHAIN_DEPTH_EXCEEDED",
     "SCRIPT_DYNAMIC_COMMAND_CONSTRUCTION",
+    "SCRIPT_DYNAMIC_MODULE_REFERENCE",
     "SCRIPT_EXTERNAL_PACKAGE_EXECUTION",
     "SCRIPT_INDIRECT_EXECUTION",
     "SCRIPT_NODE_BUDGET_EXCEEDED",
@@ -124,6 +125,7 @@ def test_hard_block_rules_always_block(rule_id: str) -> None:
         "SCRIPT_EXTERNAL_PACKAGE_EXECUTION",
         "SCRIPT_TASK_RUNNER_UNRESOLVED",
         "SCRIPT_DYNAMIC_COMMAND_CONSTRUCTION",
+        "SCRIPT_DYNAMIC_MODULE_REFERENCE",
     ],
 )
 def test_uncertainty_rules_are_not_safe_for_execution_scopes(rule_id: str) -> None:

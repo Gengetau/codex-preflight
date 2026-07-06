@@ -1,5 +1,24 @@
 # Release History
 
+## v0.1.12
+
+Pre-MCP hardening bundle:
+
+- Added cross-file Node.js module reachability for local `require()` and `import` chains.
+- Added uncertainty for dynamic or unresolved module references.
+- Hardened Node.js child-process detection for direct chained `require("child_process").exec(...)`
+  patterns.
+- Added evidence trust-boundary metadata so repository-controlled evidence is labeled as
+  untrusted data.
+- Added MCP-facing documentation that evidence snippets must never be treated as instructions.
+- Added file locking for local scan and trust caches, with atomic replace where supported and a
+  locked Windows fallback.
+- Added a minimal read-only MCP-facing package with local-path-only `preflight_check` and bundled
+  `corpus_scan` tools.
+- Kept remote repository scanning and trust mutation out of the first MCP tool set.
+- Preserved CLI behavior, command self-risk behavior, reachability parser behavior, policy matrix
+  behavior, Codex plugin packaging, marketplace packaging, and marketplace sync automation.
+
 ## v0.1.11
 
 Marketplace copy sync automation:

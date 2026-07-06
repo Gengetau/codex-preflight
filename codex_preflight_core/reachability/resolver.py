@@ -256,6 +256,11 @@ class ReachabilityResolver:
             self.graph.uncertainties.append(uncertainty.parse_uncertain("Could not read reachable file.", relative))
             return
         self.graph.capabilities.extend(_capabilities_for(relative, text))
+        if relative.suffix.lower() in nodejs.NODE_MODULE_EXTENSIONS:
+            if nodejs.has_dynamic_module_reference(text):
+                self.graph.uncertainties.append(uncertainty.dynamic_module_reference(relative))
+            for reference in nodejs.local_module_references(text):
+                self._follow_node_module_target(reference.target, node, relative.parent, depth, reference.reason)
         for line in text.splitlines():
             for reference in shell.local_references(line):
                 self._follow_target(
@@ -266,6 +271,31 @@ class ReachabilityResolver:
                     reference.reason,
                     fallback_dir=relative.parent,
                 )
+
+    def _follow_node_module_target(
+        self,
+        target: str,
+        parent: ExecutionNode,
+        base_dir: Path,
+        depth: int,
+        reason: str,
+    ) -> None:
+        target_path = Path(target.strip("\"'"))
+        if target_path.is_absolute():
+            self.graph.uncertainties.append(uncertainty.outside_repo(target, parent.file))
+            return
+        for candidate in _node_module_candidates(target_path):
+            raw = self._resolve_candidate(base_dir, candidate, None)
+            resolved = raw.resolve()
+            try:
+                resolved.relative_to(self.root)
+            except ValueError:
+                self.graph.uncertainties.append(uncertainty.outside_repo(target, parent.file))
+                return
+            if resolved.is_file():
+                self._follow_target(candidate.as_posix(), parent, base_dir, depth, reason)
+                return
+        self.graph.uncertainties.append(uncertainty.missing_target(target, parent.file))
 
     def _walk_files(self, basenames: set[str]) -> list[Path]:
         found: list[Path] = []
@@ -408,6 +438,15 @@ def _package_script_name(parts: list[str]) -> str | None:
     }:
         return parts[1]
     return None
+
+
+def _node_module_candidates(target_path: Path) -> list[Path]:
+    if target_path.suffix:
+        return [target_path]
+    return [
+        *(target_path.with_suffix(extension) for extension in nodejs.NODE_MODULE_EXTENSIONS),
+        *(target_path / f"index{extension}" for extension in nodejs.NODE_MODULE_EXTENSIONS),
+    ]
 
 
 def _language_for(relative: Path) -> str | None:

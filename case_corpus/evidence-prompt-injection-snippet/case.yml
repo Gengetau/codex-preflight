@@ -1,0 +1,11 @@
+id: evidence-prompt-injection-snippet
+title: Repository evidence snippet is untrusted data
+category: evidence
+command: npm install
+expectedDecision: ASK_USER
+expectedRules:
+  - NODE_POSTINSTALL_SCRIPT
+  - SCRIPT_INDIRECT_EXECUTION
+  - JS_CHILD_PROCESS_EXEC
+description: A repository-controlled evidence snippet contains instruction-like text and must be labeled as untrusted data in reports.
+safetyNote: The fixture contains inert static text and is never installed or executed.

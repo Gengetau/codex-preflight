@@ -1,0 +1,12 @@
+id: node-dynamic-require-uncertain
+title: Node dynamic require produces uncertainty
+category: reachability
+command: npm install
+expectedDecision: ASK_USER
+expectedRules:
+  - NODE_POSTINSTALL_SCRIPT
+  - SCRIPT_INDIRECT_EXECUTION
+  - JS_ENV_ACCESS
+  - SCRIPT_DYNAMIC_MODULE_REFERENCE
+description: A package lifecycle script reaches a Node.js file with a dynamic module reference that cannot be resolved statically.
+safetyNote: The fixture contains inert static text and is never installed or executed.
