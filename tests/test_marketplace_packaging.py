@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -6,6 +8,7 @@ MARKETPLACE_ROOT = ROOT / ".agents" / "plugins"
 MARKETPLACE = MARKETPLACE_ROOT / "marketplace.json"
 ROOT_PLUGIN = ROOT
 MARKETPLACE_PLUGIN = MARKETPLACE_ROOT / "plugins" / "codex-preflight"
+SYNC_SCRIPT = ROOT / "scripts" / "sync_marketplace_plugin.py"
 
 
 def load_json(path: Path) -> dict:
@@ -58,6 +61,18 @@ def test_marketplace_plugin_package_matches_root_plugin_package() -> None:
     assert (ROOT_PLUGIN / "skills" / "codex-preflight" / "SKILL.md").read_text(encoding="utf-8") == (
         MARKETPLACE_PLUGIN / "skills" / "codex-preflight" / "SKILL.md"
     ).read_text(encoding="utf-8")
+
+
+def test_marketplace_plugin_copy_is_synced_by_helper() -> None:
+    result = subprocess.run(
+        [sys.executable, str(SYNC_SCRIPT), "--check"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_marketplace_does_not_declare_fake_integrations_or_ssh_sources() -> None:

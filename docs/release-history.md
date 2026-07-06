@@ -1,5 +1,19 @@
 # Release History
 
+## v0.1.11
+
+Marketplace copy sync automation:
+
+- Added `scripts/sync_marketplace_plugin.py` to generate the marketplace plugin copy from the
+  root plugin package.
+- Added `--check` mode so stale marketplace plugin copies fail validation.
+- Added tests for marketplace sync behavior and stale-copy detection.
+- Added CI coverage for marketplace plugin copy freshness.
+- Preserved the Codex marketplace root at `.agents/plugins` and the plugin source path
+  `./plugins/codex-preflight`.
+- Preserved CLI behavior, command self-risk behavior, reachability parser behavior, policy matrix
+  behavior, Codex plugin packaging, and marketplace packaging.
+
 ## v0.1.10
 
 Policy matrix and decision calibration:

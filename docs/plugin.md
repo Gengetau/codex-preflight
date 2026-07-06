@@ -50,6 +50,16 @@ source URL above.
 If Codex reports that the marketplace root does not contain a supported manifest, the selected
 sparse path is not a marketplace root. Use `.agents/plugins` for this repository.
 
+### Marketplace Plugin Copy Maintenance
+
+The root plugin package is the source of truth. After changing `.codex-plugin/plugin.json` or
+`skills/codex-preflight/SKILL.md`, run:
+
+```bash
+python scripts/sync_marketplace_plugin.py
+python scripts/sync_marketplace_plugin.py --check
+```
+
 Local plugin installation and refresh behavior depends on the user's Codex plugin marketplace
 setup. The official Plugin Creator workflow recommends using the plugin manifest, marketplace
 entries when needed, cachebuster updates for local plugin iteration, reinstalling the plugin, and

@@ -25,6 +25,9 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -e ".[dev]"
 
+      - name: Check marketplace plugin copy
+        run: python scripts/sync_marketplace_plugin.py --check
+
       - name: Lint
         run: ruff check .
 
