@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from codex_preflight_core.preflight import run_preflight
+from codex_preflight_core.reachability.command_parser import parse_reachable_command
 from codex_preflight_core.report.markdown_renderer import render_markdown_report
 
 
@@ -54,6 +55,34 @@ def test_missing_python_module_form_reports_uncertainty(tmp_path: Path) -> None:
 
     assert "SCRIPT_TARGET_MISSING" in finding_rules(report)
     assert report["decision"] == "ASK_USER"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python -X dev scripts/setup.py",
+        "python -Xdev scripts/setup.py",
+        "python -W ignore scripts/setup.py",
+        "python -Wignore scripts/setup.py",
+        "python3 -X dev scripts/setup.py",
+        "python3 -W ignore scripts/setup.py",
+    ],
+)
+def test_python_value_flags_continue_to_script_target(tmp_path: Path, command: str) -> None:
+    write_file(tmp_path / "scripts" / "setup.py", "import subprocess\nsubprocess.run(['echo', 'static'])\n")
+
+    report = run_preflight(tmp_path, command, use_cache=False)
+
+    assert "scripts/setup.py" in graph_files(report)
+    assert "PYTHON_SUBPROCESS_EXEC" in finding_rules(report)
+
+
+def test_python_inline_c_does_not_treat_following_args_as_script_target(tmp_path: Path) -> None:
+    write_file(tmp_path / "scripts" / "setup.py", "import subprocess\nsubprocess.run(['echo', 'static'])\n")
+
+    report = run_preflight(tmp_path, 'python -c "print(\'inline\')" scripts/setup.py', use_cache=False)
+
+    assert "scripts/setup.py" not in graph_files(report)
 
 
 def test_node_flags_reach_preload_and_main_script(tmp_path: Path) -> None:
@@ -152,6 +181,42 @@ def test_powershell_forms_reach_local_script(tmp_path: Path, command: str) -> No
 
     assert "scripts/setup.ps1" in graph_files(report)
     assert "SHELL_DOWNLOAD_CAPABILITY" in finding_rules(report)
+
+
+@pytest.mark.parametrize(
+    ("command", "normalized_path"),
+    [
+        (r"powershell -File C:\Users\me\setup.ps1", "C:/Users/me/setup.ps1"),
+        (r'powershell -Command "C:\Users\me\setup.ps1"', "C:/Users/me/setup.ps1"),
+        (r"cmd /c C:\Temp\setup.bat", "C:/Temp/setup.bat"),
+    ],
+)
+def test_windows_drive_absolute_paths_are_outside_repo(
+    tmp_path: Path,
+    command: str,
+    normalized_path: str,
+) -> None:
+    report = run_preflight(tmp_path, command, use_cache=False)
+
+    assert "SCRIPT_TARGET_OUTSIDE_REPO" in finding_rules(report)
+    assert "SCRIPT_TARGET_MISSING" not in finding_rules(report)
+    assert normalized_path not in graph_files(report)
+    assert report["decision"] == "ASK_USER"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        r"powershell -File C:\Users\me\setup.ps1",
+        r'powershell -Command "C:\Users\me\setup.ps1"',
+        r"cmd /c C:\Temp\setup.bat",
+    ],
+)
+def test_parser_does_not_emit_windows_drive_paths_as_local_targets(command: str) -> None:
+    parsed = parse_reachable_command(command)
+
+    assert not parsed.local_paths
+    assert [item.rule_id for item in parsed.uncertainties] == ["SCRIPT_TARGET_OUTSIDE_REPO"]
 
 
 @pytest.mark.parametrize("command", [r"cmd /c scripts\setup.bat", r"cmd.exe /c scripts\setup.bat"])

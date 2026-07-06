@@ -1,5 +1,17 @@
 # Release History
 
+## v0.1.9.1
+
+Reachability parser edge-case cleanup:
+
+- Treated Windows drive-letter absolute paths as outside-repository targets instead of
+  repository-relative missing files.
+- Continued Python script target parsing after `-X` and `-W` value flags.
+- Preserved `python -c` inline-code behavior as a terminating parser form.
+- Added regression tests for Windows drive-letter paths and Python value flags.
+- Preserved command self-risk behavior, CLI behavior, Codex plugin packaging, and marketplace
+  packaging.
+
 ## v0.1.9
 
 Reachability parser precision:

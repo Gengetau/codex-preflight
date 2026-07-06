@@ -1,3 +1,4 @@
+import re
 import shlex
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
@@ -54,9 +55,11 @@ PYTHON_NO_VALUE_FLAGS = {
     "-V",
     "--version",
 }
-PYTHON_VALUE_FLAGS = {"-c", "-W", "-X"}
+PYTHON_INLINE_FLAGS = {"-c"}
+PYTHON_VALUE_FLAGS = {"-W", "-X"}
 NODE_VALUE_FLAGS = {"--require", "-r", "--loader", "--import"}
 NODE_INLINE_FLAGS = {"-e", "--eval", "-p", "--print", "--check"}
+WINDOWS_DRIVE_ABSOLUTE = re.compile(r"^[A-Za-z]:[\\/]")
 
 
 def parse_reachable_command(command: str) -> ParsedCommand:
@@ -111,10 +114,19 @@ def extract_python_targets(tokens: list[str]) -> tuple[list[str], list[str], lis
             else:
                 uncertainties.append(_parse_uncertain("Python -m flag is missing a module name."))
             return targets, modules, uncertainties
+        if token in PYTHON_INLINE_FLAGS:
+            if index + 1 >= len(tokens):
+                uncertainties.append(_parse_uncertain(f"Python flag {token} is missing inline code."))
+            return targets, modules, uncertainties
         if token in PYTHON_VALUE_FLAGS:
             if index + 1 >= len(tokens):
                 uncertainties.append(_parse_uncertain(f"Python flag {token} is missing a value."))
-            return targets, modules, uncertainties
+                return targets, modules, uncertainties
+            index += 2
+            continue
+        if _is_python_combined_value_flag(token):
+            index += 1
+            continue
         if token in PYTHON_NO_VALUE_FLAGS or _is_python_combined_flag(token):
             index += 1
             continue
@@ -165,7 +177,7 @@ def extract_windows_shell_targets(tokens: list[str]) -> tuple[list[str], list[st
             lowered = token.lower()
             if lowered in {"-file", "-f"}:
                 if index + 1 < len(tokens):
-                    targets.append(normalize_repo_path_token(tokens[index + 1]))
+                    _append_target_or_outside_uncertainty(targets, uncertainties, tokens[index + 1])
                 else:
                     uncertainties.append(_parse_uncertain("PowerShell -File flag is missing a target."))
                 return targets, nested_commands, uncertainties
@@ -174,7 +186,9 @@ def extract_windows_shell_targets(tokens: list[str]) -> tuple[list[str], list[st
                     uncertainties.append(_parse_uncertain("PowerShell -Command flag is missing a command."))
                     return targets, nested_commands, uncertainties
                 command = tokens[index + 1]
-                if _is_local_path_token(command):
+                if is_windows_absolute_path(command):
+                    uncertainties.append(_outside_repo(command))
+                elif _is_local_path_token(command):
                     targets.append(normalize_repo_path_token(command))
                 else:
                     nested_commands.append(command)
@@ -183,7 +197,11 @@ def extract_windows_shell_targets(tokens: list[str]) -> tuple[list[str], list[st
         for index, token in enumerate(tokens[1:], start=1):
             if token.lower() in {"/c", "-c"}:
                 if index + 1 < len(tokens):
-                    nested_commands.append(" ".join(tokens[index + 1 :]))
+                    command = " ".join(tokens[index + 1 :])
+                    if len(tokens[index + 1 :]) == 1 and is_windows_absolute_path(command):
+                        uncertainties.append(_outside_repo(command))
+                    else:
+                        nested_commands.append(command)
                 else:
                     uncertainties.append(_parse_uncertain("cmd /c is missing a command."))
                 return targets, nested_commands, uncertainties
@@ -196,6 +214,10 @@ def normalize_repo_path_token(token: str) -> str:
     if cleaned.startswith("./"):
         cleaned = cleaned[2:]
     return cleaned
+
+
+def is_windows_absolute_path(token: str) -> bool:
+    return bool(WINDOWS_DRIVE_ABSOLUTE.match(token.strip().strip("\"'")))
 
 
 def _parse_tokens(tokens: list[str], *, normalized_display: str) -> ParsedCommand:
@@ -336,6 +358,10 @@ def _is_python_combined_flag(token: str) -> bool:
     return token.startswith("-") and set(token[1:]) <= {"B", "E", "I", "O", "S", "b", "i", "q", "s", "u", "v"}
 
 
+def _is_python_combined_value_flag(token: str) -> bool:
+    return token.startswith(("-X", "-W")) and token not in PYTHON_VALUE_FLAGS
+
+
 def _first_non_option(args: list[str]) -> str | None:
     index = 0
     while index < len(args):
@@ -370,6 +396,8 @@ def _is_external_package_execution(tokens: list[str]) -> bool:
 
 
 def _is_local_path_token(token: str) -> bool:
+    if is_windows_absolute_path(token):
+        return False
     normalized = normalize_repo_path_token(token)
     if not normalized or "://" in normalized:
         return False
@@ -384,3 +412,19 @@ def _is_local_path_token(token: str) -> bool:
 
 def _parse_uncertain(reason: str) -> CommandUncertainty:
     return CommandUncertainty("SCRIPT_PARSE_UNCERTAIN", reason)
+
+
+def _outside_repo(target: str) -> CommandUncertainty:
+    normalized = normalize_repo_path_token(target)
+    return CommandUncertainty("SCRIPT_TARGET_OUTSIDE_REPO", normalized)
+
+
+def _append_target_or_outside_uncertainty(
+    targets: list[str],
+    uncertainties: list[CommandUncertainty],
+    target: str,
+) -> None:
+    if is_windows_absolute_path(target):
+        uncertainties.append(_outside_repo(target))
+        return
+    targets.append(normalize_repo_path_token(target))

@@ -369,6 +369,8 @@ class ReachabilityResolver:
         parsed_uncertainty: command_parser.CommandUncertainty,
         file: Path | None,
     ):
+        if parsed_uncertainty.rule_id == "SCRIPT_TARGET_OUTSIDE_REPO":
+            return uncertainty.outside_repo(parsed_uncertainty.reason, file)
         if parsed_uncertainty.rule_id == "SCRIPT_EXTERNAL_PACKAGE_EXECUTION":
             return uncertainty.external_package_execution(parsed_uncertainty.reason, file)
         if parsed_uncertainty.rule_id == "SCRIPT_TASK_RUNNER_UNRESOLVED":
