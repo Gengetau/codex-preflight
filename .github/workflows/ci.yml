@@ -33,3 +33,29 @@ jobs:
 
       - name: Test
         run: pytest
+
+  mcp-smoke:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.12"]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install MCP extras
+        run: python -m pip install -e ".[dev,mcp]"
+
+      - name: List MCP tools
+        run: codex-preflight-mcp --list-tools
+
+      - name: Run MCP runtime smoke tests
+        run: pytest tests/test_mcp_runtime_smoke.py

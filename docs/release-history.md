@@ -1,5 +1,17 @@
 # Release History
 
+## v0.1.12.1
+
+MCP runtime smoke coverage:
+
+- Added optional MCP runtime smoke tests for `create_mcp_server()`.
+- Added CI coverage that installs `.[dev,mcp]` and verifies `codex-preflight-mcp --list-tools`.
+- Preserved the first MCP tool set as read-only and local-path-only.
+- Preserved remote repository scanning and trust mutation as intentionally not exposed through MCP.
+- Preserved CLI behavior, Node module reachability, evidence trust-boundary metadata, cache locking,
+  policy matrix behavior, Codex plugin packaging, marketplace packaging, and marketplace sync
+  automation.
+
 ## v0.1.12
 
 Pre-MCP hardening bundle:
