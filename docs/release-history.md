@@ -1,5 +1,20 @@
 # Release History
 
+## v0.1.13
+
+0.1.x stabilization and release hygiene:
+
+- Added a `0.1.x` stabilization summary covering completed areas, stable interfaces,
+  intentional non-inclusions, and known limitations.
+- Added a release process document with version sync, validation, annotated tag, and GitHub
+  Release guidance.
+- Added a reusable release notes template for future releases.
+- Added release hygiene tests for documentation presence, version alignment, and tag/release
+  guidance.
+- Preserved CLI behavior, command self-risk behavior, reachability behavior, policy matrix
+  behavior, evidence trust-boundary metadata, cache locking, MCP read-only boundaries, Codex
+  plugin packaging, marketplace packaging, and marketplace sync automation.
+
 ## v0.1.12.1
 
 MCP runtime smoke coverage:
