@@ -28,6 +28,17 @@ pip install "codex-preflight[mcp]"
 codex-preflight-mcp
 ```
 
+From a source checkout, install the local package with the MCP extra:
+
+```bash
+python -m pip install -e ".[mcp]"
+```
+
+If the optional runtime is missing, `codex-preflight-mcp` reports the install command to use.
+`preflight_check` accepts only an existing local `cwd`, a planned `command`, and `format=json`.
+Remote repository URLs, extra MCP arguments, Markdown output, trust mutation, and command
+execution are rejected by design.
+
 The implementation follows the official MCP server guidance for Python FastMCP and keeps stdio
 transport output reserved for protocol messages.
 
