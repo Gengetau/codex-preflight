@@ -1,0 +1,10 @@
+id: readme-fake-release-link
+title: README fake release link
+category: readme-link-poisoning
+command: cat README.md
+expectedDecision: WARN
+expectedRules:
+  - README_FAKE_RELEASE_LINK
+  - README_INSTALLER_FROM_NON_RELEASE_HOST
+description: Synthetic README with release/download wording that points to a GitHub Pages-style host.
+safetyNote: Uses inert example-owned URLs only and is scanned statically.

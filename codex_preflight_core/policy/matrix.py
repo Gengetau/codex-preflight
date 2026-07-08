@@ -71,6 +71,15 @@ def _warn(rule_id: str, rationale: str) -> PolicyMatrixEntry:
     return _entry(rule_id, Decision.WARN, rationale=rationale)
 
 
+def _readme_download(rule_id: str, rationale: str) -> PolicyMatrixEntry:
+    return _entry(
+        rule_id,
+        Decision.ASK_USER,
+        rationale=rationale,
+        scope_minimums={CommandScope.SAFE_READONLY: Decision.WARN},
+    )
+
+
 POLICY_MATRIX: dict[str, PolicyMatrixEntry] = {
     entry.rule_id: entry
     for entry in (
@@ -113,6 +122,16 @@ POLICY_MATRIX: dict[str, PolicyMatrixEntry] = {
         _ask("PYTHON_NETWORK_ACCESS", "Reachable Python code can access the network."),
         _ask("PYTHON_SETUP_REMOTE_FETCH", "Python setup code fetches remote content."),
         _ask("PYTHON_SUBPROCESS_EXEC", "Reachable Python code can start subprocesses."),
+        _readme_download("README_DEFEAT_SECURITY_WARNING", "README text encourages bypassing security warnings."),
+        _readme_download(
+            "README_FAKE_RELEASE_LINK",
+            "README release/download wording points away from expected releases.",
+        ),
+        _readme_download(
+            "README_INSTALLER_FROM_NON_RELEASE_HOST",
+            "README installer/download wording points outside GitHub release assets.",
+        ),
+        _readme_download("README_RAW_SOURCE_ARCHIVE_DOWNLOAD", "README download wording points to raw source content."),
         _ask("SCRIPT_CHAIN_DEPTH_EXCEEDED", "Reachability exceeded static chain-depth budget."),
         _ask("SCRIPT_DYNAMIC_COMMAND_CONSTRUCTION", "Reachable command construction is dynamic."),
         _ask("SCRIPT_DYNAMIC_MODULE_REFERENCE", "Reachable Node.js module reference is dynamic."),
