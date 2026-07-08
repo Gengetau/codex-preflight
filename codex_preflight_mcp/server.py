@@ -80,10 +80,14 @@ def tool_definitions() -> list[dict[str, Any]]:
 
 def preflight_check(cwd: str, command: str, format: str = "json", **kwargs: object) -> dict[str, Any]:
     if kwargs:
-        unsupported = ", ".join(sorted(kwargs))
-        raise ValueError(f"Unsupported MCP argument: {unsupported}")
+        unsupported = ", ".join(f"`{name}`" for name in sorted(kwargs))
+        raise ValueError(
+            f"Unsupported MCP argument {unsupported}. "
+            "preflight_check accepts only cwd, command, and format=json; remote repository scanning, "
+            "trust mutation, and command execution are not exposed through MCP."
+        )
     if format != "json":
-        raise ValueError("MCP preflight_check currently supports only JSON output.")
+        raise ValueError("MCP preflight_check supports only format=json. Markdown and text output are CLI-only.")
     local_path = _validate_local_cwd(cwd)
     return run_preflight(local_path, command, use_cache=False, allow_trust=False)
 
@@ -97,8 +101,10 @@ def create_mcp_server():
         from mcp.server.fastmcp import FastMCP
     except ImportError as exc:
         raise RuntimeError(
-            "The optional MCP runtime is not installed. Install with `codex-preflight[mcp]` "
-            "before running codex-preflight-mcp as an MCP server."
+            "The optional MCP runtime is not installed. For an editable checkout, run "
+            '`python -m pip install -e ".[mcp]"`; for an installed package, run '
+            "`python -m pip install 'codex-preflight[mcp]'` before running codex-preflight-mcp "
+            "as an MCP server. `codex-preflight-mcp --list-tools` does not require the extra."
         ) from exc
 
     mcp = FastMCP("codex-preflight")

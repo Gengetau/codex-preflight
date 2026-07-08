@@ -4,6 +4,8 @@ import importlib
 import sys
 from pathlib import Path
 
+import pytest
+
 
 def test_mcp_package_imports_without_cli_module() -> None:
     sys.modules.pop("codex_preflight_cli.main", None)
@@ -43,16 +45,37 @@ def test_mcp_preflight_check_accepts_local_path_and_returns_report(tmp_path: Pat
 def test_mcp_preflight_check_rejects_unknown_repo_argument(tmp_path: Path) -> None:
     from codex_preflight_mcp.server import preflight_check
 
-    try:
+    with pytest.raises(ValueError, match="Unsupported MCP argument `repo`"):
         preflight_check(
             cwd=str(tmp_path),
             command="pytest",
             repo="https://github.com/example/repo.git",
         )
-    except ValueError as exc:
-        assert "Unsupported MCP argument" in str(exc)
-    else:
-        raise AssertionError("repo argument should be rejected")
+
+
+def test_mcp_preflight_check_rejects_non_json_format_with_clear_message(tmp_path: Path) -> None:
+    from codex_preflight_mcp.server import preflight_check
+
+    with pytest.raises(ValueError, match="format=json"):
+        preflight_check(cwd=str(tmp_path), command="pytest", format="markdown")
+
+
+def test_create_mcp_server_missing_extra_error_is_actionable(monkeypatch: pytest.MonkeyPatch) -> None:
+    import builtins
+
+    from codex_preflight_mcp.server import create_mcp_server
+
+    real_import = builtins.__import__
+
+    def fake_import(name: str, *args: object, **kwargs: object) -> object:
+        if name == "mcp.server.fastmcp":
+            raise ImportError("synthetic missing mcp")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    with pytest.raises(RuntimeError, match=r"\.\[mcp\].*codex-preflight\[mcp\]"):
+        create_mcp_server()
 
 
 def test_mcp_corpus_scan_runs_bundled_case() -> None:

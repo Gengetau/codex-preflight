@@ -1,5 +1,16 @@
 # Release History
 
+## v0.2.1
+
+MCP runtime and package stabilization:
+
+- Improved MCP runtime error messages for missing optional MCP dependencies, unsupported
+  `preflight_check` arguments, and non-JSON MCP output requests.
+- Documented source-checkout and installed-package MCP extra installation paths.
+- Preserved the MCP tool set as exactly `preflight_check` and `corpus_scan`.
+- Preserved local-path-only, read-only MCP behavior with no command execution, trust mutation, or
+  remote repository scanning tools.
+
 ## v0.2.0
 
 README link-poisoning detection:
