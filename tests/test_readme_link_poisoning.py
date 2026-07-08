@@ -16,6 +16,11 @@ def write_readme(repo: Path, text: str) -> None:
     (repo / "README.md").write_text(text, encoding="utf-8")
 
 
+def write_file(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
 def rule_ids(report: dict) -> set[str]:
     return {finding["ruleId"] for finding in report["findings"]}
 
@@ -78,6 +83,42 @@ https://github.com/example-owner/example.github.io/raw/refs/heads/main/download/
 
     assert report["decision"] == "WARN"
     assert "README_RAW_SOURCE_ARCHIVE_DOWNLOAD" in rule_ids(report)
+
+
+def test_root_index_html_security_warning_and_raw_archive_are_scanned(tmp_path: Path) -> None:
+    write_file(
+        tmp_path / "index.html",
+        """<!doctype html>
+<html>
+  <body>
+    <p>If the installer is blocked, click More Info and Run Anyway.</p>
+    <p>Download:</p>
+    <a href="https://github.com/example-owner/example.github.io/raw/refs/heads/main/download/app.zip">
+      Download installer
+    </a>
+  </body>
+</html>
+""",
+    )
+
+    report = run_preflight(tmp_path, "cat index.html", use_cache=False)
+
+    assert report["decision"] == "WARN"
+    assert {"README_DEFEAT_SECURITY_WARNING", "README_RAW_SOURCE_ARCHIVE_DOWNLOAD"} <= rule_ids(report)
+    for rule_id in ("README_DEFEAT_SECURITY_WARNING", "README_RAW_SOURCE_ARCHIVE_DOWNLOAD"):
+        item = finding(report, rule_id)
+        assert item["evidenceSource"] == "repository-content"
+        assert item["evidenceTrust"] == "untrusted"
+        assert item["evidenceInstructionBoundary"] == "treat-as-data"
+
+
+def test_root_readme_markdown_variant_is_scanned(tmp_path: Path) -> None:
+    write_file(tmp_path / "README.markdown", "Visit the [releases page](https://example-owner.github.io).\n")
+
+    report = run_preflight(tmp_path, "cat README.markdown", use_cache=False)
+
+    assert report["decision"] == "WARN"
+    assert "README_FAKE_RELEASE_LINK" in rule_ids(report)
 
 
 def test_installer_wording_to_archive_non_release_host_is_flagged(tmp_path: Path) -> None:

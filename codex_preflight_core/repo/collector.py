@@ -27,6 +27,15 @@ CRITICAL_BASENAMES = {
     "mcp.json",
     "README.md",
 }
+ROOT_DOCUMENTATION_BASENAMES = {
+    "README",
+    "README.md",
+    "README.markdown",
+    "index.html",
+    "index.htm",
+}
+DOCUMENTATION_PREFIXES = ("docs/", "documentation/")
+DOCUMENTATION_SUFFIXES = (".md", ".markdown", ".html", ".htm")
 CRITICAL_PREFIXES = (
     ".github/workflows/",
     ".cursor/rules",
@@ -43,7 +52,16 @@ FIXTURE_MARKER = ".codex-preflight-fixtures"
 def is_critical_path(relative_path: str) -> bool:
     normalized = relative_path.replace("\\", "/")
     basename = Path(normalized).name
-    return basename in CRITICAL_BASENAMES or any(normalized.startswith(prefix) for prefix in CRITICAL_PREFIXES)
+    return (
+        basename in CRITICAL_BASENAMES
+        or normalized in ROOT_DOCUMENTATION_BASENAMES
+        or _is_bounded_documentation_surface(normalized)
+        or any(normalized.startswith(prefix) for prefix in CRITICAL_PREFIXES)
+    )
+
+
+def _is_bounded_documentation_surface(normalized: str) -> bool:
+    return normalized.startswith(DOCUMENTATION_PREFIXES) and normalized.lower().endswith(DOCUMENTATION_SUFFIXES)
 
 
 def collect_critical_files(root: Path, command: str | None = None) -> list[Path]:
