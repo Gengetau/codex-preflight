@@ -1,0 +1,10 @@
+id: readme-defeat-security-warning
+title: README security warning bypass text
+category: readme-link-poisoning
+command: cat README.md
+expectedDecision: WARN
+expectedRules:
+  - README_RAW_SOURCE_ARCHIVE_DOWNLOAD
+  - README_DEFEAT_SECURITY_WARNING
+description: Synthetic README with security-warning bypass wording and a raw archive-shaped download URL.
+safetyNote: Uses inert example-owned URLs only and is scanned statically.

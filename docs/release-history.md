@@ -1,5 +1,20 @@
 # Release History
 
+## v0.2.0
+
+README link-poisoning detection:
+
+- Added static README/documentation rules for fake release links, non-release installer/download
+  hosts, raw source archive downloads, and security-warning bypass wording.
+- Added `README_FAKE_RELEASE_LINK`, `README_INSTALLER_FROM_NON_RELEASE_HOST`,
+  `README_RAW_SOURCE_ARCHIVE_DOWNLOAD`, and `README_DEFEAT_SECURITY_WARNING`.
+- Added policy matrix coverage so safe read-only commands warn while install, build, and
+  script-execution scopes require user review.
+- Added real-world-inspired corpus cases for fake release links and security-warning bypass text.
+- Kept detection static-only: no linked-page fetching, artifact download, browser automation,
+  recursive linked-repository scanning, GitHub metadata scoring, or MCP tool expansion.
+- Preserved evidence trust-boundary labels as repository-controlled untrusted data.
+
 ## v0.1.13
 
 0.1.x stabilization and release hygiene:

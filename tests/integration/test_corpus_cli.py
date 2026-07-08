@@ -39,6 +39,14 @@ EXPECTED_CASES = {
         ["NODE_POSTINSTALL_SCRIPT", "SCRIPT_INDIRECT_EXECUTION", "SHELL_SOURCE_INDIRECTION"],
     ),
     "python-setup-remote-fetch": ("ASK_USER", ["PYTHON_SETUP_REMOTE_FETCH"]),
+    "readme-defeat-security-warning": (
+        "WARN",
+        ["README_RAW_SOURCE_ARCHIVE_DOWNLOAD", "README_DEFEAT_SECURITY_WARNING"],
+    ),
+    "readme-fake-release-link": (
+        "WARN",
+        ["README_FAKE_RELEASE_LINK", "README_INSTALLER_FROM_NON_RELEASE_HOST"],
+    ),
     "prompt-injection-readme": (
         "ASK_USER",
         ["AGENT_IGNORE_INSTRUCTIONS", "AGENT_UNSAFE_COMMAND_REQUEST", "SCRIPT_TARGET_MISSING"],
@@ -108,7 +116,12 @@ def test_corpus_fixtures_do_not_contain_active_payload_urls_or_real_secret_marke
         data = yaml.safe_load(case_file.read_text(encoding="utf-8"))
         assert data["safetyNote"]
 
-    active_url = re.compile(r"https?://(?!example\.invalid\b|example\.com\b|localhost\b)", re.I)
+    active_url = re.compile(
+        r"https?://(?!(?:example\.invalid|example\.com|localhost|example-owner\.github\.io)\b"
+        r"|github\.com/example-owner/"
+        r"|raw\.githubusercontent\.com/example-owner/)",
+        re.I,
+    )
     real_secret_markers = ("ghp_", "sk-", "AKIA")
     for path in CASE_ROOT.rglob("*"):
         if path.is_file():

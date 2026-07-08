@@ -39,6 +39,8 @@ local indirection, surfaces uncertainty, and gives the user a decision with evid
 - Composite command classification.
 - Planned-command risk findings for remote shell pipelines, encoded PowerShell, dangerous Docker
   flags and mounts, and inline interpreter execution.
+- Static README link-poisoning detection for fake release links, non-release installer/download
+  hosts, raw source archive downloads, and security-warning bypass wording.
 - Reachability parsing for common wrappers such as shell `-c`, interpreter flags, `env`,
   package-manager wrappers, PowerShell, `cmd /c`, and Windows-style paths.
 - Cross-file Node.js module reachability for local `require()` and `import` chains.
@@ -68,9 +70,12 @@ planned command
   -> JSON / Markdown report
 ```
 
-v0.1.12 uses bounded safe reads and never executes repository code. Reachability follows only
+v0.2.0 uses bounded safe reads and never executes repository code. Reachability follows only
 statically visible local paths inside the repository and reports missing, dynamic, outside-repo,
-symlink, oversized, binary, or incomplete paths as uncertainty.
+symlink, oversized, binary, or incomplete paths as uncertainty. README link-poisoning detection is
+static-only: it parses local repository documentation and does not fetch linked pages, download
+artifacts, recursively scan linked repositories, use browser automation, or call GitHub metadata
+APIs.
 
 ## Safety Model
 
@@ -213,6 +218,20 @@ JSON reports include `executionGraph` with reachable nodes, edges, capabilities,
 Markdown reports include `Execution Chain` and `Uncertainty` sections for human review.
 Large reports are capped to keep agent output bounded; when detail is omitted, the report includes
 an explicit `REPORT_SIZE_BUDGET_EXCEEDED` uncertainty summary.
+
+README link-poisoning findings use `README_` rule IDs:
+
+- `README_FAKE_RELEASE_LINK`: release/download wording points away from the expected GitHub
+  Releases page.
+- `README_INSTALLER_FROM_NON_RELEASE_HOST`: installer/setup/download wording points to a target
+  that is not shaped like a GitHub Releases asset.
+- `README_RAW_SOURCE_ARCHIVE_DOWNLOAD`: download/install/release wording points to raw source URLs
+  such as raw GitHub file paths.
+- `README_DEFEAT_SECURITY_WARNING`: repository documentation encourages bypassing operating
+  system, browser, antivirus, Defender, or SmartScreen warnings.
+
+For safe read-only commands these findings warn; for install, build, and script-execution scopes
+they require user review. Evidence snippets remain labeled as repository-controlled untrusted data.
 
 ## External Repository Scan
 

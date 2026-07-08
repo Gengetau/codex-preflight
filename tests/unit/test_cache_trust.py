@@ -86,7 +86,7 @@ def test_trust_cache_scopes_by_policy_and_ruleset(tmp_path: Path) -> None:
         approved_command="pnpm install",
         expires_at=expires,
         policy_version="default-v1",
-        ruleset_version="2026.07.02",
+        ruleset_version="2026.07.08",
     )
 
     assert cache.match(
@@ -95,7 +95,7 @@ def test_trust_cache_scopes_by_policy_and_ruleset(tmp_path: Path) -> None:
         critical_fingerprint="sha256:a",
         command_scope="dependency_install",
         policy_version="default-v1",
-        ruleset_version="2026.07.02",
+        ruleset_version="2026.07.08",
     )
     assert (
         cache.match(
@@ -104,7 +104,7 @@ def test_trust_cache_scopes_by_policy_and_ruleset(tmp_path: Path) -> None:
             critical_fingerprint="sha256:a",
             command_scope="dependency_install",
             policy_version="strict-v2",
-            ruleset_version="2026.07.02",
+            ruleset_version="2026.07.08",
         )
         is None
     )
