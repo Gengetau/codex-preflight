@@ -15,6 +15,43 @@ python -m pip install -e ".[mcp]"
 python -m pip install -e ".[dev,mcp]"
 ```
 
+Plugin installation and Python package installation are separate. The Codex plugin bundles the
+local stdio server configuration but never installs the Python package automatically.
+
+## Supported Codex paths
+
+### Plugin installation
+
+Install the Python prerequisite first, then add the repository marketplace:
+
+```bash
+python -m pip install "codex-preflight[mcp]"
+codex plugin marketplace add https://github.com/Gengetau/codex-preflight.git --ref master --sparse .agents/plugins
+```
+
+The plugin manifest loads its root `.mcp.json`, so users do not hand-author a server map for this
+path. Start a new Codex session after installing or updating the plugin.
+
+### Standalone Codex MCP configuration
+
+Without the plugin, configure the same local entry point in `~/.codex/config.toml` or a trusted
+project `.codex/config.toml`:
+
+```toml
+[mcp_servers."codex-preflight"]
+command = "codex-preflight-mcp"
+args = []
+```
+
+The ChatGPT desktop app, Codex CLI, and IDE extension share MCP configuration for the same Codex
+host. Restart the local client after configuration changes. ChatGPT web does not read local Codex
+configuration files.
+
+### Source-checkout development
+
+Install `.[dev,mcp]`, run the synchronization check, and use the same direct stdio entry point. The
+root plugin package is the source of truth for the marketplace copy.
+
 ## Start the stdio server
 
 Start the server with:
@@ -32,7 +69,18 @@ Inspect the static tool definitions without starting a protocol session:
 codex-preflight-mcp --list-tools
 ```
 
-## Generic client configuration
+## Plugin and generic process configuration
+
+The plugin-root `.mcp.json` is a direct server map:
+
+```json
+{
+  "codex-preflight": {
+    "command": "codex-preflight-mcp",
+    "args": []
+  }
+}
+```
 
 Clients that accept an executable plus an argument array can adapt
 [`examples/mcp/client-config.json`](../examples/mcp/client-config.json):
@@ -48,9 +96,15 @@ Clients that accept an executable plus an argument array can adapt
 }
 ```
 
-The enclosing configuration key varies by client. This is a generic process-launch example, not
-a claim that a particular third-party client has been certified or tested. No repository
-`.mcp.json` is required by Codex Preflight.
+The enclosing configuration key varies by third-party client. This is a generic process-launch
+example, not a claim that a third-party client has been certified or tested.
+
+Inspect or diagnose the supported Codex setup without writing configuration:
+
+```bash
+codex-preflight mcp config --client codex
+codex-preflight mcp doctor --client codex
+```
 
 ## Exact tools and inputs
 
@@ -138,6 +192,10 @@ JSON compatibility. Error consumers should branch on stable codes and tolerate n
 - If the executable is not found, verify that the Python scripts directory is on `PATH` or use the
   executable's explicit path in the client configuration.
 - If the optional runtime is missing, install `codex-preflight[mcp]` or source extra `.[mcp]`.
+- If plugin startup fails, run `codex-preflight mcp doctor --client codex`; it reports remediation
+  but never installs packages or edits Codex configuration.
+- After plugin or MCP configuration updates, start a new Codex session or restart the desktop/IDE
+  client.
 - If `cwd` fails, use the remediation in the structured error and remember it is resolved relative
   to the server process working directory.
 - If protocol parsing fails, ensure no wrapper writes banners or logs to standard output.

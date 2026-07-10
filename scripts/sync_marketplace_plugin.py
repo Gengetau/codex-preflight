@@ -25,6 +25,10 @@ def sync_items(root: Path) -> list[SyncItem]:
             destination=marketplace_plugin / ".codex-plugin" / "plugin.json",
         ),
         SyncItem(
+            source=root / ".mcp.json",
+            destination=marketplace_plugin / ".mcp.json",
+        ),
+        SyncItem(
             source=root / "skills" / PLUGIN_NAME / "SKILL.md",
             destination=marketplace_plugin / "skills" / PLUGIN_NAME / "SKILL.md",
         ),
@@ -35,9 +39,7 @@ def check(root: Path) -> list[Path]:
     _validate_layout(root)
     stale: list[Path] = []
     for item in sync_items(root):
-        if not item.destination.is_file() or item.destination.read_text(encoding="utf-8") != item.source.read_text(
-            encoding="utf-8"
-        ):
+        if not item.destination.is_file() or item.destination.read_bytes() != item.source.read_bytes():
             stale.append(item.destination)
     return stale
 
@@ -46,12 +48,12 @@ def sync(root: Path) -> list[Path]:
     _validate_layout(root)
     updated: list[Path] = []
     for item in sync_items(root):
-        source_text = item.source.read_text(encoding="utf-8")
-        destination_text = item.destination.read_text(encoding="utf-8") if item.destination.is_file() else None
-        if destination_text == source_text:
+        source_bytes = item.source.read_bytes()
+        destination_bytes = item.destination.read_bytes() if item.destination.is_file() else None
+        if destination_bytes == source_bytes:
             continue
         item.destination.parent.mkdir(parents=True, exist_ok=True)
-        item.destination.write_text(source_text, encoding="utf-8")
+        item.destination.write_bytes(source_bytes)
         updated.append(item.destination)
     return updated
 

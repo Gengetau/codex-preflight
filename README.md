@@ -121,12 +121,13 @@ readable report and exits without running the command for `ASK_USER` or `BLOCK`.
 
 ## Codex Plugin Usage
 
-Codex Preflight remains a Python CLI project and is also packaged as a skill-based Codex plugin so
-Codex can discover the guidance before running risky repository commands.
+Codex Preflight remains a Python CLI project and is also packaged as a Codex plugin that bundles
+the operational skill and the existing local stdio MCP server configuration.
 
-The plugin is skill-based:
+The plugin package contains:
 
 - `.codex-plugin/plugin.json`: Codex plugin manifest.
+- `.mcp.json`: direct local stdio server map for `codex-preflight-mcp`.
 - `skills/codex-preflight/SKILL.md`: English skill instructions for when and how Codex should call
   `codex-preflight`.
 - `.agents/plugins/marketplace.json`: Codex marketplace root manifest for the Codex UI
@@ -134,8 +135,8 @@ The plugin is skill-based:
 - `.agents/plugins/plugins/codex-preflight/`: marketplace-packaged copy of the plugin referenced by
   the marketplace root.
 
-The Codex plugin manifest does not currently declare MCP or App integration, and it intentionally
-does not declare `mcpServers` or `apps`.
+The manifest declares `mcpServers: "./.mcp.json"`. It does not declare an App, remote MCP URL,
+credentials, shell wrapper, or repository-controlled startup arguments.
 
 When Codex is about to run a risky command in a local or unfamiliar repository, it should run:
 
@@ -150,11 +151,24 @@ Codex must respect the resulting decision:
 - `ASK_USER`: stop and ask the user.
 - `BLOCK`: do not run the command.
 
-To add this repository through the Codex UI "Add marketplace" flow, use:
+Install the Python MCP prerequisite first. Plugin installation does not install packages or modify
+the Python environment:
+
+```bash
+python -m pip install "codex-preflight[mcp]"
+```
+
+Then add this repository through the Codex UI "Add marketplace" flow with:
 
 - Source: `https://github.com/Gengetau/codex-preflight.git`
 - Git ref: `master`
 - Sparse path: `.agents/plugins`
+
+The equivalent CLI marketplace command is:
+
+```bash
+codex plugin marketplace add https://github.com/Gengetau/codex-preflight.git --ref master --sparse .agents/plugins
+```
 
 Use the marketplace sparse path, not `.codex-plugin`. `.codex-plugin/plugin.json` is the plugin
 manifest, while `.agents/plugins/marketplace.json` is the marketplace root manifest that the UI
@@ -164,17 +178,30 @@ Do not use `git@github.com:Gengetau/codex-preflight.git` unless SSH host keys an
 configured in the Codex runtime. If SSH fails with "Host key verification failed", use the HTTPS
 source URL above.
 
-After marketplace or plugin updates, reinstall or refresh according to the official Plugin Creator
-workflow and start a new Codex thread if skill loading is thread-scoped.
+After marketplace, plugin, or MCP configuration changes, reinstall or refresh according to the
+official Plugin Creator workflow and start a new Codex session so the updated skill and server are
+loaded.
+
+Inspect the supported configuration or diagnose prerequisites without changing files:
+
+```bash
+codex-preflight mcp config --client codex
+codex-preflight mcp doctor --client codex
+```
+
+The ChatGPT desktop app, Codex CLI, and IDE extension share MCP configuration for the same Codex
+host. Standalone configuration remains available when the plugin is not used; see
+[MCP Integration and Client Examples](docs/mcp-client-examples.md).
 
 More details are in [docs/plugin.md](docs/plugin.md).
 
 ## MCP
 
-The first MCP-facing package is read-only and local-path-only. It exposes static preflight checks
+The MCP-facing package is read-only and local-path-only. It exposes static preflight checks
 and bundled corpus scans, but does not expose remote repository clone, command execution, trust
 approval, trust revoke, or cache mutation tools. Evidence snippets from repositories are marked as
-untrusted data.
+untrusted data. Server initialization also supplies fixed safety instructions that require
+`ASK_USER` and `BLOCK` decisions to stop automatic execution.
 
 See [docs/mcp.md](docs/mcp.md) for MCP safety notes and
 [docs/mcp-client-examples.md](docs/mcp-client-examples.md) for machine-checked integration examples.

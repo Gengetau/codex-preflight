@@ -32,9 +32,21 @@ def test_check_mode_fails_when_manifest_copy_is_stale(tmp_path: Path) -> None:
     assert ".codex-plugin" in result.stdout
 
 
+def test_check_mode_fails_when_mcp_copy_is_stale(tmp_path: Path) -> None:
+    layout = _make_layout(tmp_path)
+    _marketplace_mcp(layout).write_text('{"codex-preflight": {"command": "stale"}}\n', encoding="utf-8")
+
+    result = _run_sync(layout, "--check")
+
+    assert result.returncode == 1
+    assert "stale:" in result.stdout
+    assert ".mcp.json" in result.stdout
+
+
 def test_normal_mode_updates_stale_copy(tmp_path: Path) -> None:
     layout = _make_layout(tmp_path)
     _marketplace_manifest(layout).write_text('{"name": "stale"}\n', encoding="utf-8")
+    _marketplace_mcp(layout).write_text('{"codex-preflight": {"command": "stale"}}\n', encoding="utf-8")
     _marketplace_skill(layout).write_text("stale skill\n", encoding="utf-8")
 
     result = _run_sync(layout)
@@ -45,6 +57,7 @@ def test_normal_mode_updates_stale_copy(tmp_path: Path) -> None:
         encoding="utf-8"
     )
     assert _marketplace_skill(layout).read_text(encoding="utf-8") == _root_skill(layout).read_text(encoding="utf-8")
+    assert _marketplace_mcp(layout).read_bytes() == _root_mcp(layout).read_bytes()
 
 
 def test_only_intended_files_are_copied(tmp_path: Path) -> None:
@@ -58,7 +71,7 @@ def test_only_intended_files_are_copied(tmp_path: Path) -> None:
 
     assert result.returncode == 0
     assert (layout / ".agents" / "plugins" / "marketplace.json").read_text(encoding="utf-8") == marketplace_before
-    assert not (layout / ".agents" / "plugins" / "plugins" / "codex-preflight" / ".mcp.json").exists()
+    assert _marketplace_mcp(layout).read_bytes() == _root_mcp(layout).read_bytes()
     assert not (layout / ".agents" / "plugins" / "plugins" / "codex-preflight" / ".app.json").exists()
     assert not (
         layout / ".agents" / "plugins" / "plugins" / "codex-preflight" / ".codex-plugin" / "extra.json"
@@ -81,9 +94,11 @@ def _run_sync(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
 def _make_layout(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     _copy_text(ROOT / ".codex-plugin" / "plugin.json", _root_manifest(root))
+    _copy_text(ROOT / ".mcp.json", _root_mcp(root))
     _copy_text(ROOT / "skills" / "codex-preflight" / "SKILL.md", _root_skill(root))
     _copy_text(ROOT / ".agents" / "plugins" / "marketplace.json", root / ".agents" / "plugins" / "marketplace.json")
     _copy_text(ROOT / ".codex-plugin" / "plugin.json", _marketplace_manifest(root))
+    _copy_text(ROOT / ".mcp.json", _marketplace_mcp(root))
     _copy_text(ROOT / "skills" / "codex-preflight" / "SKILL.md", _marketplace_skill(root))
     return root
 
@@ -96,6 +111,7 @@ def _copy_text(source: Path, destination: Path) -> None:
 def _snapshot(root: Path) -> dict[str, str]:
     return {
         "manifest": _marketplace_manifest(root).read_text(encoding="utf-8"),
+        "mcp": _marketplace_mcp(root).read_text(encoding="utf-8"),
         "skill": _marketplace_skill(root).read_text(encoding="utf-8"),
         "marketplace": (root / ".agents" / "plugins" / "marketplace.json").read_text(encoding="utf-8"),
     }
@@ -109,9 +125,17 @@ def _root_skill(root: Path) -> Path:
     return root / "skills" / "codex-preflight" / "SKILL.md"
 
 
+def _root_mcp(root: Path) -> Path:
+    return root / ".mcp.json"
+
+
 def _marketplace_manifest(root: Path) -> Path:
     return root / ".agents" / "plugins" / "plugins" / "codex-preflight" / ".codex-plugin" / "plugin.json"
 
 
 def _marketplace_skill(root: Path) -> Path:
     return root / ".agents" / "plugins" / "plugins" / "codex-preflight" / "skills" / "codex-preflight" / "SKILL.md"
+
+
+def _marketplace_mcp(root: Path) -> Path:
+    return root / ".agents" / "plugins" / "plugins" / "codex-preflight" / ".mcp.json"

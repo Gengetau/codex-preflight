@@ -1,6 +1,6 @@
 {
   "name": "codex-preflight",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "description": "Local-first pre-execution repository risk scanner for Codex-style coding agents.",
   "author": {
     "name": "Gengetau",
@@ -18,6 +18,7 @@
     "command-safety"
   ],
   "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Codex Preflight",
     "shortDescription": "Preflight risky repository commands before Codex runs them.",

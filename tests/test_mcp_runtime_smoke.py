@@ -15,11 +15,12 @@ pytestmark = pytest.mark.skipif(
 
 
 def test_create_mcp_server_smoke() -> None:
-    from codex_preflight_mcp.server import create_mcp_server
+    from codex_preflight_mcp.server import SERVER_INSTRUCTIONS, create_mcp_server
 
     server = create_mcp_server()
 
     assert server is not None
+    assert server.instructions == SERVER_INSTRUCTIONS
 
 
 def test_fastmcp_runtime_uses_public_tool_names_required_schema_and_error_codes() -> None:
@@ -51,3 +52,19 @@ def test_codex_preflight_mcp_list_tools_cli_smoke() -> None:
     assert result.returncode == 0
     tools = json.loads(result.stdout)
     assert {tool["name"] for tool in tools} == {"preflight_check", "corpus_scan"}
+
+
+def test_stdio_initialization_returns_fixed_server_instructions() -> None:
+    from mcp import ClientSession, StdioServerParameters
+    from mcp.client.stdio import stdio_client
+
+    from codex_preflight_mcp.server import SERVER_INSTRUCTIONS
+
+    async def initialize() -> str | None:
+        parameters = StdioServerParameters(command=sys.executable, args=["-m", "codex_preflight_mcp.server"])
+        async with stdio_client(parameters) as (read_stream, write_stream):
+            async with ClientSession(read_stream, write_stream) as session:
+                result = await session.initialize()
+                return result.instructions
+
+    assert asyncio.run(initialize()) == SERVER_INSTRUCTIONS

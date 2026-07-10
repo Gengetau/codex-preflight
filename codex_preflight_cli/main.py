@@ -7,6 +7,7 @@ from typing import Annotated
 import typer
 
 from codex_preflight_cli.exec_wrapper import run_checked_command
+from codex_preflight_cli.mcp_diagnostics import diagnose_codex_mcp, render_codex_mcp_config
 from codex_preflight_core import __version__
 from codex_preflight_core.batch import render_batch_markdown, scan_batch
 from codex_preflight_core.cache.paths import scan_cache_path, trust_cache_path
@@ -31,12 +32,14 @@ trust_app = typer.Typer(help="Manage local command trust approvals.")
 cache_app = typer.Typer(help="Manage local scan cache.")
 corpus_app = typer.Typer(help="Scan synthetic historical attack-pattern fixtures.")
 batch_app = typer.Typer(help="Scan a YAML list of external repositories.")
+mcp_app = typer.Typer(help="Inspect Codex MCP configuration and installation health.")
 
 app.add_typer(rules_app, name="rules")
 app.add_typer(trust_app, name="trust")
 app.add_typer(cache_app, name="cache")
 app.add_typer(corpus_app, name="corpus")
 app.add_typer(batch_app, name="batch")
+app.add_typer(mcp_app, name="mcp")
 
 
 @app.callback()
@@ -250,6 +253,31 @@ def scan_batch_command(
     rendered = json.dumps(result, indent=2) if format == "json" else render_batch_markdown(result)
     typer.echo(rendered)
     raise typer.Exit(0 if result["passed"] else 1)
+
+
+@mcp_app.command("config")
+def mcp_config(
+    client: Annotated[str, typer.Option("--client", help="MCP client to show configuration for.")] = "codex",
+) -> None:
+    """Print supported Codex MCP setup without changing files."""
+    if client.lower() != "codex":
+        raise typer.BadParameter("Only --client codex is supported.", param_hint="--client")
+    typer.echo(render_codex_mcp_config())
+
+
+@mcp_app.command("doctor")
+def mcp_doctor(
+    client: Annotated[str, typer.Option("--client", help="MCP client to diagnose.")] = "codex",
+) -> None:
+    """Check Codex MCP prerequisites without mutating configuration."""
+    if client.lower() != "codex":
+        raise typer.BadParameter("Only --client codex is supported.", param_hint="--client")
+    checks = diagnose_codex_mcp()
+    for check in checks:
+        typer.echo(f"[{check.status}] {check.name}: {check.detail}")
+        if check.remediation:
+            typer.echo(f"  Remediation: {check.remediation}")
+    raise typer.Exit(0 if all(check.passed for check in checks) else 1)
 
 
 def _parse_ttl(value: str) -> timedelta:
