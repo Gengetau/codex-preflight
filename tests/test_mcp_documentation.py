@@ -132,6 +132,31 @@ def test_integration_docs_cover_install_startup_boundaries_and_examples() -> Non
     assert "Only `preflight_check` and `corpus_scan` are available" in text
 
 
+def test_codex_plugin_docs_cover_supported_paths_and_explicit_prerequisite() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    plugin = (ROOT / "docs" / "plugin.md").read_text(encoding="utf-8")
+    integration = (ROOT / "docs" / "mcp-client-examples.md").read_text(encoding="utf-8")
+    combined = "\n".join((readme, plugin, integration))
+
+    for required in (
+        'python -m pip install "codex-preflight[mcp]"',
+        "codex plugin marketplace add",
+        "Plugin installation and Python package installation are separate",
+        "Standalone Codex MCP configuration",
+        "Source-checkout development",
+        "ChatGPT desktop app, Codex CLI, and IDE extension share MCP configuration",
+        "start a new Codex session",
+        "codex-preflight mcp config --client codex",
+        "codex-preflight mcp doctor --client codex",
+        "does not install packages",
+    ):
+        assert required in combined
+
+    assert "remote repository MCP scanning" in combined
+    assert "trust-management MCP tools" in combined
+    assert "one-click" not in combined.lower()
+
+
 def test_internal_markdown_links_resolve() -> None:
     markdown_files = [ROOT / "README.md", *sorted((ROOT / "docs").rglob("*.md"))]
     broken: list[str] = []

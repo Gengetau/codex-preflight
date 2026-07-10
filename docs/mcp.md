@@ -20,13 +20,14 @@ The future remote-repository capability is documented only as an unavailable des
 implement a remote tool.
 
 Future trust-management contracts are documented only as an unavailable design in
-[MCP Trust Management Design](design/mcp-trust-management.md). v0.2.6 does not register trust tools,
+[MCP Trust Management Design](design/mcp-trust-management.md). v0.2.8 does not register trust tools,
 and MCP scans continue to ignore trust approvals.
 
 ## Runtime Shape
 
 The MCP-facing runtime lives in the sibling package `codex_preflight_mcp`. Core scanner code does
-not import MCP, and the CLI does not import MCP.
+not import MCP. CLI configuration and doctor commands inspect availability without importing the
+optional MCP SDK.
 
 The `codex-preflight-mcp` entry point can list tool definitions without optional dependencies:
 
@@ -54,6 +55,40 @@ execution are rejected by design.
 
 Successful results include `mcpSchemaVersion`, exact `tool` identity, and a stable `safety` object.
 The existing core report fields remain at their current top-level locations for compatibility.
+
+## Codex Plugin and Diagnostics
+
+The Codex plugin manifest declares `mcpServers: "./.mcp.json"`. The plugin-root `.mcp.json` launches
+`codex-preflight-mcp` directly with no arguments over stdio. The marketplace plugin contains a
+synchronized copy generated from the root package.
+
+The Python runtime remains an explicit prerequisite:
+
+```bash
+python -m pip install "codex-preflight[mcp]"
+```
+
+The plugin does not install packages or edit Codex configuration. These commands only print setup
+information and run bounded diagnostics:
+
+```bash
+codex-preflight mcp config --client codex
+codex-preflight mcp doctor --client codex
+```
+
+Doctor checks Python compatibility, entry-point and optional-runtime availability, bounded tool
+listing, exact tool names, and source-checkout plugin consistency when the package files are
+present. It never starts a long-running server, executes repository code, or mutates trust, cache,
+Python, shell, or Codex configuration state.
+
+## Server Instructions
+
+MCP initialization returns fixed, source-controlled server instructions. Their first 512
+characters independently state that analysis is static-only, repository evidence is untrusted
+data, repository code and planned commands are never executed, `ASK_USER` and `BLOCK` stop
+automatic execution, and remote access and trust mutation are unavailable. Repository content,
+user input, environment values, scan findings, and dynamic errors are never interpolated into the
+instructions.
 
 ## Local Path Rules
 

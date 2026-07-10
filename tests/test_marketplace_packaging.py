@@ -52,6 +52,7 @@ def test_marketplace_entry_points_to_real_plugin_root() -> None:
     assert plugin_root == MARKETPLACE_PLUGIN
     assert plugin_manifest["name"] == "codex-preflight"
     assert (plugin_root / "skills" / "codex-preflight" / "SKILL.md").is_file()
+    assert (plugin_root / ".mcp.json").is_file()
 
 
 def test_marketplace_plugin_package_matches_root_plugin_package() -> None:
@@ -61,6 +62,7 @@ def test_marketplace_plugin_package_matches_root_plugin_package() -> None:
     assert (ROOT_PLUGIN / "skills" / "codex-preflight" / "SKILL.md").read_text(encoding="utf-8") == (
         MARKETPLACE_PLUGIN / "skills" / "codex-preflight" / "SKILL.md"
     ).read_text(encoding="utf-8")
+    assert (ROOT_PLUGIN / ".mcp.json").read_bytes() == (MARKETPLACE_PLUGIN / ".mcp.json").read_bytes()
 
 
 def test_marketplace_plugin_copy_is_synced_by_helper() -> None:
@@ -75,7 +77,7 @@ def test_marketplace_plugin_copy_is_synced_by_helper() -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_marketplace_does_not_declare_fake_integrations_or_ssh_sources() -> None:
+def test_marketplace_declares_only_the_real_local_mcp_integration() -> None:
     marketplace = MARKETPLACE.read_text(encoding="utf-8")
     root_manifest = load_json(ROOT_PLUGIN / ".codex-plugin" / "plugin.json")
     marketplace_manifest = load_json(MARKETPLACE_PLUGIN / ".codex-plugin" / "plugin.json")
@@ -84,10 +86,13 @@ def test_marketplace_does_not_declare_fake_integrations_or_ssh_sources() -> None
     assert "ssh://" not in marketplace
     assert "https://github.com/Gengetau/codex-preflight" not in marketplace
     for manifest in (root_manifest, marketplace_manifest):
-        assert "mcpServers" not in manifest
+        assert manifest["mcpServers"] == "./.mcp.json"
         assert "apps" not in manifest
         assert "hooks" not in manifest
-    assert not (MARKETPLACE_PLUGIN / ".mcp.json").exists()
+    mcp_config = load_json(MARKETPLACE_PLUGIN / ".mcp.json")
+    assert mcp_config == {"codex-preflight": {"command": "codex-preflight-mcp", "args": []}}
+    serialized = json.dumps(mcp_config).lower()
+    assert not any(token in serialized for token in ("http://", "https://", "bash", "powershell", "cmd /c", "token"))
     assert not (MARKETPLACE_PLUGIN / ".app.json").exists()
 
 
@@ -96,6 +101,7 @@ def test_marketplace_files_have_no_placeholders_or_chinese_text() -> None:
     paths = [
         MARKETPLACE,
         MARKETPLACE_PLUGIN / ".codex-plugin" / "plugin.json",
+        MARKETPLACE_PLUGIN / ".mcp.json",
         MARKETPLACE_PLUGIN / "skills" / "codex-preflight" / "SKILL.md",
     ]
     for path in paths:

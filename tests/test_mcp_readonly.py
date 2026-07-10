@@ -29,6 +29,24 @@ def test_mcp_tool_definitions_are_read_only_and_warn_about_evidence() -> None:
     assert not names & {"trust_approve", "trust_revoke", "exec", "clone_repo"}
 
 
+def test_server_instructions_are_fixed_self_contained_and_authority_bounded(monkeypatch) -> None:
+    from codex_preflight_mcp.server import SERVER_INSTRUCTIONS
+
+    dynamic_marker = "REPOSITORY_OR_ENVIRONMENT_MARKER_MUST_NOT_APPEAR"
+    monkeypatch.setenv("CODEX_PREFLIGHT_TEST_MARKER", dynamic_marker)
+    first_window = SERVER_INSTRUCTIONS[:512]
+
+    assert len(SERVER_INSTRUCTIONS) <= 512
+    assert "static analysis only" in first_window
+    assert "untrusted data" in first_window
+    assert "never executes repository code or planned commands" in first_window
+    assert "ASK_USER and BLOCK decisions must stop automatic execution" in first_window
+    assert "Remote repository access and trust mutation are unavailable" in first_window
+    assert dynamic_marker not in SERVER_INSTRUCTIONS
+    assert "remote_repository_scan" not in SERVER_INSTRUCTIONS
+    assert "trust_approve" not in SERVER_INSTRUCTIONS
+
+
 def test_mcp_preflight_check_accepts_local_path_and_returns_report(tmp_path: Path) -> None:
     from codex_preflight_mcp.server import preflight_check
 

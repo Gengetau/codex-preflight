@@ -1,5 +1,21 @@
 # Release History
 
+## v0.2.8
+
+First-class Codex MCP integration without scanner authority expansion:
+
+- Added plugin-root `.mcp.json` configuration and declared it from both root and marketplace plugin
+  manifests.
+- Extended marketplace synchronization to prevent bundled MCP configuration drift.
+- Added fixed server-wide safety instructions whose first 512 characters preserve the static-only,
+  untrusted-evidence, no-execution, stop-on-`ASK_USER`/`BLOCK`, no-remote, and no-trust-mutation
+  boundaries.
+- Added non-mutating `codex-preflight mcp config --client codex` and
+  `codex-preflight mcp doctor --client codex` onboarding diagnostics.
+- Documented plugin, standalone Codex MCP, and source-checkout flows with an explicit
+  `codex-preflight[mcp]` Python prerequisite.
+- Preserved the exact runtime tool set: `preflight_check` and `corpus_scan`.
+
 ## v0.2.7
 
 Open-source licensing and release metadata:
