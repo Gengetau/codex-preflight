@@ -119,6 +119,46 @@ MCP accepts only `format=json`. Markdown and text output remain CLI-only.
 `corpus_scan` preserves its `passed` and `cases` fields and adds `mcpSchemaVersion`, `tool`, and
 `safety`. It executes only the bundled synthetic corpus with static analysis.
 
+## Structured errors
+
+Expected MCP input failures are raised through the MCP runtime error mechanism. The error message
+contains a compact JSON object with this stable shape:
+
+```json
+{
+  "error": {
+    "code": "MCP_CWD_NOT_FOUND",
+    "message": "MCP preflight_check requires an existing local directory; cwd was not found.",
+    "remediation": "Check the path and create or clone the directory outside this MCP tool before retrying.",
+    "retryable": false,
+    "field": "cwd",
+    "safetyBoundary": null
+  }
+}
+```
+
+Clients should branch on `code`, display `message` and `remediation`, and avoid parsing prose.
+`field` is null when no individual input field is responsible. `safetyBoundary` explains
+authority-preserving rejections. Expected client-facing errors never include raw tracebacks,
+credentials, environment variables, or internal paths that the caller did not supply.
+
+| Code | Meaning |
+| --- | --- |
+| `MCP_CWD_REQUIRED` | `cwd` was omitted. |
+| `MCP_CWD_EMPTY` | `cwd` was empty or whitespace-only. |
+| `MCP_CWD_URL_NOT_ALLOWED` | A URL, scp-like remote, or clone helper was supplied. |
+| `MCP_CWD_FILE_NOT_DIRECTORY` | The path exists but is not a directory. |
+| `MCP_CWD_NOT_FOUND` | The local directory does not exist. |
+| `MCP_CWD_PERMISSION_DENIED` | The server process cannot read or resolve the directory. |
+| `MCP_CWD_INVALID` | The value is not a valid host-platform local path. |
+| `MCP_COMMAND_REQUIRED` | The planned `command` was omitted or empty. |
+| `MCP_FORMAT_UNSUPPORTED` | A format other than JSON was requested. |
+| `MCP_ARGUMENT_UNSUPPORTED` | An unsupported argument was supplied. |
+| `MCP_CASE_NOT_FOUND` | The requested bundled corpus case does not exist. |
+| `MCP_INTERNAL_ERROR` | An unexpected failure was hidden behind a safe generic response. |
+
+Errors are not successful report objects and therefore do not carry the successful-result schema.
+
 ## Authority boundary
 
 The runtime registers exactly two tools:

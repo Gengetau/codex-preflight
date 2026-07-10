@@ -1,5 +1,17 @@
 # Release History
 
+## v0.2.3
+
+MCP local-path UX and structured errors:
+
+- Added stable MCP error codes with concise messages, remediation, retryability, input-field, and
+  safety-boundary metadata.
+- Distinguished missing, empty, URL-like, regular-file, nonexistent, permission-denied, and
+  invalid `cwd` failures without exposing raw tracebacks.
+- Added local path normalization, home and relative-path expansion, explicit symlink behavior, and
+  Windows drive/UNC classification that avoids URL misclassification.
+- Preserved the v0.2.2 successful-response contract and the exact two-tool MCP runtime surface.
+
 ## v0.2.2
 
 MCP report schema and evidence-boundary stabilization:
