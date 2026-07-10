@@ -1,5 +1,19 @@
 # Release History
 
+## v0.2.6
+
+MCP trust-management design only:
+
+- Added implementation-ready future contracts for read-only `trust_list` and confirmation-gated
+  `trust_approve` and `trust_revoke` operations.
+- Defined separate scan-read, trust-read, and trust-mutate authority, exact-operation one-time
+  confirmation, audit, storage migration, atomicity, locking, permissions, recovery, CLI
+  compatibility, threat mitigations, and rollback controls.
+- Added design/boundary tests proving MCP scans remain trust-blind and remote scan confirmation
+  cannot create trust.
+- Did not implement or register trust tools; the runtime tool set remains exactly
+  `preflight_check` and `corpus_scan`.
+
 ## v0.2.5
 
 Remote-repository MCP design only:

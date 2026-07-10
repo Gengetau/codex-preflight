@@ -19,6 +19,10 @@ The future remote-repository capability is documented only as an unavailable des
 [Remote Repository MCP Design](design/mcp-remote-repository.md). The design does not register or
 implement a remote tool.
 
+Future trust-management contracts are documented only as an unavailable design in
+[MCP Trust Management Design](design/mcp-trust-management.md). v0.2.6 does not register trust tools,
+and MCP scans continue to ignore trust approvals.
+
 ## Runtime Shape
 
 The MCP-facing runtime lives in the sibling package `codex_preflight_mcp`. Core scanner code does
