@@ -1,5 +1,15 @@
 # Release History
 
+## v0.2.2
+
+MCP report schema and evidence-boundary stabilization:
+
+- Added a versioned MCP response contract while preserving the existing CLI JSON report fields.
+- Added explicit tool identity and static-analysis safety metadata to MCP results.
+- Added stable untrusted, treat-as-data metadata to execution-graph uncertainty items.
+- Documented and regression-tested report limits, cache behavior, provenance, and the unchanged
+  `preflight_check` and `corpus_scan` tool set.
+
 ## v0.2.1
 
 MCP runtime and package stabilization:

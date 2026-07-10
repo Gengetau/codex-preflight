@@ -8,6 +8,7 @@ from typing import Any
 
 from codex_preflight_core.corpus import scan_corpus
 from codex_preflight_core.preflight import run_preflight
+from codex_preflight_mcp.contract import build_mcp_result
 
 REMOTE_OR_CLONE_PREFIXES = (
     "http://",
@@ -89,11 +90,12 @@ def preflight_check(cwd: str, command: str, format: str = "json", **kwargs: obje
     if format != "json":
         raise ValueError("MCP preflight_check supports only format=json. Markdown and text output are CLI-only.")
     local_path = _validate_local_cwd(cwd)
-    return run_preflight(local_path, command, use_cache=False, allow_trust=False)
+    report = run_preflight(local_path, command, use_cache=False, allow_trust=False)
+    return build_mcp_result("preflight_check", report)
 
 
 def corpus_scan(case_id: str | None = None) -> dict[str, Any]:
-    return scan_corpus(case_id=case_id)
+    return build_mcp_result("corpus_scan", scan_corpus(case_id=case_id))
 
 
 def create_mcp_server():

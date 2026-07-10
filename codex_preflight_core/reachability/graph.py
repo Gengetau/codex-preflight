@@ -79,7 +79,11 @@ class Uncertainty:
             "file": self.file.as_posix() if self.file else None,
             "reason": self.reason,
             "recommendation": self.recommendation,
-        }
+        } | evidence_metadata(
+            self.rule_id,
+            self.file.as_posix() if self.file else None,
+            "Reachability uncertainty detected",
+        )
 
     def to_finding(self) -> Finding:
         return Finding(

@@ -5,7 +5,8 @@ from typing import Any
 from codex_preflight_core.command.classifier import CommandClassification
 from codex_preflight_core.policy.decision import PolicyResult
 from codex_preflight_core.repo.identity import RepoIdentity
-from codex_preflight_core.scanner.finding import Finding, Severity
+from codex_preflight_core.report.schema import SCHEMA_VERSION
+from codex_preflight_core.scanner.finding import Finding, Severity, evidence_metadata
 
 REPORT_MAX_FINDINGS = 100
 REPORT_MAX_GRAPH_NODES = 100
@@ -82,7 +83,7 @@ def build_report(
     if finding_limit["omitted"] and not _has_report_size_uncertainty(graph):
         graph["uncertainties"].append(_report_size_uncertainty())
     return {
-        "schemaVersion": "1.0",
+        "schemaVersion": SCHEMA_VERSION,
         "decision": policy.decision.value,
         "riskScore": policy.risk_score,
         "command": command,
@@ -156,7 +157,11 @@ def _report_size_uncertainty() -> dict[str, object]:
             "Some reachable nodes, findings, or uncertainties were omitted from the detailed report."
         ),
         "recommendation": "Treat the report as summarized and review omitted areas manually when risk matters.",
-    }
+    } | evidence_metadata(
+        "REPORT_SIZE_BUDGET_EXCEEDED",
+        None,
+        "Reachability uncertainty detected",
+    )
 
 
 def _has_report_size_uncertainty(graph: dict[str, Any]) -> bool:
