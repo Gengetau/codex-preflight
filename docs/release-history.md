@@ -1,5 +1,18 @@
 # Release History
 
+## v0.2.5
+
+Remote-repository MCP design only:
+
+- Added an implementation-ready design for a future separate, confirmation-gated
+  `remote_repository_scan` tool.
+- Defined HTTPS/host/SSRF/redirect policy, bounded isolated clone controls, cleanup, provenance,
+  cache separation, prompt-injection boundaries, threat mitigations, and rollout/rollback gates.
+- Added tests proving the design's required sections while keeping remote URLs rejected by local
+  `preflight_check`.
+- Did not implement or register remote scanning; the runtime tool set remains exactly
+  `preflight_check` and `corpus_scan`.
+
 ## v0.2.4
 
 MCP integration documentation and client examples:

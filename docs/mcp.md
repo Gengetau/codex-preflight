@@ -15,6 +15,10 @@ README files, scripts, package metadata, or generated reports.
 The first MCP package is intentionally read-only and local-path-only. It does not expose remote
 repository clone support, command execution, trust approval, trust revoke, or cache mutation tools.
 
+The future remote-repository capability is documented only as an unavailable design in
+[Remote Repository MCP Design](design/mcp-remote-repository.md). The design does not register or
+implement a remote tool.
+
 ## Runtime Shape
 
 The MCP-facing runtime lives in the sibling package `codex_preflight_mcp`. Core scanner code does

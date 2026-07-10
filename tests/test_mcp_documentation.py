@@ -152,6 +152,5 @@ def test_marketplace_and_version_references_are_consistent() -> None:
     version = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
     release_history = (ROOT / "docs" / "release-history.md").read_text(encoding="utf-8")
 
-    assert version == "0.2.4"
-    assert release_history.startswith("# Release History\n\n## v0.2.4")
+    assert release_history.startswith(f"# Release History\n\n## v{version}")
     assert marketplace_stale(ROOT) == []
