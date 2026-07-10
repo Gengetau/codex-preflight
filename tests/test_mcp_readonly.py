@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import sys
 from pathlib import Path
 
@@ -78,22 +79,24 @@ def test_mcp_preflight_check_rejects_non_json_format_with_clear_message(tmp_path
         preflight_check(cwd=str(tmp_path), command="pytest", format="markdown")
 
 
-def test_create_mcp_server_missing_extra_error_is_actionable(monkeypatch: pytest.MonkeyPatch) -> None:
-    import builtins
+def test_static_tool_listing_does_not_probe_or_require_mcp_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from codex_preflight_mcp import runtime_compatibility, server
 
-    from codex_preflight_mcp.server import create_mcp_server
+    def unexpected_runtime_import(_name: str) -> object:
+        raise AssertionError("static listing must not import the optional MCP runtime")
 
-    real_import = builtins.__import__
+    monkeypatch.setattr(runtime_compatibility, "import_module", unexpected_runtime_import)
 
-    def fake_import(name: str, *args: object, **kwargs: object) -> object:
-        if name == "mcp.server.fastmcp":
-            raise ImportError("synthetic missing mcp")
-        return real_import(name, *args, **kwargs)
+    return_code = server.main(["--list-tools"])
+    captured = capsys.readouterr()
+    tools = json.loads(captured.out)
 
-    monkeypatch.setattr(builtins, "__import__", fake_import)
-
-    with pytest.raises(RuntimeError, match=r"\.\[mcp\].*codex-preflight\[mcp\]"):
-        create_mcp_server()
+    assert return_code == 0
+    assert captured.err == ""
+    assert [tool["name"] for tool in tools] == ["preflight_check", "corpus_scan"]
 
 
 def test_mcp_corpus_scan_runs_bundled_case() -> None:

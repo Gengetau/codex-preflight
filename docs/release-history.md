@@ -1,5 +1,21 @@
 # Release History
 
+## v0.2.9
+
+Instruction-capable MCP runtime hotfix:
+
+- Raised the optional MCP SDK floor to `mcp>=1.3.0`, the lowest verified release that explicitly
+  accepts and preserves FastMCP server instructions.
+- Added capability-based, fail-closed startup validation so legacy, manually downgraded, shadowed,
+  or instruction-dropping runtimes cannot start a partially compliant stdio server.
+- Added actionable, traceback-free compatibility remediation:
+  `python -m pip install --upgrade "codex-preflight[mcp]"`.
+- Extended non-mutating doctor diagnostics to distinguish missing, present but
+  instruction-incompatible, and instruction-capable MCP runtimes without starting the server.
+- Preserved optional-runtime-free static tool listing and the exact runtime authority:
+  `preflight_check` and `corpus_scan`.
+- Corrected the v0.2.8 safety-contract defect without adding scanner rules or capabilities.
+
 ## v0.2.8
 
 First-class Codex MCP integration without scanner authority expansion:
