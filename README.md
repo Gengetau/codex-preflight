@@ -5,6 +5,7 @@
 ![Static analysis](https://img.shields.io/badge/static-analysis-informational)
 ![Local first](https://img.shields.io/badge/local--first-yes-success)
 ![No code execution](https://img.shields.io/badge/no%20code%20execution-enforced-success)
+![License](https://img.shields.io/badge/license-Apache--2.0-blue)
 
 Local-first, command-aware, pre-execution, execution-chain preflight for Codex-style AI coding
 agents.
@@ -13,6 +14,8 @@ Codex Preflight statically scans a repository before risky commands run, analyze
 command itself, builds a best-effort execution graph of reachable local scripts/files, detects
 dangerous capabilities and uncertainty, and returns `ALLOW`, `WARN`, `ASK_USER`, or `BLOCK`
 decisions with JSON/Markdown reports.
+
+Codex Preflight is open-source software licensed under the Apache License 2.0.
 
 ## Why This Exists
 
@@ -70,12 +73,12 @@ planned command
   -> JSON / Markdown report
 ```
 
-v0.2.0 uses bounded safe reads and never executes repository code. Reachability follows only
-statically visible local paths inside the repository and reports missing, dynamic, outside-repo,
-symlink, oversized, binary, or incomplete paths as uncertainty. README link-poisoning detection is
-static-only: it parses local repository documentation and does not fetch linked pages, download
-artifacts, recursively scan linked repositories, use browser automation, or call GitHub metadata
-APIs.
+Codex Preflight uses bounded safe reads and never executes repository code. Reachability follows
+only statically visible local paths inside the repository and reports missing, dynamic,
+outside-repo, symlink, oversized, binary, or incomplete paths as uncertainty. README
+link-poisoning detection is static-only: it parses local repository documentation and does not fetch
+linked pages, download artifacts, recursively scan linked repositories, use browser automation, or
+call GitHub metadata APIs.
 
 ## Safety Model
 
@@ -303,6 +306,13 @@ ruff check .
 ## Release History
 
 See [docs/release-history.md](docs/release-history.md).
+
+## License
+
+Copyright 2026 Gengetau and contributors.
+
+Codex Preflight is licensed under the Apache License 2.0. See [LICENSE](LICENSE) for the complete
+license terms and [NOTICE](NOTICE) for attribution information.
 
 ## Limitations
 

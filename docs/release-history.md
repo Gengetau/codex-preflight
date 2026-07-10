@@ -1,5 +1,14 @@
 # Release History
 
+## v0.2.7
+
+Open-source licensing and release metadata:
+
+- Added the Apache License 2.0 and project attribution notice.
+- Declared Apache-2.0 licensing in Python package metadata and README documentation.
+- Synchronized Python package, MCP package, root plugin, and marketplace plugin versions.
+- Preserved scanner behavior, MCP runtime authority, trust behavior, and remote-repository boundaries.
+
 ## v0.2.6
 
 MCP trust-management design only:
