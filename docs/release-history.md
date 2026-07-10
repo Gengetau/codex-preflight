@@ -1,5 +1,68 @@
 # Release History
 
+## v0.2.6
+
+MCP trust-management design only:
+
+- Added implementation-ready future contracts for read-only `trust_list` and confirmation-gated
+  `trust_approve` and `trust_revoke` operations.
+- Defined separate scan-read, trust-read, and trust-mutate authority, exact-operation one-time
+  confirmation, audit, storage migration, atomicity, locking, permissions, recovery, CLI
+  compatibility, threat mitigations, and rollback controls.
+- Added design/boundary tests proving MCP scans remain trust-blind and remote scan confirmation
+  cannot create trust.
+- Did not implement or register trust tools; the runtime tool set remains exactly
+  `preflight_check` and `corpus_scan`.
+
+## v0.2.5
+
+Remote-repository MCP design only:
+
+- Added an implementation-ready design for a future separate, confirmation-gated
+  `remote_repository_scan` tool.
+- Defined HTTPS/host/SSRF/redirect policy, bounded isolated clone controls, cleanup, provenance,
+  cache separation, prompt-injection boundaries, threat mitigations, and rollout/rollback gates.
+- Added tests proving the design's required sections while keeping remote URLs rejected by local
+  `preflight_check`.
+- Did not implement or register remote scanning; the runtime tool set remains exactly
+  `preflight_check` and `corpus_scan`.
+
+## v0.2.4
+
+MCP integration documentation and client examples:
+
+- Added accurate PyPI and source-checkout installation, stdio startup, tool schema, compatibility,
+  safety-boundary, and troubleshooting documentation.
+- Added generic executable/argument-array client configuration without client-certification claims.
+- Added runnable Python stdio examples for `preflight_check` and `corpus_scan`.
+- Made Git identity metadata lookup non-interactive and bounded so stdio scans cannot inherit the
+  protocol input stream or wait indefinitely for Git metadata.
+- Added machine-checked request, successful response, and structured local-path error JSON examples.
+- Added documentation tests that keep tool names, input schemas, response contracts, internal links,
+  marketplace packaging, and version references synchronized.
+
+## v0.2.3
+
+MCP local-path UX and structured errors:
+
+- Added stable MCP error codes with concise messages, remediation, retryability, input-field, and
+  safety-boundary metadata.
+- Distinguished missing, empty, URL-like, regular-file, nonexistent, permission-denied, and
+  invalid `cwd` failures without exposing raw tracebacks.
+- Added local path normalization, home and relative-path expansion, explicit symlink behavior, and
+  Windows drive/UNC classification that avoids URL misclassification.
+- Preserved the v0.2.2 successful-response contract and the exact two-tool MCP runtime surface.
+
+## v0.2.2
+
+MCP report schema and evidence-boundary stabilization:
+
+- Added a versioned MCP response contract while preserving the existing CLI JSON report fields.
+- Added explicit tool identity and static-analysis safety metadata to MCP results.
+- Added stable untrusted, treat-as-data metadata to execution-graph uncertainty items.
+- Documented and regression-tested report limits, cache behavior, provenance, and the unchanged
+  `preflight_check` and `corpus_scan` tool set.
+
 ## v0.2.1
 
 MCP runtime and package stabilization:

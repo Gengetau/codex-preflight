@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import subprocess
 import sys
@@ -19,6 +20,24 @@ def test_create_mcp_server_smoke() -> None:
     server = create_mcp_server()
 
     assert server is not None
+
+
+def test_fastmcp_runtime_uses_public_tool_names_required_schema_and_error_codes() -> None:
+    from codex_preflight_mcp.server import create_mcp_server
+
+    server = create_mcp_server()
+    preflight_tool = server._tool_manager.get_tool("preflight_check")
+    corpus_tool = server._tool_manager.get_tool("corpus_scan")
+
+    assert preflight_tool is not None
+    assert corpus_tool is not None
+    assert preflight_tool.parameters["required"] == ["cwd", "command"]
+
+    with pytest.raises(Exception) as caught:
+        asyncio.run(server._tool_manager.call_tool("preflight_check", {"command": "pytest"}))
+
+    assert "MCP_CWD_REQUIRED" in str(caught.value)
+    assert "Traceback" not in str(caught.value)
 
 
 def test_codex_preflight_mcp_list_tools_cli_smoke() -> None:

@@ -1,0 +1,6 @@
+{
+  "tool": "corpus_scan",
+  "arguments": {
+    "case_id": "nested-node-child-process"
+  }
+}

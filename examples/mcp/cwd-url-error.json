@@ -1,0 +1,11 @@
+{
+  "isError": true,
+  "error": {
+    "code": "MCP_CWD_URL_NOT_ALLOWED",
+    "message": "MCP preflight_check accepts only an existing local path; remote URLs and clone forms are not allowed.",
+    "remediation": "Clone or otherwise prepare the repository outside this MCP tool, then pass its local directory path.",
+    "retryable": false,
+    "field": "cwd",
+    "safetyBoundary": "MCP preflight_check is local-path-only and performs no remote repository access."
+  }
+}

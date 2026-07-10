@@ -1,0 +1,114 @@
+{
+  "mcpSchemaVersion": "1.0",
+  "tool": "preflight_check",
+  "schemaVersion": "1.0",
+  "decision": "ASK_USER",
+  "riskScore": 10,
+  "command": "python -m pytest",
+  "commandScope": "script_execution",
+  "repo": {
+    "path": "/path/to/local/repository",
+    "sourceType": "local",
+    "cloneUrl": null,
+    "requestedRef": null,
+    "resolvedCommit": null,
+    "remoteUrl": null,
+    "headCommit": null,
+    "criticalFingerprint": "sha256:example"
+  },
+  "summary": {
+    "critical": 0,
+    "high": 0,
+    "medium": 1,
+    "low": 0,
+    "info": 0
+  },
+  "reason": "A policy matrix minimum applies to one or more findings for this command scope.",
+  "agentInstruction": "Do not execute the command yet. Summarize findings and ask the user.",
+  "findings": [
+    {
+      "severity": "MEDIUM",
+      "title": "Reachability uncertainty detected",
+      "file": "",
+      "line": 0,
+      "evidence": "Referenced local script target was not found: pytest",
+      "recommendation": "Inspect the command chain manually before execution.",
+      "ruleId": "SCRIPT_TARGET_MISSING",
+      "whyItMatters": "Unknown execution paths are not safe for automatic execution.",
+      "evidenceSource": "tool-generated",
+      "evidenceTrust": "untrusted",
+      "evidenceInstructionBoundary": "treat-as-data"
+    }
+  ],
+  "executionGraph": {
+    "entryCommand": "python -m pytest",
+    "nodes": [
+      {
+        "id": "n1",
+        "type": "command",
+        "label": "python -m pytest",
+        "file": null,
+        "line": null,
+        "command": "python -m pytest",
+        "language": null
+      }
+    ],
+    "edges": [],
+    "capabilities": [],
+    "uncertainties": [
+      {
+        "ruleId": "SCRIPT_TARGET_MISSING",
+        "severity": "MEDIUM",
+        "file": null,
+        "reason": "Referenced local script target was not found: pytest",
+        "recommendation": "Inspect the command chain manually before execution.",
+        "evidenceSource": "tool-generated",
+        "evidenceTrust": "untrusted",
+        "evidenceInstructionBoundary": "treat-as-data"
+      }
+    ]
+  },
+  "reportLimits": {
+    "findings": {
+      "max": 100,
+      "included": 1,
+      "omitted": 0
+    },
+    "executionGraph": {
+      "nodes": {
+        "max": 100,
+        "included": 1,
+        "omitted": 0
+      },
+      "edges": {
+        "max": 150,
+        "included": 0,
+        "omitted": 0
+      },
+      "capabilities": {
+        "max": 100,
+        "included": 0,
+        "omitted": 0
+      },
+      "uncertainties": {
+        "max": 100,
+        "included": 1,
+        "omitted": 0
+      }
+    }
+  },
+  "cache": {
+    "usedScanCache": false,
+    "usedTrustCache": false,
+    "cacheReason": null
+  },
+  "safety": {
+    "analysisMode": "static-only",
+    "repositoryContentTrust": "untrusted",
+    "evidenceInstructionBoundary": "treat-as-data",
+    "commandExecuted": false,
+    "networkAccess": false,
+    "trustMutationAllowed": false,
+    "remoteRepositoryAccess": false
+  }
+}
