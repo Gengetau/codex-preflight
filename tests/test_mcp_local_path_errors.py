@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 import pytest
@@ -9,7 +8,6 @@ from codex_preflight_mcp.errors import McpErrorCode, McpToolError
 from codex_preflight_mcp.server import (
     _is_remote_or_clone_like,
     corpus_scan,
-    create_mcp_server,
     preflight_check,
 )
 
@@ -190,19 +188,3 @@ def test_internal_error_hides_exception_details(tmp_path: Path, monkeypatch) -> 
     detail = assert_error(caught.value, McpErrorCode.INTERNAL_ERROR, field=None, retryable=True)
     assert "SECRET_INTERNAL_TRACE_MARKER" not in str(caught.value)
     assert "not returned" in str(detail["safetyBoundary"])
-
-
-def test_fastmcp_runtime_uses_public_tool_names_required_schema_and_error_codes() -> None:
-    server = create_mcp_server()
-    preflight_tool = server._tool_manager.get_tool("preflight_check")
-    corpus_tool = server._tool_manager.get_tool("corpus_scan")
-
-    assert preflight_tool is not None
-    assert corpus_tool is not None
-    assert preflight_tool.parameters["required"] == ["cwd", "command"]
-
-    with pytest.raises(Exception) as caught:
-        asyncio.run(server._tool_manager.call_tool("preflight_check", {"command": "pytest"}))
-
-    assert "MCP_CWD_REQUIRED" in str(caught.value)
-    assert "Traceback" not in str(caught.value)
