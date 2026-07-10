@@ -3,6 +3,8 @@ from __future__ import annotations
 import ast
 import json
 import re
+import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
@@ -11,7 +13,6 @@ from jsonschema import validate
 from codex_preflight_mcp.contract import MCP_SAFETY_METADATA
 from codex_preflight_mcp.errors import McpErrorCode
 from codex_preflight_mcp.server import corpus_scan, preflight_check, tool_definitions
-from scripts.sync_marketplace_plugin import check as marketplace_stale
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES = ROOT / "examples" / "mcp"
@@ -151,6 +152,13 @@ def test_internal_markdown_links_resolve() -> None:
 def test_marketplace_and_version_references_are_consistent() -> None:
     version = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
     release_history = (ROOT / "docs" / "release-history.md").read_text(encoding="utf-8")
+    marketplace_check = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "sync_marketplace_plugin.py"), "--check"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
 
     assert release_history.startswith(f"# Release History\n\n## v{version}")
-    assert marketplace_stale(ROOT) == []
+    assert marketplace_check.returncode == 0, marketplace_check.stdout + marketplace_check.stderr
