@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
-import subprocess
 import sys
 from importlib.util import find_spec
 
@@ -21,6 +19,8 @@ def test_create_mcp_server_smoke() -> None:
 
     assert server is not None
     assert server.instructions == SERVER_INSTRUCTIONS
+    assert server._mcp_server.instructions == SERVER_INSTRUCTIONS
+    assert server._mcp_server.create_initialization_options().instructions == SERVER_INSTRUCTIONS
 
 
 def test_fastmcp_runtime_uses_public_tool_names_required_schema_and_error_codes() -> None:
@@ -41,30 +41,20 @@ def test_fastmcp_runtime_uses_public_tool_names_required_schema_and_error_codes(
     assert "Traceback" not in str(caught.value)
 
 
-def test_codex_preflight_mcp_list_tools_cli_smoke() -> None:
-    result = subprocess.run(
-        [sys.executable, "-m", "codex_preflight_mcp.server", "--list-tools"],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert result.returncode == 0
-    tools = json.loads(result.stdout)
-    assert {tool["name"] for tool in tools} == {"preflight_check", "corpus_scan"}
-
-
 def test_stdio_initialization_returns_fixed_server_instructions() -> None:
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
 
     from codex_preflight_mcp.server import SERVER_INSTRUCTIONS
 
-    async def initialize() -> str | None:
+    async def initialize() -> tuple[str | None, set[str]]:
         parameters = StdioServerParameters(command=sys.executable, args=["-m", "codex_preflight_mcp.server"])
         async with stdio_client(parameters) as (read_stream, write_stream):
             async with ClientSession(read_stream, write_stream) as session:
                 result = await session.initialize()
-                return result.instructions
+                tools = await session.list_tools()
+                return result.instructions, {tool.name for tool in tools.tools}
 
-    assert asyncio.run(initialize()) == SERVER_INSTRUCTIONS
+    instructions, tool_names = asyncio.run(initialize())
+    assert instructions == SERVER_INSTRUCTIONS
+    assert tool_names == {"preflight_check", "corpus_scan"}

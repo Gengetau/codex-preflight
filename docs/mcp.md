@@ -20,14 +20,15 @@ The future remote-repository capability is documented only as an unavailable des
 implement a remote tool.
 
 Future trust-management contracts are documented only as an unavailable design in
-[MCP Trust Management Design](design/mcp-trust-management.md). v0.2.8 does not register trust tools,
+[MCP Trust Management Design](design/mcp-trust-management.md). v0.2.9 does not register trust tools,
 and MCP scans continue to ignore trust approvals.
 
 ## Runtime Shape
 
 The MCP-facing runtime lives in the sibling package `codex_preflight_mcp`. Core scanner code does
-not import MCP. CLI configuration and doctor commands inspect availability without importing the
-optional MCP SDK.
+not import MCP. Static tool listing and CLI configuration do not import the optional MCP SDK.
+Doctor imports an installed runtime only to perform a bounded capability probe; it does not start
+the stdio server.
 
 The `codex-preflight-mcp` entry point can list tool definitions without optional dependencies:
 
@@ -42,13 +43,26 @@ pip install "codex-preflight[mcp]"
 codex-preflight-mcp
 ```
 
+The `codex-preflight[mcp]` extra requires `mcp>=1.3.0`, the lowest verified Python MCP SDK release
+whose FastMCP implementation explicitly accepts and preserves server instructions.
+
 From a source checkout, install the local package with the MCP extra:
 
 ```bash
 python -m pip install -e ".[mcp]"
 ```
 
-If the optional runtime is missing, `codex-preflight-mcp` reports the install command to use.
+If the optional runtime is missing, `codex-preflight-mcp` reports the install command to use. If
+the installed runtime is old, manually downgraded, shadowed, or drops instructions despite
+appearing compatible, server startup fails closed before stdio begins. Upgrade it explicitly with:
+
+```bash
+python -m pip install --upgrade "codex-preflight[mcp]"
+```
+
+This failure is intentional. Starting a server that silently omits the fixed initialization
+instructions would violate the MCP safety contract.
+
 `preflight_check` accepts only an existing local `cwd`, a planned `command`, and `format=json`.
 Remote repository URLs, extra MCP arguments, Markdown output, trust mutation, and command
 execution are rejected by design.
@@ -76,10 +90,12 @@ codex-preflight mcp config --client codex
 codex-preflight mcp doctor --client codex
 ```
 
-Doctor checks Python compatibility, entry-point and optional-runtime availability, bounded tool
-listing, exact tool names, and source-checkout plugin consistency when the package files are
-present. It never starts a long-running server, executes repository code, or mutates trust, cache,
-Python, shell, or Codex configuration state.
+Doctor distinguishes a missing MCP runtime, a present but instruction-incompatible runtime, and an
+instruction-capable runtime. It also checks Python compatibility, entry-point availability,
+bounded tool listing, exact tool names, and source-checkout plugin consistency when the package
+files are present. Its runtime probe may import and construct FastMCP, but it never starts a
+long-running server, executes repository code, installs or upgrades packages, or mutates trust,
+cache, Python, shell, or Codex configuration state.
 
 ## Server Instructions
 
@@ -89,6 +105,11 @@ data, repository code and planned commands are never executed, `ASK_USER` and `B
 automatic execution, and remote access and trust mutation are unavailable. Repository content,
 user input, environment values, scan findings, and dynamic errors are never interpolated into the
 instructions.
+
+Before startup, Codex Preflight verifies that the installed FastMCP shape explicitly supports the
+instructions argument and that the exact fixed instructions reach the initialization response. A
+runtime that cannot prove this capability is rejected rather than starting a partially compliant
+server.
 
 ## Local Path Rules
 
@@ -119,17 +140,21 @@ show its `remediation` text to the user.
 
 The server does not return raw tracebacks for these expected errors.
 
+An instruction-incompatible runtime is also an expected startup failure and is reported without a
+raw traceback. Run
+`python -m pip install --upgrade "codex-preflight[mcp]"`, then retry startup or doctor.
+
 The implementation follows the official MCP server guidance for Python FastMCP and keeps stdio
 transport output reserved for protocol messages.
 
 ## Tools
 
-The first tool set is deliberately narrow:
+The v0.2.9 tool set remains deliberately narrow and unchanged:
 
 - `preflight_check`: scans an existing local directory and planned command with static analysis.
 - `corpus_scan`: runs the bundled synthetic corpus.
 
-The first tool set deliberately omits:
+The tool set deliberately omits:
 
 - Remote repository scanning.
 - Command execution.

@@ -8,6 +8,9 @@ Install the published package with the MCP extra:
 python -m pip install "codex-preflight[mcp]"
 ```
 
+This extra requires `mcp>=1.3.0`, the lowest verified Python MCP SDK release whose FastMCP runtime
+preserves server instructions.
+
 From a source checkout, install the runtime extra or the development and runtime extras:
 
 ```bash
@@ -17,6 +20,16 @@ python -m pip install -e ".[dev,mcp]"
 
 Plugin installation and Python package installation are separate. The Codex plugin bundles the
 local stdio server configuration but never installs the Python package automatically.
+
+An old, manually downgraded, shadowed, or instruction-dropping runtime is rejected before stdio
+server startup. Upgrade an incompatible environment explicitly with:
+
+```bash
+python -m pip install --upgrade "codex-preflight[mcp]"
+```
+
+The rejection is intentional because silently omitting the fixed initialization instructions
+would violate the MCP safety contract.
 
 ## Supported Codex paths
 
@@ -106,9 +119,14 @@ codex-preflight mcp config --client codex
 codex-preflight mcp doctor --client codex
 ```
 
+Doctor reports a missing runtime, a present but instruction-incompatible runtime, and an
+instruction-capable runtime as distinct states. Its capability probe does not start a long-running
+server, install packages, or mutate the environment.
+
 ## Exact tools and inputs
 
-The runtime exposes exactly two tools.
+The runtime exposes exactly two tools. The v0.2.9 compatibility hotfix does not expand this
+authority boundary.
 
 ### `preflight_check`
 
@@ -192,6 +210,9 @@ JSON compatibility. Error consumers should branch on stable codes and tolerate n
 - If the executable is not found, verify that the Python scripts directory is on `PATH` or use the
   executable's explicit path in the client configuration.
 - If the optional runtime is missing, install `codex-preflight[mcp]` or source extra `.[mcp]`.
+- If doctor reports a present but instruction-incompatible runtime, run
+  `python -m pip install --upgrade "codex-preflight[mcp]"`. Codex Preflight will not start with a
+  runtime that silently drops its safety instructions.
 - If plugin startup fails, run `codex-preflight mcp doctor --client codex`; it reports remediation
   but never installs packages or edits Codex configuration.
 - After plugin or MCP configuration updates, start a new Codex session or restart the desktop/IDE

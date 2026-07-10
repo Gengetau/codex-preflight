@@ -158,6 +158,20 @@ the Python environment:
 python -m pip install "codex-preflight[mcp]"
 ```
 
+The MCP extra requires `mcp>=1.3.0`, the lowest verified Python MCP SDK release whose
+FastMCP runtime preserves server instructions. An old, manually downgraded, shadowed, or
+instruction-dropping runtime is rejected before stdio server startup. Upgrade an incompatible
+environment explicitly with:
+
+```bash
+python -m pip install --upgrade "codex-preflight[mcp]"
+```
+
+This fail-closed behavior is intentional: silently omitting the fixed server instructions would
+violate the MCP safety contract. `mcp doctor` reports a missing runtime, a present but
+instruction-incompatible runtime, and an instruction-capable runtime as distinct states; it does
+not install or upgrade packages.
+
 Then add this repository through the Codex UI "Add marketplace" flow with:
 
 - Source: `https://github.com/Gengetau/codex-preflight.git`
@@ -202,6 +216,9 @@ and bundled corpus scans, but does not expose remote repository clone, command e
 approval, trust revoke, or cache mutation tools. Evidence snippets from repositories are marked as
 untrusted data. Server initialization also supplies fixed safety instructions that require
 `ASK_USER` and `BLOCK` decisions to stop automatic execution.
+
+The runtime authority remains exactly two tools: `preflight_check` and `corpus_scan`. The v0.2.9
+runtime compatibility hotfix does not add scanner rules or MCP capabilities.
 
 See [docs/mcp.md](docs/mcp.md) for MCP safety notes and
 [docs/mcp-client-examples.md](docs/mcp-client-examples.md) for machine-checked integration examples.

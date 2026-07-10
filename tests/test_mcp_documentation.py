@@ -140,6 +140,11 @@ def test_codex_plugin_docs_cover_supported_paths_and_explicit_prerequisite() -> 
 
     for required in (
         'python -m pip install "codex-preflight[mcp]"',
+        'python -m pip install --upgrade "codex-preflight[mcp]"',
+        "mcp>=1.3.0",
+        "instruction-capable",
+        "instruction-incompatible",
+        "safety contract",
         "codex plugin marketplace add",
         "Plugin installation and Python package installation are separate",
         "Standalone Codex MCP configuration",
@@ -154,6 +159,7 @@ def test_codex_plugin_docs_cover_supported_paths_and_explicit_prerequisite() -> 
 
     assert "remote repository MCP scanning" in combined
     assert "trust-management MCP tools" in combined
+    assert "Only `preflight_check` and `corpus_scan` are available" in combined
     assert "one-click" not in combined.lower()
 
 

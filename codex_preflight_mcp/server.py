@@ -4,6 +4,7 @@ import argparse
 import json
 import re
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,10 @@ from codex_preflight_core.corpus import scan_corpus
 from codex_preflight_core.preflight import run_preflight
 from codex_preflight_mcp.contract import build_mcp_result
 from codex_preflight_mcp.errors import McpErrorCode, McpErrorDetail, McpToolError
+from codex_preflight_mcp.runtime_compatibility import (
+    McpRuntimeError,
+    create_instruction_capable_fastmcp,
+)
 
 REMOTE_OR_CLONE_PREFIXES = (
     "http://",
@@ -152,18 +157,12 @@ def corpus_scan(case_id: str | None = None) -> dict[str, Any]:
     return build_mcp_result("corpus_scan", result)
 
 
-def create_mcp_server():
-    try:
-        from mcp.server.fastmcp import FastMCP
-    except ImportError as exc:
-        raise RuntimeError(
-            "The optional MCP runtime is not installed. For an editable checkout, run "
-            '`python -m pip install -e ".[mcp]"`; for an installed package, run '
-            "`python -m pip install 'codex-preflight[mcp]'` before running codex-preflight-mcp "
-            "as an MCP server. `codex-preflight-mcp --list-tools` does not require the extra."
-        ) from exc
-
-    mcp = FastMCP("codex-preflight", instructions=SERVER_INSTRUCTIONS)
+def create_mcp_server(*, fastmcp_factory: Callable[..., Any] | None = None):
+    mcp = create_instruction_capable_fastmcp(
+        fastmcp_factory,
+        name="codex-preflight",
+        instructions=SERVER_INSTRUCTIONS,
+    )
 
     @mcp.tool(name="preflight_check", description=PREFLIGHT_DESCRIPTION)
     def mcp_preflight_check(
@@ -203,7 +202,11 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.write("\n")
         return 0
 
-    server = create_mcp_server()
+    try:
+        server = create_mcp_server()
+    except McpRuntimeError as error:
+        print(str(error), file=sys.stderr)
+        return 1
     server.run(transport="stdio")
     return 0
 

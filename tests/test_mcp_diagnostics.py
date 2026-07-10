@@ -13,6 +13,10 @@ from codex_preflight_cli.mcp_diagnostics import (
     diagnose_codex_mcp,
     render_codex_mcp_config,
 )
+from codex_preflight_mcp.runtime_compatibility import (
+    MCP_RUNTIME_COMPATIBILITY_MESSAGE,
+    MCP_RUNTIME_UPGRADE_COMMAND,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_TOOLS = [{"name": "preflight_check"}, {"name": "corpus_scan"}]
@@ -40,6 +44,7 @@ def test_healthy_environment_reports_success_and_handles_entry_point_spaces() ->
         python_version=(3, 12),
         executable_finder=lambda _name: executable,
         runtime_finder=lambda _name: object(),
+        runtime_checker=lambda: None,
         tool_runner=run,
     )
 
@@ -64,9 +69,49 @@ def test_missing_optional_runtime_has_exact_non_installing_remediation() -> None
 
     runtime = next(check for check in checks if check.name == "mcp-runtime")
     assert runtime.status == "FAIL"
+    assert runtime.detail == "The optional MCP runtime is missing."
     assert runtime.remediation == (
-        'Run python -m pip install "codex-preflight[mcp]". No package was installed automatically.'
+        f"{MCP_RUNTIME_COMPATIBILITY_MESSAGE}\nNo package was installed automatically."
     )
+
+
+def test_instruction_incompatible_runtime_is_distinct_and_does_not_leak_details() -> None:
+    def incompatible_runtime() -> None:
+        raise RuntimeError("SECRET_MARKER_FROM_BROKEN_RUNTIME")
+
+    checks = diagnose_codex_mcp(
+        source_root=ROOT,
+        executable_finder=lambda _name: "codex-preflight-mcp",
+        runtime_finder=lambda _name: object(),
+        runtime_checker=incompatible_runtime,
+        tool_runner=successful_tool_listing,
+    )
+
+    runtime = next(check for check in checks if check.name == "mcp-runtime")
+    assert runtime.status == "FAIL"
+    assert runtime.detail == "The optional MCP runtime is present but instruction-incompatible."
+    assert runtime.remediation == (
+        f"{MCP_RUNTIME_COMPATIBILITY_MESSAGE}\nNo package was installed automatically."
+    )
+    assert MCP_RUNTIME_UPGRADE_COMMAND in runtime.remediation
+    assert "SECRET_MARKER" not in repr(checks)
+
+
+def test_shadowed_runtime_discovery_failure_is_not_reported_as_missing() -> None:
+    def broken_finder(_name: str) -> object:
+        raise ValueError("SECRET_MARKER_FROM_SHADOWED_RUNTIME")
+
+    checks = diagnose_codex_mcp(
+        source_root=ROOT,
+        executable_finder=lambda _name: "codex-preflight-mcp",
+        runtime_finder=broken_finder,
+        tool_runner=successful_tool_listing,
+    )
+
+    runtime = next(check for check in checks if check.name == "mcp-runtime")
+    assert runtime.status == "FAIL"
+    assert "present but instruction-incompatible" in runtime.detail
+    assert "SECRET_MARKER" not in repr(checks)
 
 
 def test_missing_console_entry_point_is_actionable() -> None:
@@ -74,6 +119,7 @@ def test_missing_console_entry_point_is_actionable() -> None:
         source_root=ROOT,
         executable_finder=lambda _name: None,
         runtime_finder=lambda _name: object(),
+        runtime_checker=lambda: None,
     )
 
     entry_point = next(check for check in checks if check.name == "entry-point")
@@ -96,6 +142,7 @@ def test_tool_list_mismatch_is_a_failure() -> None:
         source_root=ROOT,
         executable_finder=lambda _name: "codex-preflight-mcp",
         runtime_finder=lambda _name: object(),
+        runtime_checker=lambda: None,
         tool_runner=mismatched,
     )
 
@@ -118,6 +165,7 @@ def test_diagnostics_do_not_mutate_plugin_files() -> None:
         source_root=ROOT,
         executable_finder=lambda _name: "codex-preflight-mcp",
         runtime_finder=lambda _name: object(),
+        runtime_checker=lambda: None,
         tool_runner=successful_tool_listing,
     )
 
@@ -129,6 +177,7 @@ def test_config_presentation_is_cross_platform_and_has_no_shell_wrapper() -> Non
     lowered = output.lower()
 
     assert 'python -m pip install "codex-preflight[mcp]"' in output
+    assert "mcp>=1.3.0" in output
     assert 'command = "codex-preflight-mcp"' in output
     assert '[mcp_servers."codex-preflight"]' in output
     assert '"command": "codex-preflight-mcp"' in output

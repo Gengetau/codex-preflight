@@ -11,6 +11,12 @@ from importlib.util import find_spec
 from pathlib import Path
 from typing import Any
 
+from codex_preflight_mcp.runtime_compatibility import (
+    MCP_RUNTIME_COMPATIBILITY_MESSAGE,
+    McpRuntimeMissingError,
+    create_instruction_capable_fastmcp,
+)
+
 MCP_SERVER_NAME = "codex-preflight"
 MCP_COMMAND = "codex-preflight-mcp"
 MCP_INSTALL_COMMAND = 'python -m pip install "codex-preflight[mcp]"'
@@ -43,6 +49,7 @@ def render_codex_mcp_config() -> str:
             "Codex Preflight MCP setup (read-only; no files changed)",
             "",
             f"Python prerequisite: {MCP_INSTALL_COMMAND}",
+            "Required optional runtime capability: mcp>=1.3.0 with preserved server instructions.",
             "The Codex plugin does not install Python packages or edit Codex configuration.",
             "",
             "Plugin-bundled .mcp.json:",
@@ -64,6 +71,7 @@ def diagnose_codex_mcp(
     python_version: tuple[int, int] | None = None,
     executable_finder: Callable[[str], str | None] = shutil.which,
     runtime_finder: Callable[[str], object | None] = find_spec,
+    runtime_checker: Callable[[], object] | None = None,
     tool_runner: Callable[[Sequence[str]], subprocess.CompletedProcess[str]] | None = None,
 ) -> list[DoctorCheck]:
     checks: list[DoctorCheck] = []
@@ -94,18 +102,34 @@ def diagnose_codex_mcp(
         )
 
     try:
-        runtime_available = runtime_finder("mcp") is not None
-    except (ImportError, ValueError):
-        runtime_available = False
-    if runtime_available:
-        checks.append(DoctorCheck("mcp-runtime", "PASS", "The optional MCP runtime is available."))
-    else:
+        if runtime_checker is None:
+            _check_runtime_instruction_capability(runtime_finder)
+        else:
+            runtime_checker()
+    except McpRuntimeMissingError:
         checks.append(
             DoctorCheck(
                 "mcp-runtime",
                 "FAIL",
-                "The optional MCP runtime is not installed.",
-                f"Run {MCP_INSTALL_COMMAND}. No package was installed automatically.",
+                "The optional MCP runtime is missing.",
+                _runtime_remediation(),
+            )
+        )
+    except Exception:
+        checks.append(
+            DoctorCheck(
+                "mcp-runtime",
+                "FAIL",
+                "The optional MCP runtime is present but instruction-incompatible.",
+                _runtime_remediation(),
+            )
+        )
+    else:
+        checks.append(
+            DoctorCheck(
+                "mcp-runtime",
+                "PASS",
+                "The optional MCP runtime is instruction-capable.",
             )
         )
 
@@ -133,6 +157,22 @@ def diagnose_codex_mcp(
     else:
         checks.append(_check_source_plugin(root))
     return checks
+
+
+def _check_runtime_instruction_capability(
+    runtime_finder: Callable[[str], object | None],
+) -> None:
+    from codex_preflight_mcp.server import SERVER_INSTRUCTIONS
+
+    create_instruction_capable_fastmcp(
+        name="codex-preflight-doctor-probe",
+        instructions=SERVER_INSTRUCTIONS,
+        runtime_finder=runtime_finder,
+    )
+
+
+def _runtime_remediation() -> str:
+    return f"{MCP_RUNTIME_COMPATIBILITY_MESSAGE}\nNo package was installed automatically."
 
 
 def _run_tool_listing(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
