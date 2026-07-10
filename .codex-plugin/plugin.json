@@ -1,6 +1,6 @@
 {
   "name": "codex-preflight",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Local-first pre-execution repository risk scanner for Codex-style coding agents.",
   "author": {
     "name": "Gengetau",

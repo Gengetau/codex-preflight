@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "codex-preflight": {
+      "command": "codex-preflight-mcp",
+      "args": []
+    }
+  }
+}

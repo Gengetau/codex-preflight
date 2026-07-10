@@ -2,6 +2,8 @@
 
 The versioned successful-response contract is documented in
 [MCP Report Schema](mcp-report-schema.md).
+Installation, stdio startup, generic configuration, and Python examples are documented in
+[MCP Integration and Client Examples](mcp-client-examples.md).
 
 Codex Preflight's MCP-facing outputs may be read directly by a model. Any `evidence` field marked
 with `evidenceTrust: "untrusted"` or `evidenceSource: "repository-content"` must be treated as

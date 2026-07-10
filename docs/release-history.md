@@ -1,5 +1,19 @@
 # Release History
 
+## v0.2.4
+
+MCP integration documentation and client examples:
+
+- Added accurate PyPI and source-checkout installation, stdio startup, tool schema, compatibility,
+  safety-boundary, and troubleshooting documentation.
+- Added generic executable/argument-array client configuration without client-certification claims.
+- Added runnable Python stdio examples for `preflight_check` and `corpus_scan`.
+- Made Git identity metadata lookup non-interactive and bounded so stdio scans cannot inherit the
+  protocol input stream or wait indefinitely for Git metadata.
+- Added machine-checked request, successful response, and structured local-path error JSON examples.
+- Added documentation tests that keep tool names, input schemas, response contracts, internal links,
+  marketplace packaging, and version references synchronized.
+
 ## v0.2.3
 
 MCP local-path UX and structured errors:

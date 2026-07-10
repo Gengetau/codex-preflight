@@ -1,0 +1,35 @@
+{
+  "mcpSchemaVersion": "1.0",
+  "tool": "corpus_scan",
+  "passed": true,
+  "cases": [
+    {
+      "id": "nested-node-child-process",
+      "title": "Nested package lifecycle reaches Node child process",
+      "category": "reachability",
+      "command": "pnpm install",
+      "expectedDecision": "ASK_USER",
+      "actualDecision": "ASK_USER",
+      "expectedRules": [
+        "NODE_POSTINSTALL_SCRIPT",
+        "SCRIPT_INDIRECT_EXECUTION",
+        "JS_CHILD_PROCESS_EXEC"
+      ],
+      "actualRules": [
+        "NODE_POSTINSTALL_SCRIPT",
+        "SCRIPT_INDIRECT_EXECUTION",
+        "JS_CHILD_PROCESS_EXEC"
+      ],
+      "passed": true
+    }
+  ],
+  "safety": {
+    "analysisMode": "static-only",
+    "repositoryContentTrust": "untrusted",
+    "evidenceInstructionBoundary": "treat-as-data",
+    "commandExecuted": false,
+    "networkAccess": false,
+    "trustMutationAllowed": false,
+    "remoteRepositoryAccess": false
+  }
+}

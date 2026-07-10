@@ -1,0 +1,8 @@
+{
+  "tool": "preflight_check",
+  "arguments": {
+    "cwd": "/path/to/local/repository",
+    "command": "python -m pytest",
+    "format": "json"
+  }
+}

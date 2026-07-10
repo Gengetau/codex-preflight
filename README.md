@@ -173,7 +173,8 @@ and bundled corpus scans, but does not expose remote repository clone, command e
 approval, trust revoke, or cache mutation tools. Evidence snippets from repositories are marked as
 untrusted data.
 
-See [docs/mcp.md](docs/mcp.md) for MCP safety notes.
+See [docs/mcp.md](docs/mcp.md) for MCP safety notes and
+[docs/mcp-client-examples.md](docs/mcp-client-examples.md) for machine-checked integration examples.
 
 ## Demo Examples
 
