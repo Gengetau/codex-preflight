@@ -32,6 +32,7 @@ The corpus includes Rust and Go ecosystem fixtures for v0.3.0:
 
 - `rust-build-script-source-replacement`
 - `go-generation-testmain-cgo`
+- `go-replace-block`
 
 The scanner compares the actual decision and rule IDs with the expected values. The command exits
 nonzero if any expectation fails.

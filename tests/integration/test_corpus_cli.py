@@ -68,6 +68,10 @@ EXPECTED_CASES = {
             "GO_TESTMAIN",
         ],
     ),
+    "go-replace-block": (
+        "WARN",
+        ["GO_LOCAL_MODULE_REPLACE", "GO_MODULE_REPLACE"],
+    ),
     "leaked-secret-fixture": ("BLOCK", ["SECRET_PRIVATE_KEY"]),
     "node-dynamic-require-uncertain": (
         "ASK_USER",

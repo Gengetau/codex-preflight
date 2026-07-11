@@ -93,3 +93,35 @@ def test_go_generate_and_test_surfaces_are_static_and_warning_oriented(tmp_path:
         "GO_MODULE_REPLACE",
         "GO_TESTMAIN",
     } <= set(capability_ids(report))
+
+
+def test_go_mod_block_form_detects_local_replacement(tmp_path: Path) -> None:
+    (tmp_path / "go.mod").write_text(
+        "module example.com/demo\n\n"
+        "replace (\n"
+        "\texample.com/local => ../local\n"
+        ")\n",
+        encoding="utf-8",
+    )
+
+    report = run_preflight(tmp_path, "go test ./...", use_cache=False)
+
+    assert report["decision"] == "WARN"
+    assert rule_ids(report) == ["GO_LOCAL_MODULE_REPLACE"]
+    assert capability_ids(report) == ["GO_LOCAL_MODULE_REPLACE"]
+
+
+def test_go_mod_block_form_detects_versioned_remote_replacement(tmp_path: Path) -> None:
+    (tmp_path / "go.mod").write_text(
+        "module example.com/demo\n\n"
+        "replace (\n"
+        "\texample.com/fork => example.com/fork v1.2.3\n"
+        ")\n",
+        encoding="utf-8",
+    )
+
+    report = run_preflight(tmp_path, "go test ./...", use_cache=False)
+
+    assert report["decision"] == "WARN"
+    assert rule_ids(report) == ["GO_MODULE_REPLACE"]
+    assert capability_ids(report) == ["GO_MODULE_REPLACE"]

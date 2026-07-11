@@ -22,6 +22,7 @@ _GO_TESTMAIN = re.compile(r"\bfunc\s+TestMain\s*\(", re.MULTILINE)
 _GO_CGO_IMPORT = re.compile(r'^\s*import\s+"C"\s*$', re.MULTILINE)
 _GO_REPLACE_BLOCK = re.compile(r"(?ms)^\s*replace\s*\((.*?)^\s*\)")
 _GO_REPLACE_LINE = re.compile(r"^\s*replace\s+(.+?)\s+=>\s+(.+?)(?:\s+v[^\s]+)?\s*$", re.MULTILINE)
+_GO_REPLACE_BLOCK_ENTRY = re.compile(r"^\s*(.+?)\s+=>\s+(.+?)(?:\s+v[^\s]+)?\s*$", re.MULTILINE)
 
 
 class RustGoEcosystemRule:
@@ -167,13 +168,14 @@ def _scan_go_mod(relative_path: Path, text: str) -> list[Finding]:
 
 
 def _go_replacements(text: str) -> list[tuple[str, str]]:
-    candidates = [text]
-    candidates.extend(match.group(1) for match in _GO_REPLACE_BLOCK.finditer(text))
-    replacements: list[tuple[str, str]] = []
-    for candidate in candidates:
-        for match in _GO_REPLACE_LINE.finditer(candidate):
-            replacements.append((match.group(1).strip(), match.group(2).strip()))
+    replacements = [_replacement_tuple(match) for match in _GO_REPLACE_LINE.finditer(text)]
+    for block in _GO_REPLACE_BLOCK.finditer(text):
+        replacements.extend(_replacement_tuple(match) for match in _GO_REPLACE_BLOCK_ENTRY.finditer(block.group(1)))
     return replacements
+
+
+def _replacement_tuple(match: re.Match[str]) -> tuple[str, str]:
+    return match.group(1).strip(), match.group(2).strip()
 
 
 def _looks_local_go_replacement(target: str) -> bool:
