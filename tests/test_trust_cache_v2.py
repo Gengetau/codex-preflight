@@ -48,6 +48,29 @@ def mcp_approval_kwargs(tmp_path: Path, **overrides: object) -> dict[str, object
     return kwargs
 
 
+def arm_stat_failure_after_atomic_replace(
+    monkeypatch: pytest.MonkeyPatch,
+    path: Path,
+) -> list[bool]:
+    replaced = [False]
+    real_write = trust_cache.write_bytes_atomic
+    path_type = type(path)
+    real_stat = path_type.stat
+
+    def write_then_arm(target: Path, data: bytes) -> None:
+        real_write(target, data)
+        replaced[0] = True
+
+    def fail_after_replace(target: Path, *, follow_symlinks: bool = True):
+        if target == path and replaced[0]:
+            raise OSError("injected post-replace stat failure")
+        return real_stat(target, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(trust_cache, "write_bytes_atomic", write_then_arm)
+    monkeypatch.setattr(path_type, "stat", fail_after_replace)
+    return replaced
+
+
 def legacy_entry(*, repo_id: str = "https://github.com/example/project") -> dict[str, object]:
     return {
         "repoId": repo_id,
@@ -1105,6 +1128,85 @@ def test_mcp_callback_failure_after_replace_reports_committed_state(tmp_path: Pa
     assert path.read_bytes() == after[0]
     assert caught.value.result.outcome == "approved"
     assert caught.value.result.applied is True
+    assert caught.value.result.prepared_event_id == MCP_PREPARED_EVENT_ID
+    assert caught.value.result.final_event_id is None
+
+
+def test_mcp_approval_has_no_ordinary_failure_boundary_after_replace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "trust.json"
+    cache = TrustCache(path)
+    replaced = arm_stat_failure_after_atomic_replace(monkeypatch, path)
+    intended: list[bytes] = []
+    commit_calls: list[str] = []
+
+    def prepare(plan):
+        intended.append(plan.after_bytes)
+        return TrustCacheMutationPrepared(plan.planned_event_id, None)
+
+    def fail_commit(_prepared):
+        commit_calls.append("commit")
+        raise RuntimeError("commit failed")
+
+    with pytest.raises(TrustCacheMutationCommitError) as caught:
+        cache.approve_mcp(
+            **mcp_approval_kwargs(tmp_path),
+            prepare=prepare,
+            commit=fail_commit,
+        )
+
+    assert replaced == [True]
+    assert commit_calls == ["commit"]
+    assert path.read_bytes() == intended[0]
+    assert caught.value.result.outcome == "approved"
+    assert caught.value.result.applied is True
+    assert caught.value.result.entry is not None
+    assert caught.value.result.entry["entryId"] == MCP_ENTRY_ID
+    assert caught.value.result.prepared_event_id == MCP_PREPARED_EVENT_ID
+    assert caught.value.result.final_event_id is None
+
+
+def test_mcp_revocation_has_no_ordinary_failure_boundary_after_replace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "trust.json"
+    cache = TrustCache(path)
+    created = cache.approve_mcp(
+        **mcp_approval_kwargs(tmp_path),
+        prepare=lambda plan: TrustCacheMutationPrepared(plan.planned_event_id, None),
+        commit=lambda _prepared: MCP_FINAL_EVENT_ID,
+    )
+    assert created.entry is not None
+    replaced = arm_stat_failure_after_atomic_replace(monkeypatch, path)
+    intended: list[bytes] = []
+    commit_calls: list[str] = []
+
+    def prepare(plan):
+        intended.append(plan.after_bytes)
+        return TrustCacheMutationPrepared(MCP_PREPARED_EVENT_ID, None)
+
+    def fail_commit(_prepared):
+        commit_calls.append("commit")
+        raise RuntimeError("commit failed")
+
+    with pytest.raises(TrustCacheMutationCommitError) as caught:
+        cache.revoke_entry_id(
+            MCP_ENTRY_ID,
+            expected_version=1,
+            expected_entry=created.entry,
+            prepare=prepare,
+            commit=fail_commit,
+        )
+
+    assert replaced == [True]
+    assert commit_calls == ["commit"]
+    assert path.read_bytes() == intended[0]
+    assert caught.value.result.outcome == "revoked"
+    assert caught.value.result.applied is True
+    assert caught.value.result.entry == created.entry
     assert caught.value.result.prepared_event_id == MCP_PREPARED_EVENT_ID
     assert caught.value.result.final_event_id is None
 

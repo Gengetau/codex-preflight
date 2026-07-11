@@ -505,8 +505,6 @@ class TrustCache:
             if len(encoded) > self.max_bytes:
                 raise TrustCacheError("unavailable", "The local trust store exceeds its size limit.")
             write_bytes_atomic(self.path, encoded)
-            if self.path.stat().st_size > self.max_bytes:
-                raise TrustCacheError("unavailable", "The local trust store exceeds its size limit.")
         except TrustCacheError:
             raise
         except OSError as error:
