@@ -1,6 +1,7 @@
 import json
 import os
 import shutil
+import stat
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -19,18 +20,18 @@ def read_json(path: Path, default: object) -> object:
 
 
 def write_json_atomic(path: Path, data: object) -> None:
-    if os.name == "nt":
-        _write_json_direct(path, data)
-        return
-
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path: Path | None = None
     try:
         temp_path = path.parent / f"{path.name}.{uuid4().hex}.tmp"
-        with temp_path.open("w", encoding="utf-8") as handle:
+        with temp_path.open("x", encoding="utf-8") as handle:
             json.dump(data, handle, indent=2)
             handle.flush()
             os.fsync(handle.fileno())
+        if path.exists():
+            os.chmod(temp_path, stat.S_IMODE(path.stat().st_mode))
+        else:
+            os.chmod(temp_path, 0o600)
         os.replace(temp_path, path)
     finally:
         if temp_path is not None and temp_path.exists():
@@ -38,8 +39,3 @@ def write_json_atomic(path: Path, data: object) -> None:
                 temp_path.unlink()
             except OSError:
                 pass
-
-
-def _write_json_direct(path: Path, data: object) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2), encoding="utf-8")

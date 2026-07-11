@@ -3,9 +3,14 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from codex_preflight_core.cache.file_lock import locked_cache_file
+import pytest
+
+from codex_preflight_core.cache import file_lock
+from codex_preflight_core.cache.file_lock import CacheLockTimeoutError, locked_cache_file
 from codex_preflight_core.cache.scan_cache import ScanCache
 from codex_preflight_core.cache.trust_cache import TrustCache
+
+HEAD = "a" * 40
 
 
 def test_lock_helper_creates_sidecar_lock_file(tmp_path: Path) -> None:
@@ -13,6 +18,17 @@ def test_lock_helper_creates_sidecar_lock_file(tmp_path: Path) -> None:
 
     with locked_cache_file(cache_path):
         assert cache_path.with_suffix(cache_path.suffix + ".lock").exists()
+
+
+def test_lock_timeout_has_a_stable_exception(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def unavailable(_handle: object) -> None:
+        raise OSError("hidden lock detail")
+
+    monkeypatch.setattr(file_lock, "_lock", unavailable)
+
+    with pytest.raises(CacheLockTimeoutError):
+        with locked_cache_file(tmp_path / "trust.json", timeout=0):
+            pass
 
 
 def test_scan_cache_concurrent_stores_keep_valid_json(tmp_path: Path) -> None:
@@ -47,8 +63,8 @@ def test_trust_cache_concurrent_approvals_keep_valid_json(tmp_path: Path) -> Non
             repo_id=f"repo-{index}",
             path=tmp_path,
             remote_url=None,
-            head_commit="abc",
-            critical_fingerprint=f"sha256:{index}",
+            head_commit=HEAD,
+            critical_fingerprint=f"sha256:{index:064x}",
             command_scope="test",
             approved_command=f"pytest {index}",
             expires_at=datetime.now(UTC) + timedelta(days=1),
@@ -70,8 +86,8 @@ def test_concurrent_trust_approve_and_revoke_keep_valid_json(tmp_path: Path) -> 
             repo_id=f"repo-{index}",
             path=tmp_path,
             remote_url=None,
-            head_commit="abc",
-            critical_fingerprint=f"sha256:{index}",
+            head_commit=HEAD,
+            critical_fingerprint=f"sha256:{index:064x}",
             command_scope="test",
             approved_command=f"pytest {index}",
             expires_at=expires_at,
@@ -85,8 +101,8 @@ def test_concurrent_trust_approve_and_revoke_keep_valid_json(tmp_path: Path) -> 
                 repo_id=f"new-{index}",
                 path=tmp_path,
                 remote_url=None,
-                head_commit="def",
-                critical_fingerprint=f"sha256:new-{index}",
+                head_commit="b" * 40,
+                critical_fingerprint=f"sha256:{index + 100:064x}",
                 command_scope="test",
                 approved_command=f"pytest {index}",
                 expires_at=expires_at,

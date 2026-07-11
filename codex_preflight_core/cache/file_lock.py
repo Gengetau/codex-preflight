@@ -10,6 +10,10 @@ else:
     import fcntl
 
 
+class CacheLockTimeoutError(TimeoutError):
+    pass
+
+
 @contextmanager
 def locked_cache_file(path: Path, *, timeout: float = 5.0) -> Iterator[None]:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -20,9 +24,9 @@ def locked_cache_file(path: Path, *, timeout: float = 5.0) -> Iterator[None]:
             try:
                 _lock(handle)
                 break
-            except OSError:
+            except OSError as error:
                 if time.monotonic() >= deadline:
-                    raise
+                    raise CacheLockTimeoutError("The cache lock timed out.") from error
                 time.sleep(0.01)
         try:
             yield
