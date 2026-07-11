@@ -35,6 +35,13 @@ from codex_preflight_mcp.remote_state import (
 
 _OBJECT_ID = re.compile(r"^[0-9a-f]{40}$")
 _TEMP_PREFIX = "cpf-r-"
+_DNS_SCRIPT = """import json
+import socket
+import sys
+
+answers = socket.getaddrinfo(sys.argv[1], 443, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP)
+print(json.dumps(sorted({str(answer[4][0]) for answer in answers})))
+"""
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 _WINDOWS_RESERVED = {
     "CON",
@@ -165,7 +172,10 @@ def resolve_public_addresses(
     timeout: int,
     *,
     getaddrinfo: Callable[..., list[tuple[Any, ...]]] = socket.getaddrinfo,
+    cancellation: CancellationToken | None = None,
 ) -> tuple[str, ...]:
+    if getaddrinfo is socket.getaddrinfo:
+        return _resolve_public_addresses_subprocess(host, timeout, cancellation or CancellationToken())
     executor = ThreadPoolExecutor(max_workers=1)
     future = executor.submit(
         getaddrinfo,
@@ -186,12 +196,54 @@ def resolve_public_addresses(
         ) from error
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
-    addresses: list[str] = []
+    raw_addresses: list[str] = []
     for answer in answers:
         try:
             address = str(answer[4][0])
-            parsed = ipaddress.ip_address(address)
         except (IndexError, TypeError, ValueError) as error:
+            raise _address_error() from error
+        raw_addresses.append(address)
+    return _validate_public_addresses(raw_addresses)
+
+
+def _resolve_public_addresses_subprocess(
+    host: str,
+    timeout: int,
+    cancellation: CancellationToken,
+) -> tuple[str, ...]:
+    try:
+        output = run_command(
+            [sys.executable, "-I", "-c", _DNS_SCRIPT, host],
+            cwd=None,
+            env=_resolver_environment(),
+            timeout=timeout,
+            monitor_root=None,
+            limits=ResourceLimits(),
+            cancellation=cancellation,
+        )
+    except RemoteOperationError as error:
+        if error.code in {"MCP_REMOTE_CANCELLED", "MCP_REMOTE_TIMEOUT"}:
+            raise
+        raise RemoteOperationError(
+            "MCP_REMOTE_ADDRESS_NOT_ALLOWED",
+            "GitHub DNS resolution failed closed.",
+            True,
+        ) from error
+    try:
+        payload = json.loads(output.decode("utf-8", "strict"))
+    except (UnicodeError, ValueError, json.JSONDecodeError) as error:
+        raise _address_error() from error
+    if not isinstance(payload, list) or not all(isinstance(item, str) for item in payload):
+        raise _address_error()
+    return _validate_public_addresses(payload)
+
+
+def _validate_public_addresses(raw_addresses: list[str]) -> tuple[str, ...]:
+    addresses: list[str] = []
+    for address in raw_addresses:
+        try:
+            parsed = ipaddress.ip_address(address)
+        except ValueError as error:
             raise _address_error() from error
         effective = parsed.ipv4_mapped if isinstance(parsed, ipaddress.IPv6Address) else None
         candidate = effective or parsed
@@ -211,6 +263,15 @@ def resolve_public_addresses(
     if not addresses:
         raise _address_error()
     return tuple(addresses)
+
+
+def _resolver_environment() -> dict[str, str]:
+    environment: dict[str, str] = {}
+    for name in ("PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT"):
+        if value := os.environ.get(name):
+            environment[name] = value
+    environment.update({"PYTHONIOENCODING": "utf-8", "PYTHONNOUSERSITE": "1", "PYTHONUTF8": "1"})
+    return environment
 
 
 def run_remote_operation(
@@ -418,7 +479,14 @@ def _execute_operation(
         cancellation=cancellation,
     )
     _check_deadline(deps.clock, deadline)
-    addresses = resolver("github.com", limits.dns_timeout_seconds)
+    if resolver is resolve_public_addresses:
+        addresses = resolve_public_addresses(
+            "github.com",
+            limits.dns_timeout_seconds,
+            cancellation=cancellation,
+        )
+    else:
+        addresses = resolver("github.com", limits.dns_timeout_seconds)
     network_git = [*git, "-c", f"http.curloptResolve={_curl_resolve_entry(addresses)}"]
     command_runner(
         [
@@ -956,7 +1024,7 @@ def run_command(
     cwd: Path | None,
     env: dict[str, str],
     timeout: int,
-    monitor_root: Path,
+    monitor_root: Path | None,
     limits: ResourceLimits,
     cancellation: CancellationToken,
 ) -> bytes:
@@ -995,12 +1063,14 @@ def run_command(
                 raise RemoteOperationError(
                     "MCP_REMOTE_TIMEOUT", "The bounded subprocess timed out.", True
                 ) from None
-            if directory_size(monitor_root) > limits.max_git_bytes:
+            if monitor_root is not None and directory_size(monitor_root) > limits.max_git_bytes:
                 terminate_process_tree(process)
                 raise _limit_error() from None
     if process.returncode != 0:
         raise _classify_subprocess_failure(args, stderr)
-    if len(stdout) + len(stderr) > limits.max_git_bytes or directory_size(monitor_root) > limits.max_git_bytes:
+    if len(stdout) + len(stderr) > limits.max_git_bytes or (
+        monitor_root is not None and directory_size(monitor_root) > limits.max_git_bytes
+    ):
         raise _limit_error()
     return stdout
 
@@ -1209,13 +1279,17 @@ def _operation_slot(canonical_url: str):
         raise _limit_error()
     with _REPOSITORY_LOCKS_GUARD:
         repository_lock = _REPOSITORY_LOCKS.setdefault(canonical_url, threading.Lock())
-    if not repository_lock.acquire(blocking=False):
+        acquired = repository_lock.acquire(blocking=False)
+    if not acquired:
         _GLOBAL_OPERATION_SLOTS.release()
         raise _limit_error()
     try:
         yield
     finally:
-        repository_lock.release()
+        with _REPOSITORY_LOCKS_GUARD:
+            repository_lock.release()
+            if _REPOSITORY_LOCKS.get(canonical_url) is repository_lock:
+                _REPOSITORY_LOCKS.pop(canonical_url, None)
         _GLOBAL_OPERATION_SLOTS.release()
 
 

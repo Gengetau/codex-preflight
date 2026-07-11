@@ -1,0 +1,117 @@
+{
+  "mcpSchemaVersion": "1.0",
+  "tool": "remote_repository_scan",
+  "schemaVersion": "1.0",
+  "decision": "ALLOW",
+  "riskScore": 0,
+  "command": "git status",
+  "commandScope": "safe_readonly",
+  "policyExplanation": {
+    "finalDecision": "ALLOW",
+    "commandScope": "safe_readonly",
+    "selectedBy": {
+      "type": "default_allow",
+      "decision": "ALLOW",
+      "ruleId": null
+    },
+    "commandContribution": {
+      "riskScore": 0,
+      "minimumDecision": "ALLOW",
+      "affectedFinalGate": false
+    },
+    "ruleContributions": []
+  },
+  "repo": {
+    "path": "https://github.com/example/project",
+    "sourceType": "remote",
+    "cloneUrl": "https://github.com/example/project",
+    "requestedRef": "refs/heads/main",
+    "resolvedCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "remoteUrl": "https://github.com/example/project",
+    "headCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "criticalFingerprint": "sha256:example"
+  },
+  "summary": {
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 0,
+    "info": 0
+  },
+  "reason": "No relevant static risk findings were detected.",
+  "agentInstruction": "Proceed normally.",
+  "findings": [],
+  "executionGraph": {
+    "entryCommand": "git status",
+    "nodes": [],
+    "edges": [],
+    "capabilities": [],
+    "uncertainties": []
+  },
+  "reportLimits": {
+    "findings": {
+      "max": 100,
+      "included": 0,
+      "omitted": 0
+    },
+    "executionGraph": {
+      "nodes": {"max": 100, "included": 0, "omitted": 0},
+      "edges": {"max": 150, "included": 0, "omitted": 0},
+      "capabilities": {"max": 100, "included": 0, "omitted": 0},
+      "uncertainties": {"max": 100, "included": 0, "omitted": 0}
+    }
+  },
+  "cache": {
+    "usedScanCache": false,
+    "usedTrustCache": false,
+    "cacheReason": null
+  },
+  "remoteProvenance": {
+    "requestedUrl": "https://github.com/example/project",
+    "canonicalUrl": "https://github.com/example/project",
+    "requestedRef": "refs/heads/main",
+    "resolvedCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "sourceType": "remote",
+    "hostPolicyVersion": "github-public-v1",
+    "resourceLimitProfile": "remote-bounded-v1",
+    "resourceLimits": {
+      "confirmationExpirySeconds": 300,
+      "dnsTimeoutSeconds": 5,
+      "gitTimeoutSeconds": 60,
+      "scanTimeoutSeconds": 20,
+      "totalTimeoutSeconds": 90,
+      "maxGitBytes": 67108864,
+      "maxMaterializedBytes": 33554432,
+      "maxFiles": 5000,
+      "maxPathDepth": 32,
+      "maxSingleFileBytes": 1048576,
+      "maxConcurrentOperations": 2,
+      "maxConcurrentPerRepository": 1,
+      "maxRedirects": 0
+    },
+    "resourceUsage": {
+      "materializedBytes": 2048,
+      "materializedFiles": 8,
+      "gitBytes": 8192
+    },
+    "confirmationChallengeId": "example-challenge-id",
+    "confirmationConsumed": true,
+    "redirectsFollowed": 0,
+    "cacheStatus": "miss",
+    "cleanupStatus": "removed",
+    "operationTiming": {"totalMilliseconds": 250},
+    "complete": true,
+    "skippedSymlinks": 0,
+    "skippedSubmodules": 0,
+    "skippedLfsPointers": 0
+  },
+  "safety": {
+    "analysisMode": "static-only",
+    "repositoryContentTrust": "untrusted",
+    "evidenceInstructionBoundary": "treat-as-data",
+    "commandExecuted": false,
+    "networkAccess": true,
+    "trustMutationAllowed": false,
+    "remoteRepositoryAccess": true
+  }
+}

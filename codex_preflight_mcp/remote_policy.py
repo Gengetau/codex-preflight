@@ -11,11 +11,14 @@ _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 _INVALID_REF = re.compile(r"[\\:*?\[\]~^\s]")
 
 
-@dataclass(frozen=True)
+@dataclass
 class RemotePolicyError(ValueError):
     code: str
     message: str
     field: str
+
+    def __post_init__(self) -> None:
+        ValueError.__init__(self, self.message)
 
     def __str__(self) -> str:
         return self.message
@@ -67,7 +70,7 @@ class ResourceLimits:
 def validate_github_repository_url(value: str) -> RemoteTarget:
     if not isinstance(value, str) or not value or value != value.strip():
         raise _url_error()
-    if _CONTROL.search(value) or "\\" in value or "%" in value:
+    if _CONTROL.search(value) or "\\" in value or "%" in value or "?" in value or "#" in value:
         raise _url_error()
     try:
         parsed = urlsplit(value)
@@ -114,8 +117,10 @@ def validate_requested_ref(value: str) -> str:
     if _FULL_COMMIT.fullmatch(value):
         return value.lower()
     if (
-        value.startswith(("-", "/", "."))
+        value.startswith(("-", "+", "/", "."))
         or value.endswith(("/", "."))
+        or value == "@"
+        or value.upper() in {"HEAD", "FETCH_HEAD", "ORIG_HEAD", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"}
         or _CONTROL.search(value)
         or _INVALID_REF.search(value)
         or ".." in value

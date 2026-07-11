@@ -97,6 +97,29 @@ def test_confirmation_concurrent_consume_has_one_winner() -> None:
     assert outcomes == ["MCP_REMOTE_CONFIRMATION_REPLAYED", "consumed"]
 
 
+@pytest.mark.parametrize("token", ["é.payload", "a" * 9000 + ".signature"])
+def test_confirmation_rejects_unicode_and_oversized_tokens_stably(token: str) -> None:
+    manager = RemoteConfirmationManager(secret=b"x" * 32, clock=Clock())
+
+    with pytest.raises(ConfirmationError) as caught:
+        consume(manager, token)
+
+    assert caught.value.code == "MCP_REMOTE_CONFIRMATION_INVALID"
+
+
+def test_confirmation_ledger_is_bounded_without_enabling_replay() -> None:
+    manager = RemoteConfirmationManager(secret=b"x" * 32, clock=Clock(), max_records=2)
+    first = issue(manager)
+    second = issue(manager)
+    third = issue(manager)
+
+    with pytest.raises(ConfirmationError) as evicted:
+        consume(manager, first.token)
+    assert evicted.value.code == "MCP_REMOTE_CONFIRMATION_INVALID"
+    assert consume(manager, second.token) == second.challenge_id
+    assert consume(manager, third.token) == third.challenge_id
+
+
 def test_first_remote_call_returns_challenge_without_network(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

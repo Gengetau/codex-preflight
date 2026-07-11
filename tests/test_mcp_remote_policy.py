@@ -46,7 +46,9 @@ def test_github_repository_url_canonicalization(value: str, canonical: str) -> N
         "https://github.com/owner/repo/extra",
         "https://github.com/owner/../repo",
         "https://github.com/owner/repo?ref=main",
+        "https://github.com/owner/repo?",
         "https://github.com/owner/repo#main",
+        "https://github.com/owner/repo#",
         "https://github.com/owner%2frepo/name",
         "https:\\github.com\\owner\\repo",
         "https://github.com/-owner/repo",
@@ -82,6 +84,10 @@ def test_requested_ref_accepts_explicit_safe_forms(value: str) -> None:
         "",
         " ",
         "-main",
+        "+refs/heads/main",
+        "@",
+        "HEAD",
+        "FETCH_HEAD",
         "refs/heads/*",
         "refs/heads/main..other",
         "refs/heads/main@{1}",
@@ -115,4 +121,3 @@ def test_resource_profile_has_exact_authorized_limits() -> None:
         "maxConcurrentPerRepository": 1,
         "maxRedirects": 0,
     }
-

@@ -16,9 +16,10 @@ def test_mcp_package_imports_without_cli_module() -> None:
     assert "codex_preflight_cli.main" not in sys.modules
 
 
-def test_mcp_tool_definitions_are_read_only_and_warn_about_evidence() -> None:
+def test_mcp_tool_definitions_are_read_only_and_warn_about_evidence(monkeypatch) -> None:
     from codex_preflight_mcp.server import tool_definitions
 
+    monkeypatch.delenv("CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN", raising=False)
     tools = tool_definitions()
     names = {tool["name"] for tool in tools}
     descriptions = "\n".join(str(tool["description"]) for tool in tools)
@@ -84,6 +85,8 @@ def test_static_tool_listing_does_not_probe_or_require_mcp_runtime(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     from codex_preflight_mcp import runtime_compatibility, server
+
+    monkeypatch.delenv("CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN", raising=False)
 
     def unexpected_runtime_import(_name: str) -> object:
         raise AssertionError("static listing must not import the optional MCP runtime")

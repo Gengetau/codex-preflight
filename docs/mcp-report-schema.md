@@ -9,12 +9,12 @@ within the same major version.
 
 ## Common MCP fields
 
-Both MCP tools return these stable fields:
+Every successful MCP tool result returns these stable fields:
 
 | Field | Meaning |
 | --- | --- |
 | `mcpSchemaVersion` | Version of the MCP-facing result contract. |
-| `tool` | Exact tool identity: `preflight_check` or `corpus_scan`. |
+| `tool` | Exact tool identity: `preflight_check`, `corpus_scan`, or opt-in `remote_repository_scan`. |
 | `safety` | Stable static-analysis and authority-boundary metadata. |
 
 The `safety` object contains:
@@ -33,6 +33,11 @@ The `safety` object contains:
 
 These values describe enforced runtime behavior, not repository claims. Repository-controlled
 strings never change these fields.
+
+For a confirmed successful `remote_repository_scan`, `networkAccess` and
+`remoteRepositoryAccess` are `true`. The other values remain unchanged: analysis is static-only,
+content is untrusted treat-as-data, no planned command runs, and trust mutation is false. Errors
+are not successful results and never claim remote access success.
 
 ## `preflight_check` successful result
 
@@ -129,6 +134,42 @@ MCP accepts only `format=json`. Markdown and text output remain CLI-only.
 negative-control labels, and adds `mcpSchemaVersion`, `tool`, and `safety`. It executes only the
 bundled synthetic corpus with static analysis.
 
+## `remote_repository_scan` successful result
+
+This result is possible only when startup registration was enabled, a one-time confirmation was
+consumed, the requested ref resolved to an immutable commit, bounded acquisition/static scan
+completed, cache/audit operations succeeded, and temporary cleanup was verified.
+
+It preserves the core report fields and adds `remoteProvenance`:
+
+```text
+requestedUrl
+canonicalUrl
+requestedRef
+resolvedCommit
+sourceType
+hostPolicyVersion
+resourceLimitProfile
+resourceLimits
+resourceUsage
+confirmationChallengeId
+confirmationConsumed
+redirectsFollowed
+cacheStatus
+cleanupStatus
+operationTiming
+complete
+skippedSymlinks
+skippedSubmodules
+skippedLfsPointers
+```
+
+`repo.path` is the canonical repository URL, never a temporary local path. `resolvedCommit` is a
+verified 40-hex commit. `redirectsFollowed` is zero, `confirmationConsumed` is true,
+`cleanupStatus` is `removed`, and `complete` is true on every successful response. Cache hits are
+identified only after confirmation and immutable ref resolution. Tokens, nonces, credentials,
+environment values, subprocess output, and temporary paths are never returned.
+
 ## Structured errors
 
 Expected MCP input failures are raised through the MCP runtime error mechanism. The error message
@@ -165,18 +206,46 @@ credentials, environment variables, or internal paths that the caller did not su
 | `MCP_FORMAT_UNSUPPORTED` | A format other than JSON was requested. |
 | `MCP_ARGUMENT_UNSUPPORTED` | An unsupported argument was supplied. |
 | `MCP_CASE_NOT_FOUND` | The requested bundled corpus case does not exist. |
+| `MCP_REMOTE_DISABLED` | Remote registration is disabled for this process. |
+| `MCP_REMOTE_URL_INVALID` | The repository URL is not an accepted canonical GitHub HTTPS form. |
+| `MCP_REMOTE_HOST_NOT_ALLOWED` | The destination host is outside policy. |
+| `MCP_REMOTE_ADDRESS_NOT_ALLOWED` | DNS returned an empty, mixed, or non-public address set. |
+| `MCP_REMOTE_REF_INVALID` | The requested ref failed lexical policy. |
+| `MCP_REMOTE_CONFIRMATION_REQUIRED` | Review the fixed operation and retry once with its token. |
+| `MCP_REMOTE_CONFIRMATION_INVALID` | The token is malformed or bound to another operation/policy. |
+| `MCP_REMOTE_CONFIRMATION_EXPIRED` | The token exceeded its 300-second lifetime. |
+| `MCP_REMOTE_CONFIRMATION_REPLAYED` | The one-time token was already consumed. |
+| `MCP_REMOTE_REF_NOT_FOUND` | The ref did not resolve to the required immutable commit. |
+| `MCP_REMOTE_REDIRECT_NOT_ALLOWED` | The endpoint attempted a forbidden redirect. |
+| `MCP_REMOTE_AUTH_NOT_ALLOWED` | The endpoint required unauthorized authentication. |
+| `MCP_REMOTE_TIMEOUT` | A fixed subprocess or total deadline expired. |
+| `MCP_REMOTE_CANCELLED` | Client or core cancellation stopped the operation. |
+| `MCP_REMOTE_LIMIT_EXCEEDED` | A fixed time, disk, file, byte, depth, or concurrency limit was exceeded. |
+| `MCP_REMOTE_TREE_UNSAFE` | The tree contained an unsafe path, collision, or unsupported mode. |
+| `MCP_REMOTE_ACQUISITION_FAILED` | Bounded Git acquisition failed without exposing process output. |
+| `MCP_REMOTE_SCAN_FAILED` | The isolated static worker failed. |
+| `MCP_REMOTE_CACHE_FAILED` | The dedicated remote cache failed closed. |
+| `MCP_REMOTE_AUDIT_FAILED` | The redacted remote audit log failed closed. |
+| `MCP_REMOTE_CLEANUP_FAILED` | Verified removal of operation-owned temporary state failed. |
 | `MCP_INTERNAL_ERROR` | An unexpected failure was hidden behind a safe generic response. |
 
 Errors are not successful report objects and therefore do not carry the successful-result schema.
 
 ## Authority boundary
 
-The runtime registers exactly two tools:
+The default runtime registers exactly two tools:
 
 ```text
 preflight_check
 corpus_scan
 ```
 
-It does not expose remote repository scanning, command execution, trust listing, trust approval,
-trust revocation, filesystem mutation, or network access.
+With exact startup flag `CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN=1`, registration adds only:
+
+```text
+remote_repository_scan
+```
+
+No mode exposes command execution, trust listing, trust approval, trust revocation, arbitrary
+filesystem mutation, arbitrary network destinations, credentials, or proxy control. Removing the
+flag and restarting restores the default two-tool, no-network inventory.

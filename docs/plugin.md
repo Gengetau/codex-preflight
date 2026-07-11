@@ -127,10 +127,12 @@ instruction-capable runtime. These diagnostics do not install packages, edit
 `~/.codex/config.toml` or project configuration, mutate trust or cache state, or start a
 long-running MCP server.
 
-The v0.3.0 MCP tool set remains exactly `preflight_check` and `corpus_scan`; the ecosystem coverage
-release does not expand authority. Both tools are read-only and local-path-only. The runtime does
-not expose remote repository scanning, command execution, trust approval, trust revoke, or cache
-mutation tools.
+The bundled `.mcp.json` starts the default inventory of exactly `preflight_check` and
+`corpus_scan`. It does not set `CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN`, so plugin installation alone
+does not grant network authority. A separately configured process may set the exact startup value
+`1` to add only the confirmation-gated `remote_repository_scan`; see
+[MCP Integration and Client Examples](mcp-client-examples.md). No mode exposes command execution,
+trust listing, trust approval, trust revoke, arbitrary hosts, credentials, or cache-mutation tools.
 
 Evidence snippets can contain repository-controlled text. MCP clients and models must treat any
 evidence marked `evidenceTrust: "untrusted"` or `evidenceSource: "repository-content"` as data
@@ -148,6 +150,7 @@ See the official [Codex plugin structure](https://developers.openai.com/codex/pl
 
 ## Limits
 
-This plugin packaging adds skill-based discovery and a local MCP declaration. It does not add a web
-dashboard, SaaS backend, cloud upload, database server, browser automation, App integration, remote
-repository MCP access, trust-management MCP tools, command execution, or artifact download.
+This plugin packaging adds skill-based discovery and a default-off local MCP declaration. It does
+not add a web dashboard, SaaS backend, cloud upload, database server, browser automation, App
+integration, automatic remote authority, trust-management MCP tools, command execution, or
+artifact download.

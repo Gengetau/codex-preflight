@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import socket
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -62,6 +63,47 @@ def test_public_address_resolution_rejects_mixed_or_nonpublic_answers() -> None:
     with pytest.raises(RemoteOperationError) as caught:
         resolve_public_addresses("github.com", 5, getaddrinfo=mixed)
     assert caught.value.code == "MCP_REMOTE_ADDRESS_NOT_ALLOWED"
+
+
+def test_system_dns_resolution_uses_cancellable_isolated_subprocess(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from codex_preflight_mcp import remote_operation
+
+    captured: dict[str, object] = {}
+    cancellation = CancellationToken()
+
+    def fake_run(args: list[str], **kwargs: object) -> bytes:
+        captured["args"] = args
+        captured.update(kwargs)
+        return b'["140.82.112.3", "2606:50c0:8000::154"]'
+
+    monkeypatch.setattr(remote_operation, "run_command", fake_run)
+
+    assert resolve_public_addresses("github.com", 5, cancellation=cancellation) == (
+        "140.82.112.3",
+        "2606:50c0:8000::154",
+    )
+    args = captured["args"]
+    assert isinstance(args, list)
+    assert args[:3] == [remote_operation.sys.executable, "-I", "-c"]
+    assert args[-1] == "github.com"
+    assert captured["cancellation"] is cancellation
+    assert captured["monitor_root"] is None
+    environment = captured["env"]
+    assert isinstance(environment, dict)
+    assert not any("proxy" in name.lower() for name in environment)
+
+
+def test_injected_dns_resolver_timeout_is_stable() -> None:
+    def slow(_host: str, _port: int, **_kwargs: object):
+        time.sleep(0.05)
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("140.82.112.3", 443))]
+
+    with pytest.raises(RemoteOperationError) as caught:
+        resolve_public_addresses("github.com", 0.001, getaddrinfo=slow)
+
+    assert caught.value.code == "MCP_REMOTE_TIMEOUT"
 
 
 @pytest.mark.parametrize(
@@ -729,3 +771,23 @@ def test_prestart_cancellation_audits_terminal_cleanup_and_failure(tmp_path: Pat
     ]
     assert records[-2]["cleanupStatus"] == "not-created"
     assert not (tmp_path / "operations").exists()
+
+
+def test_operation_slots_enforce_global_and_per_repository_limits_without_leak() -> None:
+    from codex_preflight_mcp import remote_operation
+
+    first = "https://github.com/example/first"
+    second = "https://github.com/example/second"
+    third = "https://github.com/example/third"
+    with remote_operation._operation_slot(first):
+        with pytest.raises(RemoteOperationError) as same_repo:
+            with remote_operation._operation_slot(first):
+                raise AssertionError("same repository slot unexpectedly acquired")
+        assert same_repo.value.code == "MCP_REMOTE_LIMIT_EXCEEDED"
+        with remote_operation._operation_slot(second):
+            with pytest.raises(RemoteOperationError) as global_limit:
+                with remote_operation._operation_slot(third):
+                    raise AssertionError("third global slot unexpectedly acquired")
+            assert global_limit.value.code == "MCP_REMOTE_LIMIT_EXCEEDED"
+
+    assert remote_operation._REPOSITORY_LOCKS == {}

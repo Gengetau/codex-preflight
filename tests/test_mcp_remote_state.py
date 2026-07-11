@@ -114,6 +114,24 @@ def test_remote_cache_corruption_fails_closed(tmp_path: Path) -> None:
     assert caught.value.code == "MCP_REMOTE_CACHE_FAILED"
 
 
+def test_remote_cache_detects_tampering_and_discards_prior_process_entries(tmp_path: Path) -> None:
+    path = tmp_path / "remote" / "scan-cache.json"
+    key = build_remote_cache_key(URL, COMMIT)
+    first_process = RemoteScanCache(path, secret=b"x" * 32)
+    first_process.store(key, report())
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload[0]["report"]["decision"] = "ALLOW"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(RemoteStateError) as tampered:
+        first_process.get(key)
+    assert tampered.value.code == "MCP_REMOTE_CACHE_FAILED"
+
+    second_process = RemoteScanCache(path, secret=b"y" * 32)
+    assert second_process.get(key) is None
+    assert json.loads(path.read_text(encoding="utf-8")) == []
+
+
 def test_remote_audit_is_redacted_append_only_and_schema_bounded(tmp_path: Path) -> None:
     path = tmp_path / "remote" / "audit.jsonl"
     audit = RemoteAuditLog(path, clock=Clock())

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import re
+import secrets
 import time
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
@@ -22,6 +24,7 @@ REMOTE_CACHE_MAX_REPORT_BYTES = 1024 * 1024
 REMOTE_CACHE_MAX_TOTAL_BYTES = 8 * 1024 * 1024
 REMOTE_AUDIT_MAX_BYTES = 1024 * 1024
 REMOTE_AUDIT_MAX_SEGMENTS = 3
+_PROCESS_CACHE_SECRET = secrets.token_bytes(32)
 
 _COMMIT = re.compile(r"^[0-9a-f]{40}$")
 _SAFE_IDENTIFIER = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
@@ -86,6 +89,7 @@ class RemoteScanCache:
         max_entries: int = REMOTE_CACHE_MAX_ENTRIES,
         max_report_bytes: int = REMOTE_CACHE_MAX_REPORT_BYTES,
         max_total_bytes: int = REMOTE_CACHE_MAX_TOTAL_BYTES,
+        secret: bytes | None = None,
     ) -> None:
         self.path = path
         self.clock = clock
@@ -93,6 +97,8 @@ class RemoteScanCache:
         self.max_entries = max_entries
         self.max_report_bytes = max_report_bytes
         self.max_total_bytes = max_total_bytes
+        self._secret = secret or _PROCESS_CACHE_SECRET
+        self._key_id = hashlib.sha256(self._secret).hexdigest()[:16]
 
     def get(self, key: dict[str, str]) -> dict[str, Any] | None:
         try:
@@ -124,7 +130,9 @@ class RemoteScanCache:
             "createdAt": now,
             "expiresAt": now + self.ttl_seconds,
             "report": copied_report,
+            "keyId": self._key_id,
         }
+        entry["signature"] = self._sign(entry)
         try:
             with locked_cache_file(self.path):
                 entries = [item for item in self._active(self._load_unlocked()) if item["key"] != key]
@@ -155,7 +163,12 @@ class RemoteScanCache:
         for entry in payload:
             if not _valid_cache_entry(entry):
                 raise _cache_error()
-        return payload
+        current_entries = [entry for entry in payload if entry["keyId"] == self._key_id]
+        if any(not hmac.compare_digest(entry["signature"], self._sign(entry)) for entry in current_entries):
+            raise _cache_error()
+        if len(current_entries) != len(payload):
+            self._write_unlocked(current_entries)
+        return current_entries
 
     def _write_unlocked(self, entries: list[dict[str, Any]]) -> None:
         if _encoded_size(entries) > self.max_total_bytes:
@@ -163,6 +176,11 @@ class RemoteScanCache:
         write_json_atomic(self.path, entries)
         if self.path.stat().st_size > self.max_total_bytes:
             raise _cache_error()
+
+    def _sign(self, entry: dict[str, Any]) -> str:
+        payload = {name: value for name, value in entry.items() if name != "signature"}
+        encoded = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        return hmac.new(self._secret, encoded, hashlib.sha256).hexdigest()
 
 
 class RemoteAuditLog:
@@ -271,7 +289,14 @@ class RemoteAuditLog:
 
 
 def _valid_cache_entry(entry: object) -> bool:
-    if not isinstance(entry, dict) or set(entry) != {"key", "createdAt", "expiresAt", "report"}:
+    if not isinstance(entry, dict) or set(entry) != {
+        "key",
+        "createdAt",
+        "expiresAt",
+        "report",
+        "keyId",
+        "signature",
+    }:
         return False
     key = entry.get("key")
     report = entry.get("report")
@@ -281,6 +306,10 @@ def _valid_cache_entry(entry: object) -> bool:
         and isinstance(entry.get("createdAt"), (int, float))
         and isinstance(entry.get("expiresAt"), (int, float))
         and isinstance(report, dict)
+        and isinstance(entry.get("keyId"), str)
+        and bool(re.fullmatch(r"[0-9a-f]{16}", entry["keyId"]))
+        and isinstance(entry.get("signature"), str)
+        and bool(re.fullmatch(r"[0-9a-f]{64}", entry["signature"]))
     )
 
 

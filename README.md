@@ -39,6 +39,7 @@ local indirection, surfaces uncertainty, and gives the user a decision with evid
 
 - Local repository preflight.
 - External GitHub repository scan via `--repo`.
+- Default-off, confirmation-gated MCP static scan for public GitHub HTTPS repositories.
 - Composite command classification.
 - Planned-command risk findings for remote shell pipelines, encoded PowerShell, dangerous Docker
   flags and mounts, and inline interpreter execution.
@@ -86,8 +87,9 @@ call GitHub metadata APIs.
 ## Safety Model
 
 Codex Preflight is local-first: repository files are read on the local machine, and reports are
-generated locally. The scanner does not run package install scripts, shell payloads, Docker, MCP
-servers, test commands from fixtures, or repository code. The CLI is intentionally scanner-first:
+generated locally. Remote MCP access exists only behind an explicit startup flag and one-time
+confirmation, and materializes a bounded static snapshot locally. The scanner does not run package
+install scripts, shell payloads, Docker, MCP servers, test commands from fixtures, or repository code. The CLI is intentionally scanner-first:
 it does not include a web dashboard, SaaS backend, cloud upload, database server, browser
 extension, or IDE extension.
 
@@ -214,15 +216,29 @@ More details are in [docs/plugin.md](docs/plugin.md).
 
 ## MCP
 
-The MCP-facing package is read-only and local-path-only. It exposes static preflight checks
-and bundled corpus scans, but does not expose remote repository clone, command execution, trust
-approval, trust revoke, or cache mutation tools. Evidence snippets from repositories are marked as
-untrusted data. Server initialization also supplies fixed safety instructions that require
-`ASK_USER` and `BLOCK` decisions to stop automatic execution.
+The MCP-facing package is static-only and never executes repository code or planned commands.
+Evidence snippets are marked `untrusted` and `treat-as-data`; no MCP mode exposes trust listing,
+trust mutation, command execution, arbitrary hosts, credentials, proxy control, or artifact
+execution. Server initialization supplies fixed safety instructions requiring `ASK_USER` and
+`BLOCK` decisions to stop automatic execution.
 
-The runtime authority remains exactly two tools: `preflight_check` and `corpus_scan`. The v0.3.1
-reporting release adds policy explanation and local report comparison only; it does not add MCP
-capabilities.
+The default runtime authority remains exactly two tools:
+
+```text
+preflight_check
+corpus_scan
+```
+
+v0.3.2 adds a separately gated public GitHub scanner. It is absent unless the server starts with
+the exact environment value `CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN=1`; enabled registration adds only
+`remote_repository_scan`. The first valid call performs lexical validation and returns a one-time
+confirmation challenge before DNS or network access. A confirmed call uses public-address
+validation and pinning, zero redirects, bounded shallow bare Git acquisition, regular-file-only
+materialization, an isolated static worker, dedicated remote cache/audit state, and verified
+cleanup. Confirmation never creates trust.
+
+Disable remote authority by removing the flag and restarting the MCP process. The bundled plugin
+configuration does not set the flag, so its default remains the two local/no-network tools.
 
 See [docs/mcp.md](docs/mcp.md) for MCP safety notes and
 [docs/mcp-client-examples.md](docs/mcp-client-examples.md) for machine-checked integration examples.

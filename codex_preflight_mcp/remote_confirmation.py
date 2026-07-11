@@ -15,10 +15,13 @@ from uuid import uuid4
 from codex_preflight_mcp.remote_policy import RemoteTarget, ResourceLimits
 
 
-@dataclass(frozen=True)
+@dataclass
 class ConfirmationError(ValueError):
     code: str
     message: str
+
+    def __post_init__(self) -> None:
+        ValueError.__init__(self, self.message)
 
     def __str__(self) -> str:
         return self.message
@@ -46,12 +49,16 @@ class RemoteConfirmationManager:
         *,
         secret: bytes | None = None,
         clock: Callable[[], float] = time.time,
+        max_records: int = 4096,
     ) -> None:
+        if max_records < 1:
+            raise ValueError("max_records must be positive")
         self._secret = secret or secrets.token_bytes(32)
         self._clock = clock
         self._key_id = hashlib.sha256(self._secret).hexdigest()[:16]
         self._records: dict[str, _ChallengeRecord] = {}
         self._lock = threading.Lock()
+        self._max_records = max_records
 
     def issue(self, target: RemoteTarget, requested_ref: str, limits: ResourceLimits) -> RemoteChallenge:
         now = self._clock()
@@ -69,6 +76,7 @@ class RemoteConfirmationManager:
         encoded = _encode_json(payload)
         signature = _encode_bytes(hmac.new(self._secret, encoded.encode("ascii"), hashlib.sha256).digest())
         with self._lock:
+            self._prune_and_bound(now)
             self._records[challenge_id] = _ChallengeRecord(fingerprint, expires_at)
         return RemoteChallenge(challenge_id, f"{encoded}.{signature}", now, expires_at, self._key_id)
 
@@ -104,12 +112,15 @@ class RemoteConfirmationManager:
         return challenge_id
 
     def _decode_and_verify(self, token: str) -> dict[str, Any]:
-        if not isinstance(token, str) or not token or token.count(".") != 1:
+        if not isinstance(token, str) or not token or len(token) > 8192 or token.count(".") != 1:
             raise _invalid()
         encoded, supplied_signature = token.split(".", 1)
-        expected_signature = _encode_bytes(
-            hmac.new(self._secret, encoded.encode("ascii", "strict"), hashlib.sha256).digest()
-        )
+        try:
+            expected_signature = _encode_bytes(
+                hmac.new(self._secret, encoded.encode("ascii", "strict"), hashlib.sha256).digest()
+            )
+        except UnicodeError as error:
+            raise _invalid() from error
         if not hmac.compare_digest(supplied_signature, expected_signature):
             raise _invalid()
         try:
@@ -119,6 +130,15 @@ class RemoteConfirmationManager:
         if not isinstance(payload, dict):
             raise _invalid()
         return payload
+
+    def _prune_and_bound(self, now: float) -> None:
+        self._records = {
+            challenge_id: record
+            for challenge_id, record in self._records.items()
+            if record.expires_at >= now
+        }
+        while len(self._records) >= self._max_records:
+            self._records.pop(next(iter(self._records)))
 
 
 def _fingerprint(target: RemoteTarget, requested_ref: str, limits: ResourceLimits) -> str:
