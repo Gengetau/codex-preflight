@@ -281,9 +281,10 @@ Compare two existing local JSON reports without scanning or executing report con
 codex-preflight report compare baseline.json candidate.json --format markdown
 ```
 
-Comparison covers decisions, command classifications, findings, policy contributions, execution
-capabilities, and uncertainties. Inputs are bounded local files and all report text remains
-untrusted data.
+Comparison covers decisions, command classifications, policy selectors, command contributions,
+findings, policy rule contributions, execution capabilities, and uncertainties. Inputs are bounded
+local files; UNC, URL, scp-like, and clone-like forms are rejected before filesystem access, and
+all report text remains untrusted data.
 
 README link-poisoning findings use `README_` rule IDs:
 

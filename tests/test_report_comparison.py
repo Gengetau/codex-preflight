@@ -4,6 +4,8 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+import codex_preflight_cli.main as cli_main
+import codex_preflight_core.report.comparison as comparison_module
 from codex_preflight_cli.main import app
 from codex_preflight_core.report.comparison import (
     MAX_REPORT_BYTES,
@@ -21,6 +23,8 @@ def report(
     capabilities: list[dict] | None = None,
     uncertainties: list[dict] | None = None,
     contributions: list[dict] | None = None,
+    selection: dict | None = None,
+    command_contribution: dict | None = None,
     path: str = "C:/volatile/repo",
 ) -> dict:
     return {
@@ -38,8 +42,12 @@ def report(
         "policyExplanation": {
             "finalDecision": decision,
             "commandScope": scope,
-            "selectedBy": {"type": "policy_matrix", "decision": decision, "ruleId": "RULE_A"},
-            "commandContribution": {
+            "selectedBy": selection
+            if selection is not None
+            else {"type": "policy_matrix", "decision": decision, "ruleId": "RULE_A"},
+            "commandContribution": command_contribution
+            if command_contribution is not None
+            else {
                 "riskScore": 3,
                 "minimumDecision": "ALLOW",
                 "affectedFinalGate": False,
@@ -113,6 +121,46 @@ def test_compare_reports_distinguishes_added_removed_changed_and_unchanged(tmp_p
     assert comparison["policyContributions"]["changed"][0]["identity"] == "RULE_A"
 
 
+def test_compare_explains_policy_selection_and_command_contribution_changes(tmp_path: Path) -> None:
+    baseline = tmp_path / "baseline.json"
+    candidate = tmp_path / "candidate.json"
+    write(
+        baseline,
+        report(
+            selection={"type": "risk_score", "decision": "WARN", "ruleId": None},
+            command_contribution={
+                "riskScore": 10,
+                "minimumDecision": "WARN",
+                "affectedFinalGate": True,
+            },
+        ),
+    )
+    write(
+        candidate,
+        report(
+            selection={"type": "policy_matrix", "decision": "WARN", "ruleId": "RULE_A"},
+            command_contribution={
+                "riskScore": 3,
+                "minimumDecision": "ALLOW",
+                "affectedFinalGate": False,
+            },
+        ),
+    )
+
+    comparison = compare_report_files(baseline, candidate)
+    markdown = render_report_comparison_markdown(comparison)
+
+    assert comparison["changed"] is True
+    assert comparison["policySelection"]["changed"] is True
+    assert comparison["commandContribution"]["changed"] is True
+    assert "Policy selection:" in markdown
+    assert "risk_score / WARN / none" in markdown
+    assert "policy_matrix / WARN / RULE_A" in markdown
+    assert "Command contribution:" in markdown
+    assert "10 / WARN / gate" in markdown
+    assert "3 / ALLOW / report-only" in markdown
+
+
 def test_compare_ignores_volatile_metadata_and_preserves_untrusted_text_as_data(tmp_path: Path) -> None:
     baseline = tmp_path / "baseline.json"
     candidate = tmp_path / "candidate.json"
@@ -169,6 +217,67 @@ def test_compare_rejects_oversized_report(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
+    "remote_path",
+    [
+        r"\\server\share\report.json",
+        "//server/share/report.json",
+        "https://example.com/report.json",
+        "file:///tmp/report.json",
+        "git@example.com:owner/report.json",
+        "git clone https://example.com/owner/repo",
+    ],
+)
+@pytest.mark.parametrize("position", ["baseline", "candidate"])
+def test_report_compare_rejects_remote_like_inputs_before_filesystem_access(
+    monkeypatch: pytest.MonkeyPatch,
+    remote_path: str,
+    position: str,
+) -> None:
+    def unexpected_access(*_args: object, **_kwargs: object) -> dict:
+        raise AssertionError("remote-like path reached the filesystem")
+
+    monkeypatch.setattr(comparison_module, "_load_report", unexpected_access)
+    runner = CliRunner()
+    arguments = (
+        [remote_path, "candidate.json"]
+        if position == "baseline"
+        else ["baseline.json", remote_path]
+    )
+
+    result = runner.invoke(app, ["report", "compare", *arguments])
+
+    assert result.exit_code == 2
+    assert json.loads(result.stderr)["error"]["code"] == "remote_path_not_allowed"
+
+
+@pytest.mark.parametrize(
+    "remote_path",
+    [
+        r"\\server\share\comparison.json",
+        "https://example.com/comparison.json",
+        "git@example.com:owner/comparison.json",
+    ],
+)
+def test_report_compare_rejects_remote_like_output_before_reading_inputs(
+    monkeypatch: pytest.MonkeyPatch,
+    remote_path: str,
+) -> None:
+    def unexpected_access(*_args: object, **_kwargs: object) -> dict:
+        raise AssertionError("output validation did not run before input access")
+
+    monkeypatch.setattr(cli_main, "compare_report_files", unexpected_access)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        ["report", "compare", "baseline.json", "candidate.json", "--output", remote_path],
+    )
+
+    assert result.exit_code == 2
+    assert json.loads(result.stderr)["error"]["code"] == "remote_path_not_allowed"
+
+
+@pytest.mark.parametrize(
     ("collection", "value"),
     [
         ("findings", ["not-an-object"]),
@@ -198,6 +307,62 @@ def test_compare_rejects_incompatible_collection_shapes(
         compare_report_files(baseline, candidate)
 
     assert captured.value.code == "incompatible_report"
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "schema_version_not_string",
+        "decision_not_string",
+        "finding_identity_missing",
+        "capability_identity_missing",
+        "uncertainty_identity_missing",
+        "policy_identity_missing",
+        "selection_not_object",
+        "command_contribution_not_object",
+    ],
+)
+def test_compare_rejects_incompatible_scalar_and_identity_shapes(tmp_path: Path, case: str) -> None:
+    baseline = tmp_path / "baseline.json"
+    candidate = tmp_path / "candidate.json"
+    payload = report()
+    if case == "schema_version_not_string":
+        payload["schemaVersion"] = []
+    elif case == "decision_not_string":
+        payload["decision"] = []
+    elif case == "finding_identity_missing":
+        payload["findings"] = [{"ruleId": "", "file": "a.txt", "line": 1}]
+    elif case == "capability_identity_missing":
+        payload["executionGraph"]["capabilities"] = [{"ruleId": "CAP", "file": "a.txt"}]
+    elif case == "uncertainty_identity_missing":
+        payload["executionGraph"]["uncertainties"] = [{"ruleId": "UNCERTAIN"}]
+    elif case == "policy_identity_missing":
+        payload["policyExplanation"]["ruleContributions"] = [{}]
+    elif case == "selection_not_object":
+        payload["policyExplanation"]["selectedBy"] = []
+    else:
+        payload["policyExplanation"]["commandContribution"] = []
+    write(baseline, payload)
+    write(candidate, report())
+
+    with pytest.raises(ReportComparisonError) as captured:
+        compare_report_files(baseline, candidate)
+
+    assert captured.value.code == "incompatible_report"
+
+
+def test_report_compare_cli_structures_unhashable_scalar_errors(tmp_path: Path) -> None:
+    baseline = tmp_path / "baseline.json"
+    candidate = tmp_path / "candidate.json"
+    payload = report()
+    payload["schemaVersion"] = []
+    write(baseline, payload)
+    write(candidate, report())
+
+    result = CliRunner().invoke(app, ["report", "compare", str(baseline), str(candidate)])
+
+    assert result.exit_code == 2
+    assert json.loads(result.stderr)["error"]["code"] == "incompatible_report"
 
 
 def test_report_compare_cli_supports_json_markdown_and_structured_errors(tmp_path: Path) -> None:

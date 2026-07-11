@@ -27,4 +27,5 @@ compilers, package managers, or repository code.
 Common Cargo registry mirrors, Cargo aliases, and Go module replacements can be legitimate. They
 remain warnings because they alter dependency resolution or command meaning and should be visible
 before build and test commands. Clean minimal Cargo and Go projects remain `ALLOW`; active and
-commented replacement forms have separate positive and negative controls.
+commented single-line and block-form replacement forms have separate positive and negative
+controls. Clean controls include representative minimal Rust and Go source files.

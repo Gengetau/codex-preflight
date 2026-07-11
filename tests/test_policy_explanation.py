@@ -4,6 +4,7 @@ import pytest
 
 from codex_preflight_core.command.classifier import CommandClassification, classify_command
 from codex_preflight_core.command.scope import CommandScope
+from codex_preflight_core.policy.decision import Decision, PolicyResult
 from codex_preflight_core.policy.engine import evaluate_policy
 from codex_preflight_core.policy.explanation import build_policy_explanation
 from codex_preflight_core.preflight import run_preflight
@@ -100,6 +101,72 @@ def test_policy_explanation_selects_hard_block_rule_deterministically() -> None:
         "COMMAND_REMOTE_SHELL_PIPE",
         "SECRET_PRIVATE_KEY",
     ]
+
+
+@pytest.mark.parametrize(
+    "selector",
+    [
+        "trust_approval",
+        "hard_block_rule",
+        "command_scope",
+        "scope_adjustment",
+        "policy_matrix",
+        "risk_score",
+        "no_gate",
+    ],
+)
+def test_all_policy_selector_paths_render_complete_markdown(
+    tmp_path: Path,
+    selector: str,
+) -> None:
+    trusted = False
+    if selector == "trust_approval":
+        findings = [finding("RUST_CARGO_ALIAS", Severity.LOW)]
+        classification = CommandClassification("cargo build", CommandScope.BUILD, "Synthetic scope.")
+        evaluated = evaluate_policy(findings, classification)
+        policy = PolicyResult(Decision.ALLOW, evaluated.risk_score, "Trusted.", "Proceed.")
+        trusted = True
+    elif selector == "hard_block_rule":
+        findings = [finding("SECRET_PRIVATE_KEY", Severity.CRITICAL)]
+        classification = CommandClassification("cargo build", CommandScope.BUILD, "Synthetic scope.")
+        policy = evaluate_policy(findings, classification)
+    elif selector == "command_scope":
+        findings = []
+        classification = CommandClassification("custom", CommandScope.UNKNOWN_SHELL, "Synthetic scope.")
+        policy = evaluate_policy(findings, classification)
+    elif selector == "scope_adjustment":
+        findings = [finding("UNMAPPED_HIGH", Severity.HIGH)]
+        classification = CommandClassification("git status", CommandScope.SAFE_READONLY, "Synthetic scope.")
+        policy = evaluate_policy(findings, classification)
+    elif selector == "policy_matrix":
+        findings = [finding("RUST_CARGO_ALIAS", Severity.LOW)]
+        classification = CommandClassification("cargo build", CommandScope.BUILD, "Synthetic scope.")
+        policy = evaluate_policy(findings, classification)
+    elif selector == "risk_score":
+        findings = [finding("UNMAPPED_HIGH", Severity.HIGH)]
+        classification = CommandClassification("cargo build", CommandScope.BUILD, "Synthetic scope.")
+        policy = evaluate_policy(findings, classification)
+    else:
+        findings = []
+        classification = CommandClassification("cargo build", CommandScope.BUILD, "Synthetic scope.")
+        policy = evaluate_policy(findings, classification)
+
+    explanation = build_policy_explanation(findings, classification, policy, trusted=trusted)
+    report = run_preflight(tmp_path, "git status", use_cache=False)
+    report["policyExplanation"] = explanation
+    markdown = render_markdown_report(report)
+
+    assert explanation["selectedBy"]["type"] == selector
+    assert f"Selector type: `{selector}`" in markdown
+    assert f"Selector decision: `{explanation['selectedBy']['decision']}`" in markdown
+    assert f"Selector rule: `{explanation['selectedBy']['ruleId'] or 'none'}`" in markdown
+    assert f"Command risk score: `{explanation['commandContribution']['riskScore']}`" in markdown
+    assert (
+        f"Command minimum decision: `{explanation['commandContribution']['minimumDecision']}`"
+        in markdown
+    )
+    expected_effect = "gate" if explanation["commandContribution"]["affectedFinalGate"] else "report-only"
+    assert f"Command gate effect: `{expected_effect}`" in markdown
 
 
 def test_json_and_markdown_reports_explain_policy_without_changing_existing_fields(tmp_path: Path) -> None:

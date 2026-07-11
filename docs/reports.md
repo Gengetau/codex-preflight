@@ -21,13 +21,15 @@ The additive JSON `policyExplanation` object records:
 - the matched matrix minimum, hard-block flag, rationale, finding count, and rule risk score
 - `affectedFinalGate` and `reportOnly` flags
 
-Existing report fields retain their meaning. Markdown reports render the same data in a
-`Policy Explanation` section.
+Existing report fields retain their meaning. Markdown reports render the complete bounded selector
+type, selector decision, selected rule, command risk score, command minimum, command gate effect,
+and per-rule data in a `Policy Explanation` section.
 
 ## Local Comparison
 
 Use `codex-preflight report compare BASELINE.json CANDIDATE.json` to compare two existing local
 JSON reports. The command reads bounded files only and does not scan repositories, execute report
-content, access the network, or follow links. JSON and Markdown output compare decisions, command
-classifications, findings, policy contributions, execution capabilities, and uncertainties using
-stable identities and deterministic ordering.
+content, access the network, or follow links. UNC, URL, scp-like, and clone-like input and output
+paths are rejected before filesystem access. JSON and Markdown output compare decisions, command
+classifications, policy selectors, command contributions, findings, policy rule contributions,
+execution capabilities, and uncertainties using stable identities and deterministic ordering.

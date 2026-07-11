@@ -24,6 +24,7 @@ from codex_preflight_core.report.comparison import (
     ReportComparisonError,
     compare_report_files,
     render_report_comparison_markdown,
+    validate_local_report_path,
 )
 from codex_preflight_core.report.markdown_renderer import render_markdown_report
 from codex_preflight_core.scanner.engine import list_rule_ids
@@ -249,14 +250,14 @@ def scan_corpus_command(
 
 @report_app.command("compare")
 def compare_reports_command(
-    baseline: Annotated[Path, typer.Argument(help="Existing local baseline JSON report.")],
-    candidate: Annotated[Path, typer.Argument(help="Existing local candidate JSON report.")],
+    baseline: Annotated[str, typer.Argument(help="Existing local baseline JSON report.")],
+    candidate: Annotated[str, typer.Argument(help="Existing local candidate JSON report.")],
     format: Annotated[
         str,
         typer.Option("--format", help="Comparison format: json or markdown."),
     ] = "json",
     output: Annotated[
-        Path | None,
+        str | None,
         typer.Option("--output", help="Optional comparison output path."),
     ] = None,
 ) -> None:
@@ -264,6 +265,7 @@ def compare_reports_command(
     if format not in {"json", "markdown"}:
         raise typer.BadParameter("Format must be json or markdown.", param_hint="--format")
     try:
+        output_path = validate_local_report_path(output, "output") if output is not None else None
         comparison = compare_report_files(baseline, candidate)
     except ReportComparisonError as error:
         typer.echo(json.dumps(error.to_report()), err=True)
@@ -273,8 +275,8 @@ def compare_reports_command(
         if format == "json"
         else render_report_comparison_markdown(comparison)
     )
-    if output:
-        output.write_text(rendered, encoding="utf-8")
+    if output_path:
+        output_path.write_text(rendered, encoding="utf-8")
     else:
         typer.echo(rendered)
 

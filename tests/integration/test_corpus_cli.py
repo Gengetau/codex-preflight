@@ -59,6 +59,7 @@ EXPECTED_CASES = {
     ),
     "github-actions-pull-request-target": ("ASK_USER", ["GHA_PULL_REQUEST_TARGET"]),
     "go-commented-replace-block": ("ALLOW", []),
+    "go-commented-replace-single-line": ("ALLOW", []),
     "go-generation-testmain-cgo": (
         "WARN",
         [
@@ -134,7 +135,17 @@ def test_corpus_scan_json_passes_all_expectations() -> None:
         for case in group["cases"]
         if case["negativeControl"]
     }
-    assert {"go-clean-minimal", "go-commented-replace-block", "rust-clean-minimal"} <= negative_ids
+    assert {
+        "go-clean-minimal",
+        "go-commented-replace-block",
+        "go-commented-replace-single-line",
+        "rust-clean-minimal",
+    } <= negative_ids
+
+
+def test_clean_ecosystem_corpus_controls_include_representative_sources() -> None:
+    assert (CASE_ROOT / "rust-clean-minimal" / "src" / "lib.rs").read_text(encoding="utf-8")
+    assert (CASE_ROOT / "go-clean-minimal" / "clean.go").read_text(encoding="utf-8")
 
 
 def test_corpus_scan_single_case_markdown() -> None:

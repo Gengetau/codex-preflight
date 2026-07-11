@@ -4,6 +4,10 @@ from typing import Any
 
 def render_markdown_report(report_json: str | dict[str, Any]) -> str:
     report = json.loads(report_json) if isinstance(report_json, str) else report_json
+    explanation = report["policyExplanation"]
+    selector = explanation["selectedBy"]
+    command_contribution = explanation["commandContribution"]
+    command_effect = "gate" if command_contribution["affectedFinalGate"] else "report-only"
     lines = [
         "# Codex Preflight Report",
         "",
@@ -18,14 +22,19 @@ def render_markdown_report(report_json: str | dict[str, Any]) -> str:
         "",
         "## Policy Explanation",
         "",
-        f"Selected by: `{report['policyExplanation']['selectedBy']['type']}`",
-        f"Final decision: `{report['policyExplanation']['finalDecision']}`",
-        f"Command scope: `{report['policyExplanation']['commandScope']}`",
+        f"Selector type: `{_inline_code(selector['type'])}`",
+        f"Selector decision: `{_inline_code(selector['decision'])}`",
+        f"Selector rule: `{_inline_code(selector['ruleId'] or 'none')}`",
+        f"Final decision: `{_inline_code(explanation['finalDecision'])}`",
+        f"Command scope: `{_inline_code(explanation['commandScope'])}`",
+        f"Command risk score: `{command_contribution['riskScore']}`",
+        f"Command minimum decision: `{_inline_code(command_contribution['minimumDecision'])}`",
+        f"Command gate effect: `{command_effect}`",
         "",
         "| Rule | Matrix | Minimum | Gate effect | Rationale |",
         "| --- | --- | --- | --- | --- |",
     ]
-    for contribution in report["policyExplanation"]["ruleContributions"]:
+    for contribution in explanation["ruleContributions"]:
         lines.append(
             "| {rule} | {matched} | {minimum} | {effect} | {rationale} |".format(
                 rule=contribution["ruleId"],
@@ -102,3 +111,7 @@ def render_markdown_report(report_json: str | dict[str, Any]) -> str:
         ]
     )
     return "\n".join(lines) + "\n"
+
+
+def _inline_code(value: object) -> str:
+    return str(value).replace("`", "'").replace("\r", " ").replace("\n", " ")
