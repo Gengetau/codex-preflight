@@ -247,6 +247,8 @@ def test_migration_retains_at_most_three_bounded_backups(tmp_path: Path) -> None
             "corrupt",
         ),
         (lambda entry: entry.update(expiresAt="2026-01-01T00:00:00"), "corrupt"),
+        (lambda entry: entry.update(entryVersion=True), "unsupported-schema"),
+        (lambda entry: entry.update(entryVersion=1.0), "unsupported-schema"),
         (lambda entry: entry.update(entryVersion=2), "unsupported-schema"),
     ],
     ids=[
@@ -267,6 +269,8 @@ def test_migration_retains_at_most_three_bounded_backups(tmp_path: Path) -> None
         "approved-at-space",
         "approved-at-oversized",
         "expires-at",
+        "boolean-partial-entry-version",
+        "float-partial-entry-version",
         "future-entry-version",
     ],
 )
@@ -285,6 +289,34 @@ def test_invalid_or_unsupported_trust_entries_fail_closed(
 
     assert caught.value.code == expected_code
     assert not list(tmp_path.glob("trust.json.v0.3.3-migration.*.bak"))
+
+
+@pytest.mark.parametrize(
+    "entry_version",
+    [True, 1.0],
+    ids=["boolean", "float"],
+)
+def test_non_integer_v2_entry_versions_fail_closed(tmp_path: Path, entry_version: object) -> None:
+    path = tmp_path / "trust.json"
+    cache = TrustCache(path)
+    cache.approve(
+        repo_id="C:/work/project",
+        path=Path("C:/work/project"),
+        remote_url=None,
+        head_commit=None,
+        critical_fingerprint=FINGERPRINT,
+        command_scope="test",
+        approved_command="python -m pytest",
+        expires_at=datetime.now(UTC) + timedelta(days=7),
+    )
+    entries = json.loads(path.read_text(encoding="utf-8"))
+    entries[0]["entryVersion"] = entry_version
+    path.write_text(json.dumps(entries), encoding="utf-8")
+
+    with pytest.raises(TrustCacheError) as caught:
+        cache.list()
+
+    assert caught.value.code == "unsupported-schema"
 
 
 def test_corrupt_and_oversized_trust_stores_fail_closed(tmp_path: Path) -> None:

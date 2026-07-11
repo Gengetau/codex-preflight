@@ -201,7 +201,10 @@ class TrustCache:
                 _validate_entry(entry, migrated=None)
                 legacy_indexes.append(index)
             elif metadata_names != _METADATA_FIELDS:
-                if entry.get("entryVersion") not in {None, TRUST_CACHE_ENTRY_VERSION}:
+                entry_version = entry.get("entryVersion")
+                if entry_version is not None and (
+                    type(entry_version) is not int or entry_version != TRUST_CACHE_ENTRY_VERSION
+                ):
                     raise TrustCacheError("unsupported-schema", "The trust entry version is unsupported.")
                 raise TrustCacheError("corrupt", "The local trust store contains partial metadata.")
             else:
@@ -325,7 +328,8 @@ def _validate_entry(entry: dict[str, Any], *, migrated: bool | None) -> None:
 
     if migrated is None:
         return
-    if entry.get("entryVersion") != TRUST_CACHE_ENTRY_VERSION:
+    entry_version = entry.get("entryVersion")
+    if type(entry_version) is not int or entry_version != TRUST_CACHE_ENTRY_VERSION:
         raise TrustCacheError("unsupported-schema", "The trust entry version is unsupported.")
     entry_id = entry.get("entryId")
     if not isinstance(entry_id, str):
