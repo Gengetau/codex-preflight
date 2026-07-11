@@ -21,6 +21,14 @@ def trust_read_audit_path(base: Path | None = None) -> Path:
     return (base or default_cache_dir()) / "trust-read" / "audit.jsonl"
 
 
+def trust_mutation_audit_path(base: Path | None = None) -> Path:
+    return (base or default_cache_dir()) / "trust-mutation" / "audit.jsonl"
+
+
+def trust_mutation_audit_key_path(base: Path | None = None) -> Path:
+    return (base or default_cache_dir()) / "trust-mutation" / "audit.key"
+
+
 def remote_scan_cache_path(base: Path | None = None) -> Path:
     return (base or default_cache_dir()) / "remote" / "scan-cache.json"
 
