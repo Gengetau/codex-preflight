@@ -6,8 +6,9 @@ from pathlib import Path
 
 import pytest
 
+from codex_preflight_core.cache.file_lock import CacheLockTimeoutError
 from codex_preflight_core.cache.paths import trust_read_audit_path
-from codex_preflight_core.cache.trust_cache import TrustCache
+from codex_preflight_core.cache.trust_cache import TrustCache, TrustCacheError
 from codex_preflight_mcp.trust_read import TrustReadError, TrustReadService
 from codex_preflight_mcp.trust_state import TrustCursorManager, TrustReadAuditLog, TrustReadStateError
 
@@ -133,11 +134,54 @@ def test_trust_list_exact_filters_do_not_open_or_return_repo_identity(tmp_path: 
 
 
 @pytest.mark.parametrize(
+    "command_scope",
+    [
+        "dependency_install",
+        "script_execution",
+        "build",
+        "test",
+        "docker",
+        "network_shell",
+        "mcp_server_start",
+        "unknown_shell",
+    ],
+)
+def test_trust_list_accepts_each_exact_command_scope(
+    tmp_path: Path,
+    command_scope: str,
+) -> None:
+    service, _cache = build_service(tmp_path)
+
+    result = service.list(command_scope=command_scope, limit=100)
+
+    assert result["pagination"]["limit"] == 100
+    assert all(entry["commandScope"] == command_scope for entry in result["entries"])
+
+
+def test_hashes_snapshot_and_sorting_are_stable_within_process(tmp_path: Path) -> None:
+    service, _cache = build_service(tmp_path)
+
+    first = service.list(limit=100)
+    second = service.list(limit=100)
+
+    assert first["pagination"]["snapshotDigest"] == second["pagination"]["snapshotDigest"]
+    assert [entry["repoIdHash"] for entry in first["entries"]] == [
+        entry["repoIdHash"] for entry in second["entries"]
+    ]
+    assert [entry["criticalFingerprint"] for entry in first["entries"]] == [
+        f"sha256:{index:064x}" for index in range(3)
+    ]
+
+
+@pytest.mark.parametrize(
     ("kwargs", "code"),
     [
         ({"repo_id": ""}, "MCP_TRUST_LIST_INVALID_ARGUMENT"),
         ({"repo_id": "a" * 4097}, "MCP_TRUST_LIST_INVALID_ARGUMENT"),
+        ({"repo_id": "\u00e9" * 2049}, "MCP_TRUST_LIST_INVALID_ARGUMENT"),
         ({"repo_id": "repo\nvalue"}, "MCP_TRUST_LIST_INVALID_ARGUMENT"),
+        ({"repo_id": "repo\x00value"}, "MCP_TRUST_LIST_INVALID_ARGUMENT"),
+        ({"repo_id": "repo\x85value"}, "MCP_TRUST_LIST_INVALID_ARGUMENT"),
         ({"repo_id": 7}, "MCP_TRUST_LIST_INVALID_ARGUMENT"),
         ({"command_scope": "anything"}, "MCP_TRUST_LIST_INVALID_ARGUMENT"),
         ({"command_scope": []}, "MCP_TRUST_LIST_INVALID_ARGUMENT"),
@@ -199,3 +243,67 @@ def test_missing_store_returns_empty_but_audit_failure_fails_closed(tmp_path: Pa
         service.list()
     assert caught.value.code == "MCP_TRUST_LIST_AUDIT_FAILED"
     assert "hidden" not in caught.value.message
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_code"),
+    [
+        (TrustCacheError("corrupt", "private corrupt detail"), "MCP_TRUST_LIST_CORRUPT"),
+        (
+            TrustCacheError("unsupported-schema", "private schema detail"),
+            "MCP_TRUST_LIST_UNSUPPORTED_SCHEMA",
+        ),
+        (
+            TrustCacheError("migration-failed", "private migration detail"),
+            "MCP_TRUST_LIST_MIGRATION_FAILED",
+        ),
+        (TrustCacheError("unavailable", "private path detail"), "MCP_TRUST_LIST_UNAVAILABLE"),
+        (CacheLockTimeoutError("private lock detail"), "MCP_TRUST_LIST_LOCK_TIMEOUT"),
+    ],
+)
+def test_storage_failures_map_to_stable_redacted_errors(
+    tmp_path: Path,
+    failure: BaseException,
+    expected_code: str,
+) -> None:
+    service, _cache = build_service(tmp_path, limit_entries=0)
+
+    class FailingCache:
+        def list(self, **_kwargs: object) -> list[dict[str, object]]:
+            raise failure
+
+    service.cache = FailingCache()  # type: ignore[assignment]
+
+    with pytest.raises(TrustReadError) as caught:
+        service.list()
+
+    assert caught.value.code == expected_code
+    assert "private" not in caught.value.message
+
+
+def test_registration_and_migration_emit_redacted_audit_event_sequence(tmp_path: Path) -> None:
+    service, cache = build_service(tmp_path, limit_entries=1)
+    stored = json.loads(cache.path.read_text(encoding="utf-8"))
+    raw_repo_id = stored[0]["repoId"]
+    for field in ("entryId", "entryVersion", "provenance"):
+        stored[0].pop(field)
+    cache.path.write_text(json.dumps(stored), encoding="utf-8")
+
+    service.record_registration_state()
+    result = service.list()
+
+    records = [
+        json.loads(line)
+        for line in trust_read_audit_path(tmp_path).read_text(encoding="utf-8").splitlines()
+    ]
+    assert [record["event"] for record in records] == [
+        "registration_state",
+        "request_validated",
+        "migration_started",
+        "migration_completed",
+        "filter_applied",
+        "page_returned",
+        "success",
+    ]
+    assert records[-1]["eventId"] == result["auditEventId"]
+    assert raw_repo_id not in json.dumps(records)

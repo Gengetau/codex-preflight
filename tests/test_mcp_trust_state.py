@@ -115,6 +115,31 @@ def test_cursor_rejects_oversized_and_snapshot_changed_values() -> None:
         assert caught.value.code == "MCP_TRUST_LIST_CURSOR_INVALID"
 
 
+def test_cursor_stays_bounded_for_largest_valid_binding_values() -> None:
+    manager = TrustCursorManager(
+        secret=b"c" * 32,
+        clock=Clock(),
+        nonce_factory=lambda: "n" * 22,
+    )
+
+    token = manager.issue(
+        repo_id_hash=f"hmac-sha256:{'a' * 64}",
+        command_scope="mcp_server_start",
+        limit=100,
+        snapshot_digest=f"hmac-sha256:{'b' * 64}",
+        offset=2**31 - 1,
+    )
+
+    assert len(token.encode("utf-8")) <= 512
+    assert manager.consume(
+        token,
+        repo_id_hash=f"hmac-sha256:{'a' * 64}",
+        command_scope="mcp_server_start",
+        limit=100,
+        snapshot_digest=f"hmac-sha256:{'b' * 64}",
+    ) == 2**31 - 1
+
+
 def test_audit_records_are_redacted_bounded_and_rotated(tmp_path: Path) -> None:
     path = trust_read_audit_path(tmp_path)
     clock = Clock()

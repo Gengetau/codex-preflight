@@ -29,6 +29,7 @@ def tools_by_name() -> dict[str, dict]:
 
 def test_documented_tool_names_and_requests_match_runtime_schemas(monkeypatch) -> None:
     monkeypatch.delenv("CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN", raising=False)
+    monkeypatch.delenv("CODEX_PREFLIGHT_ENABLE_TRUST_READ", raising=False)
     tools = tools_by_name()
     assert set(tools) == {"preflight_check", "corpus_scan"}
 
@@ -46,11 +47,26 @@ def test_documented_tool_names_and_requests_match_runtime_schemas(monkeypatch) -
         schema=enabled_tools[remote_request["tool"]]["inputSchema"],
     )
 
+    monkeypatch.setenv("CODEX_PREFLIGHT_ENABLE_TRUST_READ", "1")
+    combined_tools = tools_by_name()
+    assert set(combined_tools) == {
+        "preflight_check",
+        "corpus_scan",
+        "remote_repository_scan",
+        "trust_list",
+    }
+    trust_request = load_json("trust-list-request.json")
+    validate(
+        instance=trust_request["arguments"],
+        schema=combined_tools[trust_request["tool"]]["inputSchema"],
+    )
+
 
 def test_success_examples_match_stable_contracts(tmp_path: Path) -> None:
     preflight = load_json("preflight-check-response.json")
     corpus = load_json("corpus-scan-response.json")
     remote = load_json("remote-repository-scan-response.json")
+    trust = load_json("trust-list-response.json")
     required_preflight = {
         "mcpSchemaVersion",
         "tool",
@@ -90,6 +106,27 @@ def test_success_examples_match_stable_contracts(tmp_path: Path) -> None:
     assert remote["remoteProvenance"]["redirectsFollowed"] == 0
     assert remote["remoteProvenance"]["confirmationConsumed"] is True
     assert remote["repo"]["path"] == remote["remoteProvenance"]["canonicalUrl"]
+    assert set(trust) == {
+        "auditEventId",
+        "entries",
+        "mcpSchemaVersion",
+        "pagination",
+        "runtimeIdentity",
+        "safety",
+        "schemaVersion",
+        "sourceType",
+        "tool",
+        "trustMutationAllowed",
+        "trustReadOnly",
+    }
+    assert trust["tool"] == "trust_list"
+    assert trust["schemaVersion"] == "trust-list/v1"
+    assert trust["runtimeIdentity"]["identityStatus"] == "unavailable"
+    assert trust["safety"]["rawRepoIdReturned"] is False
+    assert trust["safety"]["approvedCommandReturned"] is False
+    serialized_trust = json.dumps(trust)
+    assert "C:/" not in serialized_trust
+    assert "https://" not in serialized_trust
 
     actual_preflight = preflight_check(cwd=str(tmp_path), command="python -m pytest")
     actual_preflight["repo"] = preflight["repo"]
@@ -124,6 +161,7 @@ def test_python_examples_are_valid_and_call_only_documented_tools() -> None:
         "corpus_scan_client.py",
         "preflight_check_client.py",
         "remote_repository_scan_client.py",
+        "trust_list_client.py",
     }
     for filename, source in sources.items():
         ast.parse(source, filename=filename)
@@ -139,6 +177,11 @@ def test_python_examples_are_valid_and_call_only_documented_tools() -> None:
     assert "input(" in remote
     assert '!= "CONFIRM"' in remote
     assert "confirmationToken" in remote
+    trust = sources["trust_list_client.py"]
+    assert re.search(r'call_tool\(\s*"trust_list"', trust)
+    assert 'CODEX_PREFLIGHT_ENABLE_TRUST_READ": "1"' in trust
+    assert "trust_approve" not in trust
+    assert "trust_revoke" not in trust
 
 
 def test_generic_configuration_has_no_shell_wrapper_or_secrets() -> None:
@@ -165,11 +208,14 @@ def test_integration_docs_cover_install_startup_boundaries_and_examples() -> Non
         "local-path",
         "MCP_REMOTE_CONFIRMATION_REQUIRED",
         "CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN",
+        "CODEX_PREFLIGHT_ENABLE_TRUST_READ",
+        "trust-list/v1",
         "Unavailable capabilities",
     ):
         assert required in text
     assert "Default inventory" in text
-    assert "Enabled inventory" in text
+    assert "Remote-only inventory" in text
+    assert "Trust-read-only inventory" in text
     assert "adds only `remote_repository_scan`" in text
 
 
@@ -199,8 +245,10 @@ def test_codex_plugin_docs_cover_supported_paths_and_explicit_prerequisite() -> 
         assert required in combined
 
     assert "remote_repository_scan" in combined
-    assert "trust-management MCP tools" in combined
+    assert "trust-mutation MCP tools" in combined
+    assert "trust_list" in combined
     assert "CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN" in combined
+    assert "CODEX_PREFLIGHT_ENABLE_TRUST_READ" in combined
     assert "one-time" in combined
     assert "confirmation" in combined
     assert "default" in combined.lower()

@@ -48,7 +48,10 @@ _COMMAND_SCOPES = {
 }
 _COMMIT = re.compile(r"^[0-9a-f]{40}$")
 _FINGERPRINT = re.compile(r"^sha256:[0-9a-f]{64}$")
-_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+_RFC3339 = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$"
+)
 
 
 class TrustCacheError(OSError):
@@ -205,6 +208,7 @@ class TrustCache:
                 _validate_entry(entry, migrated=False)
             entries.append(entry)
 
+        _validate_unique_entry_ids(entries)
         if legacy_indexes:
             _notify(event_hook, "migration_started")
             try:
@@ -223,19 +227,20 @@ class TrustCache:
     ) -> list[dict[str, Any]]:
         self._create_backup_unlocked(original)
         migrated_at = self._now().isoformat()
-        for index in legacy_indexes:
-            entries[index]["entryId"] = self.entry_id_factory()
-            entries[index]["entryVersion"] = TRUST_CACHE_ENTRY_VERSION
-            entries[index]["provenance"] = {
-                "schema": TRUST_CACHE_SCHEMA,
-                "source": "legacy-migration",
-                "migrationVersion": TRUST_CACHE_MIGRATION_VERSION,
-                "migratedAt": migrated_at,
-            }
-            _validate_entry(entries[index], migrated=True)
         try:
+            for index in legacy_indexes:
+                entries[index]["entryId"] = self.entry_id_factory()
+                entries[index]["entryVersion"] = TRUST_CACHE_ENTRY_VERSION
+                entries[index]["provenance"] = {
+                    "schema": TRUST_CACHE_SCHEMA,
+                    "source": "legacy-migration",
+                    "migrationVersion": TRUST_CACHE_MIGRATION_VERSION,
+                    "migratedAt": migrated_at,
+                }
+                _validate_entry(entries[index], migrated=True)
+            _validate_unique_entry_ids(entries)
             self._write_unlocked(entries)
-        except OSError as error:
+        except Exception as error:
             raise TrustCacheError("migration-failed", "The trust metadata migration failed closed.") from error
         self._prune_backups_unlocked()
         return entries
@@ -268,6 +273,9 @@ class TrustCache:
 
     def _write_unlocked(self, entries: list[dict[str, Any]]) -> None:
         try:
+            encoded = json.dumps(entries, indent=2).replace("\n", os.linesep).encode("utf-8")
+            if len(encoded) > self.max_bytes:
+                raise TrustCacheError("unavailable", "The local trust store exceeds its size limit.")
             write_json_atomic(self.path, entries)
             if self.path.stat().st_size > self.max_bytes:
                 raise TrustCacheError("unavailable", "The local trust store exceeds its size limit.")
@@ -359,7 +367,12 @@ def _bounded_string(value: object) -> str:
 
 
 def _timestamp(value: object) -> datetime:
-    if not isinstance(value, str):
+    if (
+        not isinstance(value, str)
+        or len(value.encode("utf-8")) > 4096
+        or _CONTROL.search(value)
+        or not _RFC3339.fullmatch(value)
+    ):
         raise TrustCacheError("corrupt", "The local trust store timestamp is invalid.")
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -368,6 +381,12 @@ def _timestamp(value: object) -> datetime:
     if parsed.tzinfo is None:
         raise TrustCacheError("corrupt", "The local trust store timestamp is invalid.")
     return parsed.astimezone(UTC)
+
+
+def _validate_unique_entry_ids(entries: list[dict[str, Any]]) -> None:
+    entry_ids = [entry["entryId"] for entry in entries if "entryId" in entry]
+    if len(entry_ids) != len(set(entry_ids)):
+        raise TrustCacheError("corrupt", "The local trust store contains duplicate entry identifiers.")
 
 
 def _notify(event_hook: Callable[[str], None] | None, event: str) -> None:

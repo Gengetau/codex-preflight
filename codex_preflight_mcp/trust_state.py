@@ -23,16 +23,16 @@ TRUST_AUDIT_MAX_SEGMENT_BYTES = 1024 * 1024
 TRUST_AUDIT_MAX_ROTATED_SEGMENTS = 3
 
 _CURSOR_FIELDS = {
-    "tool",
-    "schemaVersion",
-    "repoIdHash",
-    "commandScope",
-    "limit",
-    "snapshotDigest",
-    "offset",
-    "issuedAt",
-    "expiresAt",
-    "nonce",
+    "t",
+    "v",
+    "r",
+    "s",
+    "l",
+    "d",
+    "o",
+    "i",
+    "e",
+    "n",
 }
 _AUDIT_EVENTS = {
     "registration_state",
@@ -92,16 +92,16 @@ class TrustCursorManager:
     ) -> str:
         issued_at = int(self._clock())
         payload = {
-            "tool": "trust_list",
-            "schemaVersion": "trust-list/v1",
-            "repoIdHash": repo_id_hash,
-            "commandScope": command_scope,
-            "limit": limit,
-            "snapshotDigest": snapshot_digest,
-            "offset": offset,
-            "issuedAt": issued_at,
-            "expiresAt": issued_at + TRUST_CURSOR_EXPIRY_SECONDS,
-            "nonce": self._nonce_factory(),
+            "t": "trust_list",
+            "v": "trust-list/v1",
+            "r": repo_id_hash,
+            "s": command_scope,
+            "l": limit,
+            "d": snapshot_digest,
+            "o": offset,
+            "i": issued_at,
+            "e": issued_at + TRUST_CURSOR_EXPIRY_SECONDS,
+            "n": self._nonce_factory(),
         }
         encoded = _encode_json(payload)
         signature = _encode_bytes(hmac.new(self._secret, encoded.encode("ascii"), hashlib.sha256).digest())
@@ -135,24 +135,24 @@ class TrustCursorManager:
             if not isinstance(payload, dict) or set(payload) != _CURSOR_FIELDS:
                 raise ValueError("invalid payload")
             if (
-                payload["tool"] != "trust_list"
-                or payload["schemaVersion"] != "trust-list/v1"
-                or payload["repoIdHash"] != repo_id_hash
-                or payload["commandScope"] != command_scope
-                or payload["limit"] != limit
-                or payload["snapshotDigest"] != snapshot_digest
-                or not isinstance(payload["offset"], int)
-                or isinstance(payload["offset"], bool)
-                or payload["offset"] < 1
-                or not isinstance(payload["issuedAt"], int)
-                or not isinstance(payload["expiresAt"], int)
-                or payload["expiresAt"] - payload["issuedAt"] != TRUST_CURSOR_EXPIRY_SECONDS
-                or self._clock() >= payload["expiresAt"]
-                or not isinstance(payload["nonce"], str)
-                or not payload["nonce"]
+                payload["t"] != "trust_list"
+                or payload["v"] != "trust-list/v1"
+                or payload["r"] != repo_id_hash
+                or payload["s"] != command_scope
+                or payload["l"] != limit
+                or payload["d"] != snapshot_digest
+                or not isinstance(payload["o"], int)
+                or isinstance(payload["o"], bool)
+                or payload["o"] < 1
+                or not isinstance(payload["i"], int)
+                or not isinstance(payload["e"], int)
+                or payload["e"] - payload["i"] != TRUST_CURSOR_EXPIRY_SECONDS
+                or self._clock() >= payload["e"]
+                or not isinstance(payload["n"], str)
+                or not payload["n"]
             ):
                 raise ValueError("cursor binding mismatch")
-            return payload["offset"]
+            return payload["o"]
         except (UnicodeError, ValueError, TypeError, json.JSONDecodeError) as error:
             raise _cursor_error() from error
 

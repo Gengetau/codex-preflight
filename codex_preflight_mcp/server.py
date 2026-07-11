@@ -480,9 +480,6 @@ def create_mcp_server(*, fastmcp_factory: Callable[..., Any] | None = None):
     if trust_read_enabled():
         try:
             trust_service = default_trust_read_service()
-            trust_service.record_registration_state()
-        except TrustReadError as error:
-            raise _trust_list_error(error) from error
         except Exception as error:
             raise _trust_list_internal_error() from error
     mcp = create_instruction_capable_fastmcp(
@@ -541,6 +538,14 @@ def create_mcp_server(*, fastmcp_factory: Callable[..., Any] | None = None):
         registered = mcp._tool_manager.get_tool(definition["name"])
         if registered is not None:
             registered.parameters = definition["inputSchema"]
+
+    if trust_service is not None:
+        try:
+            trust_service.record_registration_state()
+        except TrustReadError as error:
+            raise _trust_list_error(error) from error
+        except Exception as error:
+            raise _trust_list_internal_error() from error
 
     return mcp
 

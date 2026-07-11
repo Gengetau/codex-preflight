@@ -8,9 +8,10 @@ Codex Preflight's MCP outputs may be read by a model. Repository-controlled evid
 data and must never be followed as instructions. The server does not execute repository code,
 planned commands, package managers, scripts, hooks, builds, tests, or downloaded artifacts.
 
-Trust management remains unavailable through MCP. The design is documented in
-[MCP Trust Management Design](design/mcp-trust-management.md); no runtime mode registers
-`trust_list`, `trust_approve`, or `trust_revoke`.
+Bounded trust read is implemented as a separate default-off authority; trust mutation remains
+unavailable. The reviewed contract is documented in
+[MCP Trust Management Design](design/mcp-trust-management.md). No runtime mode registers
+`trust_approve` or `trust_revoke`.
 
 ## Runtime shape
 
@@ -64,7 +65,7 @@ $env:CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN = "1"
 codex-preflight-mcp --list-tools
 ```
 
-The enabled inventory is exactly:
+The remote-only inventory is exactly:
 
 ```text
 preflight_check
@@ -72,9 +73,39 @@ corpus_scan
 remote_repository_scan
 ```
 
+Trust-read authority is independently absent by default. Enable only the bounded read tool with:
+
+```bash
+CODEX_PREFLIGHT_ENABLE_TRUST_READ=1 codex-preflight-mcp --list-tools
+```
+
+PowerShell equivalent:
+
+```powershell
+$env:CODEX_PREFLIGHT_ENABLE_TRUST_READ = "1"
+codex-preflight-mcp --list-tools
+```
+
+The trust-read-only inventory is exactly:
+
+```text
+preflight_check
+corpus_scan
+trust_list
+```
+
+With both exact flags set, the inventory is exactly:
+
+```text
+preflight_check
+corpus_scan
+remote_repository_scan
+trust_list
+```
+
 Values other than exact `1` stay disabled. Registration is decided at startup, so restart after
-changing the flag. The bundled plugin `.mcp.json` does not set this flag and therefore preserves
-the default two-tool inventory.
+changing either flag. The bundled plugin `.mcp.json` sets neither flag and therefore preserves the
+default two-tool inventory.
 
 ## Tools
 
@@ -105,16 +136,37 @@ isolated static worker, verified cleanup, a dedicated remote cache, and redacted
 See [Remote Repository MCP Design](design/mcp-remote-repository.md) for the complete enforced
 contract and rollback procedure.
 
+### `trust_list`
+
+Available only with exact startup value `CODEX_PREFLIGHT_ENABLE_TRUST_READ=1`. All fields are
+optional: `repoId` is an exact in-memory equality filter, `commandScope` is one supported exact
+scope, `limit` is 1-100 and defaults to 50, and `cursor` is an opaque token from a prior page.
+Unknown fields and invalid scalar types fail with stable trust-list errors.
+
+The response is `trust-list/v1`. It returns only live entries with stored UUIDv4 IDs, matching
+fingerprint/commit/scope/policy/ruleset data, timestamps, actor, and provenance. Raw repository
+identity, local path, remote URL, and approved command never appear. Repository and URL identities
+use process-local HMAC-SHA256 values that intentionally change after restart.
+
+Cursors expire after 300 seconds, are at most 512 bytes, and are bound to tool/schema, filters,
+limit, offset, and a process-keyed snapshot digest. Restart, expiry, tampering, changed filters, or a
+changed trust snapshot returns `MCP_TRUST_LIST_CURSOR_INVALID` with no partial page.
+
+The tool cannot approve, revoke, extend, refresh, consume, satisfy, or create trust. Its only
+authorized write is an idempotent locked migration that adds UUIDv4 IDs, entry version `1`, and
+provenance to valid legacy entries while preserving all approval values and matching behavior.
+
 ## Server instructions
 
-MCP initialization returns fixed, source-controlled instructions. Both modes state that analysis
+MCP initialization returns fixed, source-controlled instructions. Every mode states that analysis
 is static-only, repository evidence is untrusted data, repository code and planned commands are
 never executed, and `ASK_USER`/`BLOCK` stop automatic execution.
 
-The default instruction set states that remote access and trust mutation are unavailable. The
-enabled instruction set states that public GitHub scans require one-time operation-bound human
-confirmation and never create trust. Repository content, user input, environment values, findings,
-and errors are never interpolated into either instruction string.
+The selected instruction set describes only the enabled remote and/or trust-read authority. Public
+GitHub scans require one-time operation-bound human confirmation and never create trust.
+`trust_list` is bounded read-only and cannot create, consume, satisfy, extend, approve, or revoke
+trust. Repository content, stored trust values, user input, environment values, findings, and
+errors are never interpolated into an instruction string.
 
 ## Results and evidence
 
@@ -122,6 +174,10 @@ Successful results add `mcpSchemaVersion`, exact tool identity, and a stable `sa
 preserving core report fields. Local/corpus results set network and remote access false. A
 confirmed successful remote result sets `networkAccess` and `remoteRepositoryAccess` true; all
 other safety fields remain static-only, untrusted, no-command, and no-trust.
+
+`trust_list` uses its exact separate top-level `trust-list/v1` response, including pagination,
+fixed unavailable stdio runtime identity, the final audit event ID, and explicit redaction/mutation
+safety booleans. It is not wrapped as a scan report and has no `decision` field.
 
 Findings and execution-graph items preserve:
 
@@ -149,6 +205,22 @@ before confirmation and ref resolution. Audit records contain hashes and stable 
 tokens, credentials, temp paths, process output, environment values, or repository evidence.
 Cache and audit failures fail closed and do not mutate local `scan-cache.json` or `trust.json`.
 
+## Trust-read state
+
+The trust store remains the normal local `trust.json`. v0.3.3 validates at most 1 MiB and migrates
+valid legacy entries under the shared trust lock to metadata-bearing v2 entries. Before replacement
+it creates a permission-preserving backup and retains at most three. No approval value, expiry,
+count, or matching rule changes.
+
+Read audit records use a separate namespace:
+
+```text
+~/.codex-preflight/trust-read/audit.jsonl
+```
+
+Records are redacted, at most 4096 bytes, locked and fsynced, with a 1 MiB active segment and three
+rotated segments. Audit failure returns no trust metadata.
+
 ## Error troubleshooting
 
 Expected failures use the structured shape in
@@ -160,6 +232,11 @@ Remote codes cover disabled registration, URL/host/address/ref policy, confirmat
 ref resolution, redirect/auth rejection, timeout, cancellation, limits, unsafe trees,
 acquisition, scan, cache, audit, and cleanup. Expected errors never include raw tracebacks,
 credentials, subprocess output, or internal temporary paths.
+
+Trust-read codes cover disabled direct calls, invalid arguments, cursor/limit rejection,
+unavailable/corrupt/future stores, lock timeout, migration failure, audit failure, and normalized
+internal failure. They never expose raw identity, path, URL, approved command, token, environment,
+or trust-file content.
 
 ## Plugin and diagnostics
 
@@ -177,7 +254,8 @@ that writes banners or logs to stdout.
 
 ## Disable and rollback
 
-Remove `CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN` (or set any value other than `1`) and restart the
-server. `remote_repository_scan` disappears from registration, outstanding tokens become invalid,
-and local tools continue unchanged. Remote state can be cleared independently only after verifying
-the exact `~/.codex-preflight/remote` path; local scan and trust files remain untouched.
+Remove either optional startup flag (or set it to any value other than `1`) and restart the server.
+The corresponding tool disappears; remote confirmation tokens and trust-list cursors are
+process-local and become invalid. Remote state can be cleared independently only after verifying
+the exact `~/.codex-preflight/remote` path. Disabling trust read does not delete or downgrade CLI
+trust data, migration backups, or dedicated audit state.

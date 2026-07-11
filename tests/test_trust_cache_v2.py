@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import stat
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -179,9 +180,39 @@ def test_migration_retains_at_most_three_bounded_backups(tmp_path: Path) -> None
         (lambda entry: entry.update(headCommit="abc"), "corrupt"),
         (lambda entry: entry.update(criticalFingerprint="sha256:test"), "corrupt"),
         (lambda entry: entry.update(commandScope="anything"), "corrupt"),
+        (lambda entry: entry.update(repoId=""), "corrupt"),
+        (lambda entry: entry.update(repoId="repo\x85value"), "corrupt"),
+        (lambda entry: entry.update(path=7), "corrupt"),
+        (lambda entry: entry.update(approvedCommand="run\x00hidden"), "corrupt"),
+        (lambda entry: entry.update(remoteUrl=""), "corrupt"),
+        (lambda entry: entry.update(policyVersion="x" * 4097), "corrupt"),
+        (lambda entry: entry.update(approvedAt="not-a-timestamp"), "corrupt"),
+        (lambda entry: entry.update(approvedAt="2026-01-01 00:00:00+00:00"), "corrupt"),
+        (
+            lambda entry: entry.update(approvedAt=f"2026-01-01T00:00:00.{'1' * 4100}+00:00"),
+            "corrupt",
+        ),
+        (lambda entry: entry.update(expiresAt="2026-01-01T00:00:00"), "corrupt"),
         (lambda entry: entry.update(entryVersion=2), "unsupported-schema"),
     ],
-    ids=["decision", "actor", "head", "fingerprint", "scope", "future-entry-version"],
+    ids=[
+        "decision",
+        "actor",
+        "head",
+        "fingerprint",
+        "scope",
+        "empty-repo-id",
+        "repo-id-c1-control",
+        "path-type",
+        "command-control",
+        "empty-remote-url",
+        "oversized-policy",
+        "approved-at",
+        "approved-at-space",
+        "approved-at-oversized",
+        "expires-at",
+        "future-entry-version",
+    ],
 )
 def test_invalid_or_unsupported_trust_entries_fail_closed(
     tmp_path: Path,
@@ -212,3 +243,149 @@ def test_corrupt_and_oversized_trust_stores_fail_closed(tmp_path: Path) -> None:
     with pytest.raises(TrustCacheError) as oversized:
         TrustCache(path).list()
     assert oversized.value.code == "unavailable"
+
+
+def test_unsupported_top_level_shape_fails_closed(tmp_path: Path) -> None:
+    path = tmp_path / "trust.json"
+    path.write_text(json.dumps({"entries": []}), encoding="utf-8")
+
+    with pytest.raises(TrustCacheError) as caught:
+        TrustCache(path).list()
+
+    assert caught.value.code == "unsupported-schema"
+
+
+@pytest.mark.parametrize("migrated", [False, True], ids=["legacy", "v2"])
+def test_legacy_and_v2_stores_over_one_mib_fail_before_listing(
+    tmp_path: Path,
+    migrated: bool,
+) -> None:
+    path = tmp_path / "trust.json"
+    entry = legacy_entry()
+    if migrated:
+        seed = TrustCache(path)
+        seed.approve(
+            repo_id="repo",
+            path=tmp_path,
+            remote_url=None,
+            head_commit=HEAD,
+            critical_fingerprint=FINGERPRINT,
+            command_scope="test",
+            approved_command="pytest",
+            expires_at=datetime.now(UTC) + timedelta(days=7),
+        )
+        entry = json.loads(path.read_text(encoding="utf-8"))[0]
+    payload = json.dumps([entry] * 2500).encode("utf-8")
+    assert len(payload) > TRUST_CACHE_MAX_BYTES
+    path.write_bytes(payload)
+
+    with pytest.raises(TrustCacheError) as caught:
+        TrustCache(path).list()
+
+    assert caught.value.code == "unavailable"
+    assert not list(tmp_path.glob("trust.json.v0.3.3-migration.*.bak"))
+
+
+def test_migration_backup_failure_preserves_original_store(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "trust.json"
+    original = json.dumps([legacy_entry()]).encode("utf-8")
+    path.write_bytes(original)
+    monkeypatch.setattr(trust_cache.os, "fsync", lambda _fd: (_ for _ in ()).throw(OSError("hidden")))
+
+    with pytest.raises(TrustCacheError) as caught:
+        TrustCache(path).list()
+
+    assert caught.value.code == "migration-failed"
+    assert path.read_bytes() == original
+    assert not list(tmp_path.glob("trust.json.v0.3.3-migration.*.bak"))
+
+
+def test_migration_preserves_trust_file_and_backup_permissions(tmp_path: Path) -> None:
+    path = tmp_path / "trust.json"
+    path.write_text(json.dumps([legacy_entry()]), encoding="utf-8")
+    before = stat.S_IMODE(path.stat().st_mode)
+
+    TrustCache(path).list()
+
+    backup = next(tmp_path.glob("trust.json.v0.3.3-migration.*.bak"))
+    assert stat.S_IMODE(path.stat().st_mode) == before
+    assert stat.S_IMODE(backup.stat().st_mode) == before
+
+
+def test_duplicate_v2_entry_ids_fail_closed(tmp_path: Path) -> None:
+    path = tmp_path / "trust.json"
+    cache = TrustCache(path)
+    expires_at = datetime.now(UTC) + timedelta(days=7)
+    for index in range(2):
+        cache.approve(
+            repo_id=f"repo-{index}",
+            path=tmp_path,
+            remote_url=None,
+            head_commit=HEAD,
+            critical_fingerprint=f"sha256:{index:064x}",
+            command_scope="test",
+            approved_command="pytest",
+            expires_at=expires_at,
+        )
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    stored[1]["entryId"] = stored[0]["entryId"]
+    path.write_text(json.dumps(stored), encoding="utf-8")
+
+    with pytest.raises(TrustCacheError) as caught:
+        cache.list()
+
+    assert caught.value.code == "corrupt"
+
+
+def test_migration_id_collision_fails_before_replace(tmp_path: Path) -> None:
+    path = tmp_path / "trust.json"
+    entries = [legacy_entry(repo_id=f"repo-{index}") for index in range(2)]
+    original = json.dumps(entries).encode("utf-8")
+    path.write_bytes(original)
+    cache = TrustCache(
+        path,
+        entry_id_factory=lambda: "123e4567-e89b-42d3-a456-426614174000",
+    )
+
+    with pytest.raises(TrustCacheError) as caught:
+        cache.list()
+
+    assert caught.value.code == "migration-failed"
+    assert path.read_bytes() == original
+    assert len(list(tmp_path.glob("trust.json.v0.3.3-migration.*.bak"))) == 1
+
+
+def test_size_cap_rejects_cli_write_before_replacing_existing_store(tmp_path: Path) -> None:
+    path = tmp_path / "trust.json"
+    cache = TrustCache(path, max_bytes=1400)
+    expires_at = datetime.now(UTC) + timedelta(days=7)
+    cache.approve(
+        repo_id="repo-one",
+        path=tmp_path,
+        remote_url=None,
+        head_commit=HEAD,
+        critical_fingerprint=FINGERPRINT,
+        command_scope="test",
+        approved_command="pytest",
+        expires_at=expires_at,
+    )
+    original = path.read_bytes()
+
+    with pytest.raises(TrustCacheError) as caught:
+        cache.approve(
+            repo_id="repo-two",
+            path=tmp_path,
+            remote_url=None,
+            head_commit=HEAD,
+            critical_fingerprint=f"sha256:{'c' * 64}",
+            command_scope="test",
+            approved_command="x" * 1000,
+            expires_at=expires_at,
+        )
+
+    assert caught.value.code == "unavailable"
+    assert path.read_bytes() == original
+    assert [entry["repoId"] for entry in cache.list()] == ["repo-one"]

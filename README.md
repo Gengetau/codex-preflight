@@ -40,6 +40,7 @@ local indirection, surfaces uncertainty, and gives the user a decision with evid
 - Local repository preflight.
 - External GitHub repository scan via `--repo`.
 - Default-off, confirmation-gated MCP static scan for public GitHub HTTPS repositories.
+- Default-off, bounded and redacted MCP listing of existing local trust approvals.
 - Composite command classification.
 - Planned-command risk findings for remote shell pipelines, encoded PowerShell, dangerous Docker
   flags and mounts, and inline interpreter execution.
@@ -216,11 +217,11 @@ More details are in [docs/plugin.md](docs/plugin.md).
 
 ## MCP
 
-The MCP-facing package is static-only and never executes repository code or planned commands.
-Evidence snippets are marked `untrusted` and `treat-as-data`; no MCP mode exposes trust listing,
-trust mutation, command execution, arbitrary hosts, credentials, proxy control, or artifact
-execution. Server initialization supplies fixed safety instructions requiring `ASK_USER` and
-`BLOCK` decisions to stop automatic execution.
+The MCP-facing package never executes repository code or planned commands. Evidence and stored
+trust values are marked or described as untrusted data; no MCP mode exposes trust mutation,
+command execution, arbitrary hosts, credentials, proxy control, or artifact execution. Server
+initialization supplies fixed safety instructions requiring `ASK_USER` and `BLOCK` decisions to
+stop automatic execution.
 
 The default runtime authority remains exactly two tools:
 
@@ -237,8 +238,22 @@ validation and pinning, zero redirects, bounded shallow bare Git acquisition, re
 materialization, an isolated static worker, dedicated remote cache/audit state, and verified
 cleanup. Confirmation never creates trust.
 
-Disable remote authority by removing the flag and restarting the MCP process. The bundled plugin
-configuration does not set the flag, so its default remains the two local/no-network tools.
+v0.3.3 adds a separate default-off trust-read capability. Exact startup value
+`CODEX_PREFLIGHT_ENABLE_TRUST_READ=1` registers only `trust_list`; with both startup flags, the
+inventory is `preflight_check`, `corpus_scan`, `remote_repository_scan`, and `trust_list`.
+`trust_list` reads only the normal local trust cache, returns at most 100 deterministically sorted
+entries per page, redacts raw repository identities, paths, URLs, and approved commands, and uses
+process-local HMAC hashes and 300-second snapshot-bound cursors. It cannot approve, revoke, extend,
+consume, satisfy, or create trust.
+
+The first v0.3.3 read may perform only the reviewed metadata migration that adds stored UUIDv4
+entry IDs, entry version `1`, and provenance while preserving every approval field and matching
+semantic. Migration is locked, permission-preserving, backed up, capped at 1 MiB, and fail-closed.
+Trust-read audit records use the separate `trust-read/audit.jsonl` namespace and never contain raw
+identities or trust content.
+
+Disable either optional authority by removing its flag and restarting the MCP process. The bundled
+plugin configuration sets neither flag, so its default remains the two local/no-network tools.
 
 See [docs/mcp.md](docs/mcp.md) for MCP safety notes and
 [docs/mcp-client-examples.md](docs/mcp-client-examples.md) for machine-checked integration examples.

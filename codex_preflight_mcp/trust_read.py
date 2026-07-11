@@ -49,7 +49,7 @@ _COMMAND_SCOPES = {
     "mcp_server_start",
     "unknown_shell",
 }
-_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 
 class AuditWriter(Protocol):

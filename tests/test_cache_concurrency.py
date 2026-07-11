@@ -114,3 +114,45 @@ def test_concurrent_trust_approve_and_revoke_keep_valid_json(tmp_path: Path) -> 
     data = json.loads(cache.path.read_text(encoding="utf-8"))
     assert isinstance(data, list)
     assert all("repoId" in entry for entry in data)
+
+
+def test_concurrent_trust_reads_and_cli_mutations_share_one_lock(tmp_path: Path) -> None:
+    cache = TrustCache(tmp_path / "trust_cache.json")
+    expires_at = datetime.now(UTC) + timedelta(days=1)
+    for index in range(8):
+        cache.approve(
+            repo_id=f"seed-{index}",
+            path=tmp_path,
+            remote_url=None,
+            head_commit=HEAD,
+            critical_fingerprint=f"sha256:{index:064x}",
+            command_scope="test",
+            approved_command=f"pytest {index}",
+            expires_at=expires_at,
+        )
+
+    def operate(index: int) -> None:
+        if index % 3 == 0:
+            cache.list()
+        elif index % 3 == 1:
+            cache.approve(
+                repo_id=f"new-{index}",
+                path=tmp_path,
+                remote_url=None,
+                head_commit="b" * 40,
+                critical_fingerprint=f"sha256:{index + 100:064x}",
+                command_scope="build",
+                approved_command=f"build {index}",
+                expires_at=expires_at,
+            )
+        else:
+            cache.revoke_identity(f"seed-{index % 8}")
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(operate, range(60)))
+
+    stored = json.loads(cache.path.read_text(encoding="utf-8"))
+    listed = cache.list()
+    assert isinstance(stored, list)
+    assert all(entry["entryVersion"] == 1 for entry in stored)
+    assert all(entry["entryVersion"] == 1 for entry in listed)

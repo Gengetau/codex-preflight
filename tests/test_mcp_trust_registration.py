@@ -193,3 +193,24 @@ def test_registration_audit_failure_fails_closed(monkeypatch: pytest.MonkeyPatch
         server.create_mcp_server()
 
     assert caught.value.detail.code is McpErrorCode.TRUST_LIST_AUDIT_FAILED
+
+
+def test_unexpected_trust_list_failure_is_normalized_without_details(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from codex_preflight_mcp import server
+
+    class FailingService:
+        def list(self, **_kwargs: object) -> dict[str, Any]:
+            raise RuntimeError("C:/private/trust.json secret detail")
+
+    monkeypatch.setenv("CODEX_PREFLIGHT_ENABLE_TRUST_READ", "1")
+    monkeypatch.setattr(server, "default_trust_read_service", FailingService)
+
+    with pytest.raises(McpToolError) as caught:
+        server.trust_list()
+
+    assert caught.value.detail.code is McpErrorCode.TRUST_LIST_INTERNAL_ERROR
+    assert caught.value.detail.retryable is True
+    assert "private" not in str(caught.value)
+    assert "secret" not in str(caught.value)
