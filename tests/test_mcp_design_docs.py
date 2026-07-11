@@ -90,7 +90,8 @@ def test_user_documentation_says_remote_is_default_off_and_rollbackable() -> Non
 def test_trust_management_design_covers_required_contracts() -> None:
     text = TRUST_DESIGN.read_text(encoding="utf-8")
     required = (
-        "design-only and unavailable",
+        "bounded trust read implemented and default-off in v0.3.3",
+        "CODEX_PREFLIGHT_ENABLE_TRUST_READ=1",
         "trust_list",
         "trust_approve",
         "trust_revoke",
@@ -99,6 +100,8 @@ def test_trust_management_design_covers_required_contracts() -> None:
         "trust-read",
         "trust-mutate",
         "stable opaque trust-entry identifiers",
+        "trust-list/v1",
+        "metadata-only migration",
         "criticalFingerprint",
         "policyVersion",
         "rulesetVersion",
@@ -131,8 +134,9 @@ def test_trust_management_design_covers_required_contracts() -> None:
         assert value in text
 
 
-def test_trust_design_does_not_register_tools_or_enable_mcp_trust(monkeypatch) -> None:
+def test_trust_design_registers_only_default_off_read_authority(monkeypatch) -> None:
     monkeypatch.delenv("CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN", raising=False)
+    monkeypatch.delenv("CODEX_PREFLIGHT_ENABLE_TRUST_READ", raising=False)
     names = {tool["name"] for tool in tool_definitions()}
     server_source = (ROOT / "codex_preflight_mcp" / "server.py").read_text(encoding="utf-8")
     integration = (ROOT / "docs" / "mcp-client-examples.md").read_text(encoding="utf-8")
@@ -140,12 +144,12 @@ def test_trust_design_does_not_register_tools_or_enable_mcp_trust(monkeypatch) -
     assert names == {"preflight_check", "corpus_scan"}
     assert not names & {"trust_list", "trust_approve", "trust_revoke"}
     assert "allow_trust=False" in server_source
-    assert "No mode exposes trust-list or trust-mutation MCP tools" in integration
+    assert "CODEX_PREFLIGHT_ENABLE_TRUST_READ" in integration
 
-    monkeypatch.setenv("CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN", "1")
+    monkeypatch.setenv("CODEX_PREFLIGHT_ENABLE_TRUST_READ", "1")
     enabled_names = {tool["name"] for tool in tool_definitions()}
-    assert enabled_names == {"preflight_check", "corpus_scan", "remote_repository_scan"}
-    assert not enabled_names & {"trust_list", "trust_approve", "trust_revoke"}
+    assert enabled_names == {"preflight_check", "corpus_scan", "trust_list"}
+    assert not enabled_names & {"trust_approve", "trust_revoke"}
 
 
 def test_remote_scan_design_cannot_create_trust() -> None:

@@ -170,6 +170,45 @@ verified 40-hex commit. `redirectsFollowed` is zero, `confirmationConsumed` is t
 identified only after confirmation and immutable ref resolution. Tokens, nonces, credentials,
 environment values, subprocess output, and temporary paths are never returned.
 
+## `trust_list` successful result
+
+`trust_list` is not a scan report and has no decision, findings, execution graph, repository path,
+or command. It uses exact schema `trust-list/v1`:
+
+```json
+{
+  "mcpSchemaVersion": "1.0",
+  "tool": "trust_list",
+  "schemaVersion": "trust-list/v1",
+  "sourceType": "trust-cache",
+  "trustReadOnly": true,
+  "trustMutationAllowed": false,
+  "entries": [],
+  "pagination": {
+    "resultCount": 0,
+    "limit": 50,
+    "nextCursor": null,
+    "complete": true,
+    "snapshotDigest": "hmac-sha256:..."
+  },
+  "runtimeIdentity": {
+    "transport": "stdio",
+    "identityStatus": "unavailable",
+    "clientId": null,
+    "sessionId": null
+  },
+  "auditEventId": "event-id",
+  "safety": {}
+}
+```
+
+Entries contain exactly stored random `entryId`, `entryVersion`, `repoIdHash`, redaction/remote
+presence fields, optional `remoteUrlHash`, commit, fingerprint, scope, decision, approval/expiry
+timestamps, actor, policy/ruleset, and provenance. The safety object explicitly marks raw repository
+identity, path, remote URL, and approved command as not returned, and confirms that preflight and
+remote confirmation do not use trust. See the complete machine-checked
+[`trust-list-response.json`](../examples/mcp/trust-list-response.json).
+
 ## Structured errors
 
 Expected MCP input failures are raised through the MCP runtime error mechanism. The error message
@@ -227,6 +266,17 @@ credentials, environment variables, or internal paths that the caller did not su
 | `MCP_REMOTE_CACHE_FAILED` | The dedicated remote cache failed closed. |
 | `MCP_REMOTE_AUDIT_FAILED` | The redacted remote audit log failed closed. |
 | `MCP_REMOTE_CLEANUP_FAILED` | Verified removal of operation-owned temporary state failed. |
+| `MCP_TRUST_READ_DISABLED` | A direct trust read was attempted without startup authority. |
+| `MCP_TRUST_LIST_INVALID_ARGUMENT` | A field, type, identity, or scope is invalid. |
+| `MCP_TRUST_LIST_CURSOR_INVALID` | The cursor is malformed, expired, restart-invalid, mismatched, or stale. |
+| `MCP_TRUST_LIST_LIMIT_EXCEEDED` | The limit is not an integer from 1 through 100. |
+| `MCP_TRUST_LIST_UNAVAILABLE` | The local trust store cannot be read safely. |
+| `MCP_TRUST_LIST_CORRUPT` | Full trust-store validation failed. |
+| `MCP_TRUST_LIST_UNSUPPORTED_SCHEMA` | The store or entry uses an unsupported schema/version. |
+| `MCP_TRUST_LIST_LOCK_TIMEOUT` | The shared trust-store lock timed out. |
+| `MCP_TRUST_LIST_MIGRATION_FAILED` | The exact metadata-only migration failed closed. |
+| `MCP_TRUST_LIST_AUDIT_FAILED` | The dedicated trust-read audit failed closed. |
+| `MCP_TRUST_LIST_INTERNAL_ERROR` | An unexpected trust-read failure was normalized and redacted. |
 | `MCP_INTERNAL_ERROR` | An unexpected failure was hidden behind a safe generic response. |
 
 Errors are not successful report objects and therefore do not carry the successful-result schema.
@@ -246,6 +296,13 @@ With exact startup flag `CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN=1`, registration add
 remote_repository_scan
 ```
 
-No mode exposes command execution, trust listing, trust approval, trust revocation, arbitrary
-filesystem mutation, arbitrary network destinations, credentials, or proxy control. Removing the
-flag and restarting restores the default two-tool, no-network inventory.
+With exact startup flag `CODEX_PREFLIGHT_ENABLE_TRUST_READ=1`, registration adds only:
+
+```text
+trust_list
+```
+
+Both flags add both optional tools. No mode exposes command execution, trust approval, trust
+revocation, arbitrary filesystem mutation, arbitrary network destinations, credentials, or proxy
+control. Removing a flag and restarting removes its tool and invalidates its process-local token or
+cursor; the default remains the two-tool, no-network, no-trust-read inventory.

@@ -1,0 +1,7 @@
+{
+  "tool": "trust_list",
+  "arguments": {
+    "commandScope": "test",
+    "limit": 2
+  }
+}

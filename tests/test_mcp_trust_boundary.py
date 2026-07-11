@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 
 def test_mcp_does_not_expose_trust_mutation_tools() -> None:
     from codex_preflight_mcp.server import tool_definitions
@@ -46,3 +48,51 @@ def test_mcp_tool_descriptions_document_trust_boundary() -> None:
     descriptions = "\n".join(str(tool["description"]) for tool in tool_definitions())
 
     assert "Trust approval and revoke tools are intentionally not exposed" in descriptions
+
+
+def test_remote_confirmation_and_scan_cannot_access_or_satisfy_trust(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from codex_preflight_core.cache.trust_cache import TrustCache
+    from codex_preflight_mcp import server
+    from codex_preflight_mcp.errors import McpToolError
+    from codex_preflight_mcp.remote_confirmation import RemoteConfirmationManager
+
+    def fail_if_used(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("remote confirmation and scans must remain trust-blind")
+
+    for method in ("list", "match", "approve", "revoke_identity"):
+        monkeypatch.setattr(TrustCache, method, fail_if_used)
+    monkeypatch.setenv("CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN", "1")
+    monkeypatch.delenv("CODEX_PREFLIGHT_ENABLE_TRUST_READ", raising=False)
+    monkeypatch.setenv("CODEX_PREFLIGHT_HOME", str(tmp_path))
+    monkeypatch.setattr(server, "_REMOTE_CONFIRMATIONS", RemoteConfirmationManager(secret=b"x" * 32))
+    monkeypatch.setattr(
+        server,
+        "run_remote_operation",
+        lambda **_kwargs: {
+            "schemaVersion": "1.0",
+            "decision": "ALLOW",
+            "riskScore": 0,
+            "repo": {},
+            "cache": {"usedScanCache": False, "usedTrustCache": False, "cacheReason": None},
+            "executionGraph": {"capabilities": [], "uncertainties": []},
+        },
+    )
+
+    with pytest.raises(McpToolError) as challenge:
+        server.remote_repository_scan(
+            remoteUrl="https://github.com/example/project",
+            requestedRef="refs/heads/main",
+        )
+    token = challenge.value.to_dict()["error"]["context"]["confirmationToken"]
+
+    result = server.remote_repository_scan(
+        remoteUrl="https://github.com/example/project",
+        requestedRef="refs/heads/main",
+        confirmationToken=token,
+    )
+
+    assert result["cache"]["usedTrustCache"] is False
+    assert result["safety"]["trustMutationAllowed"] is False

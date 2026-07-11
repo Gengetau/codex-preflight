@@ -1,5 +1,28 @@
 # Release History
 
+## v0.3.3
+
+Default-off bounded MCP trust reads:
+
+- Added `trust_list` only when the process starts with exact
+  `CODEX_PREFLIGHT_ENABLE_TRUST_READ=1`; default, remote-only, trust-read-only, and combined tool
+  inventories remain independently gated.
+- Added exact repository-identity and command-scope filters, a 1-100 result cap, deterministic
+  sorting, process-local HMAC privacy hashes, and reusable 300-second cursors bound to filters,
+  limit, and the current trust snapshot.
+- Added a locked metadata-only migration to stored UUIDv4 entry IDs, entry version `1`, and
+  provenance while preserving all approval values, counts, expiry, and matching semantics.
+- Added a 1 MiB trust-store cap, at most three permission-preserving migration backups, pre-replace
+  size checks, full entry validation, atomic replacement, and fail-closed corruption/schema/lock
+  handling shared with existing CLI approve and revoke behavior.
+- Added a dedicated bounded `trust-read/audit.jsonl` namespace with redacted HMAC identities,
+  fixed stdio runtime identity, locked/fsynced append, rotation, and fail-closed audit behavior.
+- Preserved MCP `preflight_check` as trust-blind and remote confirmation as unable to read, create,
+  satisfy, or mutate trust. No MCP trust approval or revocation tool is registered.
+- Added local deterministic coverage for registration, schema, migration invariants, storage
+  validation, concurrency, redaction, pagination, cursor drift/restart/expiry, audit, stable errors,
+  docs, plugin metadata, and all four startup inventories.
+
 ## v0.3.2
 
 Default-off public GitHub HTTPS remote MCP scan:

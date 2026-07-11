@@ -2,19 +2,20 @@
 
 ## Status and boundary
 
-Status: **design-only and unavailable** in v0.2.6.
+Status: **bounded trust read implemented and default-off in v0.3.3; trust mutation unavailable**.
 
-This document defines future trust-management contracts. It does not implement or register
-`trust_list`, `trust_approve`, `trust_revoke`, or equivalent tools. The runtime tool set remains
-exactly `preflight_check` and `corpus_scan`, and MCP `preflight_check` continues to call the core
-with `allow_trust=False`.
+Exact startup value `CODEX_PREFLIGHT_ENABLE_TRUST_READ=1` registers `trust_list`. The default MCP
+inventory remains exactly `preflight_check` and `corpus_scan`; the remote and trust-read flags are
+independent and may add `remote_repository_scan`, `trust_list`, or both. No runtime mode registers
+`trust_approve`, `trust_revoke`, or an equivalent mutation tool. MCP `preflight_check` continues to
+call the core with `allow_trust=False`, and remote confirmation cannot inspect or satisfy trust.
 
 Trust mutation is a separate authority from static scanning. Filesystem write access to the trust
 cache does not itself authorize a process, client, model, or agent to mutate trust.
 
 ## Authority separation
 
-Future server configuration must model three independent authority levels:
+Server configuration models three independent authority levels:
 
 ```text
 scan-read
@@ -23,7 +24,7 @@ trust-mutate
 ```
 
 - `scan-read` permits the existing read-only static tools and does not consult MCP trust.
-- `trust-read` may expose `trust_list` without mutation.
+- `trust-read` exposes only the bounded, redacted `trust_list` when the exact startup flag is set.
 - `trust-mutate` may expose separately reviewed approval and revocation tools only when explicit
   server configuration, client authorization, and confirmation controls all allow it.
 
@@ -32,38 +33,49 @@ Mutation is default-off and can be globally disabled at startup so mutating tool
 registration. It must not be inferred from local file permissions, prior approvals, remote scan
 confirmation, client identity, or model role.
 
-## Future tool contracts
+## Tool contracts
 
 ### `trust_list` read-only contract
 
-`trust_list` is read-only and requires bounded output. Tentative inputs:
+`trust_list` is read-only, default-off, and requires bounded output. Its exact optional inputs are:
 
 ```json
 {
-  "repositoryIdentity": "optional exact normalized identity",
-  "commandScope": "optional exact scope",
-  "cursor": "optional opaque cursor",
-  "limit": 50
+  "repoId": "optional exact stored repository identity filter",
+  "commandScope": "optional exact supported scope",
+  "limit": "optional integer 1-100, default 50",
+  "cursor": "optional opaque cursor from a prior page"
 }
 ```
 
-Requirements:
+The schema uses `additionalProperties: false`. `repoId` is a non-empty exact equality filter of at
+most 4096 UTF-8 bytes with no controls; it is never opened as a path or fetched as a URL.
+`commandScope` accepts only `dependency_install`, `script_execution`, `build`, `test`, `docker`,
+`network_shell`, `mcp_server_start`, or `unknown_shell`. Unknown fields and invalid scalar types
+fail before reading trust data.
 
-- optional exact repository identity filter;
-- optional exact command-scope filter;
-- stable opaque trust-entry identifiers;
-- bounded `limit` with a conservative maximum;
-- opaque pagination cursor rather than unbounded listing;
-- approval provenance for each entry;
-- creation, last-update, and expiration timestamps;
-- policy version and ruleset version;
-- revoked/expired state without returning sensitive history;
-- no raw cache path, secret evidence, confirmation token, environment variable, file permission,
-  or unrelated repository disclosure.
+Success uses exact schema `trust-list/v1` and deterministic ordering by expiry, process-keyed
+repository hash, scope, policy, ruleset, fingerprint, and stored UUIDv4 entry ID. Each live entry
+returns stored commit/fingerprint/scope/decision/timestamps/actor/policy/ruleset and exact v2
+provenance. Expired entries remain stored but are excluded. Raw `repoId`, local path, remote URL,
+approved command, cache/lock/temp paths, environment, credentials, evidence, and tokens are never
+returned. Results expose stable opaque trust-entry identifiers from stored random UUIDv4 values;
+raw identities are replaced by process-local HMAC-SHA256 hashes.
 
-The server applies authorization before filtering so a caller cannot probe hidden identities by
-timing or error differences. Results use a separately versioned read schema and deterministic
-ordering.
+Pagination cursors are HMAC protected with a separate process-local key, at most 512 bytes, valid
+for 300 seconds, reusable within that window, and bound to tool, schema, repository filter hash,
+scope filter, limit, snapshot digest, offset, issue/expiry time, and nonce. Restart, expiry,
+tampering, filter/limit mismatch, or any filtered trust-snapshot change fails with
+`MCP_TRUST_LIST_CURSOR_INVALID` and no partial results.
+
+Runtime identity is intentionally fixed to stdio with `identityStatus: unavailable` and null client
+and session IDs. The current callback does not claim authenticated caller identity.
+
+The tool cannot approve, revoke, extend, refresh, consume, satisfy, or create trust. The only
+trust-file write it may trigger is the exact metadata-only migration described below. Dedicated
+audit uses `<codex-preflight-home>/trust-read/audit.jsonl`, 4096-byte records, a 1 MiB active
+segment, and three rotated segments. Lock, append, fsync, rotation, or directory failure closes the
+read and returns no metadata.
 
 ### `trust_approve` mutating contract
 
@@ -214,16 +226,25 @@ separately authorized, results are bounded, and retention/rotation preserves int
 
 ## Storage and migration model
 
-Future tools must interoperate with the existing CLI trust cache without weakening CLI semantics.
+v0.3.3 trust reads interoperate with the existing CLI trust cache without weakening CLI semantics.
+Mutation-tool requirements below remain future design.
 
 ### Schema and identifiers
 
-- Add an explicit schema version and migration history.
-- Derive stable opaque entry identifiers from stored random IDs, not raw paths or enumerable hashes.
+- v0.3.3 adds `entryVersion: 1`, schema `trust-cache-array-v2`, and migration provenance.
+- Stable opaque entry identifiers are stored UUIDv4 values, not raw paths or enumerable hashes.
 - Preserve exact identity, head, fingerprint, scope, policy, ruleset, approval, expiry, reason, and
   state fields.
 - Keep legacy entries readable through a tested migration path; do not silently broaden them.
 - Reject or quarantine unknown future schema versions rather than downgrading them.
+
+The reader parses at most 1 MiB and validates every entry before migration or listing. Valid legacy
+arrays are migrated under the shared CLI trust lock by adding only `entryId`, `entryVersion`, and
+provenance. Before atomic replacement it creates a permission-preserving backup named
+`trust.json.v0.3.3-migration.<timestamp>.<nonce>.bak` and retains at most three. All approval values,
+approval count, expiry, and matching semantics remain unchanged. Missing/empty stores succeed
+empty; corruption, unsupported schema, invalid fields, lock timeout, backup failure, size overflow,
+atomic replacement failure, and audit failure fail closed.
 
 ### Atomicity, locking, and concurrency
 
@@ -266,7 +287,7 @@ provenance and audit identifiers without tokens. CLI revoke and MCP revoke must 
 idempotency and concurrency behavior.
 
 Existing MCP `preflight_check` remains trust-blind even if future trust tools exist. A separate
-reviewed tool or explicit future contract would be required to consume trust; v0.2.6 does not
+reviewed tool or explicit future contract would be required to consume trust; v0.3.3 does not
 authorize that change.
 
 ## Remote scan separation
@@ -304,9 +325,9 @@ identities are never returned.
 
 ## Rollout plan
 
-1. Obtain independent security, storage, concurrency, CLI-compatibility, and protocol review.
-2. Create a separate implementation loop for read-only `trust_list` with bounded results.
-3. Test listing authorization and disclosure boundaries before any mutation work.
+1. Completed in v0.3.3: independent security, storage, concurrency, CLI-compatibility, and protocol review.
+2. Completed in v0.3.3: separate implementation loop for bounded read-only `trust_list`.
+3. Completed in v0.3.3: listing authorization, migration, cursor, audit, and disclosure tests.
 4. Prototype approve/revoke mutation with no public registration.
 5. Add deterministic confirmation, replay, drift, concurrency, corruption, migration, permission,
    path, crash-recovery, audit, idempotency, and prompt-injection tests.
@@ -316,18 +337,20 @@ identities are never returned.
 
 ## Emergency disable and rollback
 
-A startup-time global switch must remove mutating tools from registration. A separate switch may
-leave `trust_list` available while disabling mutation. Emergency disable invalidates outstanding
+A startup-time global switch must remove mutating tools from registration. The implemented
+trust-read switch independently removes `trust_list` when disabled. Emergency disable invalidates outstanding
 challenges, stops new mutations, lets in-flight atomic operations resolve to a recorded state, and
 preserves audit evidence.
 
-Rollback removes tool registration without deleting existing CLI trust data. Schema rollback must
-be explicitly supported or remain on the newer compatible reader; never rewrite entries to an older
+Rollback removes tool registration without deleting existing CLI trust data. Removing
+`CODEX_PREFLIGHT_ENABLE_TRUST_READ` and restarting invalidates process-local cursors while preserving
+the trust file, migration backups, and audit. Schema rollback must remain on the newer compatible reader; never rewrite entries to an older
 schema that broadens authority. Compromised confirmation keys are rotated and all outstanding
 challenges invalidated.
 
-## Acceptance gate for future implementation
+## Acceptance gate
 
-This design does not authorize implementation or registration. v0.2.6 remains scan-only through
-MCP. Future trust access requires separate reviewed loops, explicit authority configuration,
-security/concurrency validation, and human approval.
+v0.3.3 authorizes only default-off `trust_list` and its exact metadata-only migration. Trust
+approval, revocation, extension, consumption, matching changes, authenticated identity claims, or
+other mutation still require separate reviewed loops, explicit authority configuration,
+security/concurrency validation, exact-head acceptance, and release approval.

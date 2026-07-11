@@ -95,7 +95,7 @@ $env:CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN = "1"
 codex-preflight-mcp --list-tools
 ```
 
-Enabled inventory:
+Remote-only inventory:
 
 ```text
 preflight_check
@@ -104,6 +104,39 @@ remote_repository_scan
 ```
 
 Only exact `1` enables registration. Restart after changing the flag.
+
+Inspect the independent trust-read inventory:
+
+```bash
+CODEX_PREFLIGHT_ENABLE_TRUST_READ=1 codex-preflight-mcp --list-tools
+```
+
+PowerShell:
+
+```powershell
+$env:CODEX_PREFLIGHT_ENABLE_TRUST_READ = "1"
+codex-preflight-mcp --list-tools
+```
+
+Trust-read-only inventory:
+
+```text
+preflight_check
+corpus_scan
+trust_list
+```
+
+Setting both exact flags registers exactly:
+
+```text
+preflight_check
+corpus_scan
+remote_repository_scan
+trust_list
+```
+
+Values other than exact `1` enable neither optional authority. Restart after changing either flag.
+The remote flag adds only `remote_repository_scan`; the trust-read flag adds only `trust_list`.
 
 ## Process configuration
 
@@ -136,6 +169,10 @@ Clients with an explicit environment map can opt in to remote authority for that
   }
 }
 ```
+
+Trust read is a separate process authority. Set only
+`CODEX_PREFLIGHT_ENABLE_TRUST_READ: "1"` for `trust_list`, or set both exact values for the combined
+inventory. The root plugin `.mcp.json` sets neither flag.
 
 The enclosing keys vary by client. This is a generic process example, not a certification claim.
 
@@ -215,16 +252,47 @@ URL/ref/fixed limits, and requires the user to type `CONFIRM` before the second 
 accept credentials or auto-confirm. The confirmed operation performs only bounded static reads and
 never creates trust.
 
+### `trust_list`
+
+This tool exists only in a process started with exact
+`CODEX_PREFLIGHT_ENABLE_TRUST_READ=1`.
+
+| Input | Required | Contract |
+| --- | --- | --- |
+| `repoId` | no | Exact stored raw identity equality filter, at most 4096 UTF-8 bytes; never opened or returned. |
+| `commandScope` | no | Exact supported scope; never executed. |
+| `limit` | no | Integer 1-100; default 50. |
+| `cursor` | no | Opaque result cursor, at most 512 bytes and valid for 300 seconds in the same process/snapshot. |
+
+Machine-checked files:
+
+- [Request](../examples/mcp/trust-list-request.json)
+- [Successful redacted response](../examples/mcp/trust-list-response.json)
+- [Python stdio client](../examples/mcp/trust_list_client.py)
+
+```bash
+python examples/mcp/trust_list_client.py --limit 25
+```
+
+The example starts a trust-read-enabled process and performs only a bounded read. Responses never
+include raw repository IDs, paths, URLs, or approved commands. `repoIdHash` and `remoteUrlHash` are
+stable only within that server process. The tool cannot approve, revoke, extend, consume, satisfy,
+or create trust.
+
 ## Result and error handling
 
 Successful responses follow [MCP Report Schema](mcp-report-schema.md). Check
-`mcpSchemaVersion`, then branch on `decision` for local/remote reports or `passed` for corpus
-results.
+`mcpSchemaVersion`, then branch on `decision` for local/remote reports, `passed` for corpus results,
+or exact `schemaVersion: "trust-list/v1"` for trust pages.
 
 Expected failures use structured errors. Branch on `error.code`, display `error.message` and
 `error.remediation`, and use `retryable`; do not infer behavior from prose. The first valid remote
 call intentionally returns `MCP_REMOTE_CONFIRMATION_REQUIRED` with safe context. Invalid, expired,
 or replayed tokens never authorize network access.
+
+Trust read uses stable `MCP_TRUST_*` codes for disabled direct calls, arguments, limit/cursor,
+storage, corruption/schema, lock, migration, audit, and internal failure. Invalid or stale cursors
+must restart at the first page; never retry with modified cursor text.
 
 ## Evidence handling
 
@@ -249,13 +317,18 @@ states the same authority boundary.
 - If `cwd` fails, use the structured remediation and remember it resolves from server cwd.
 - If protocol parsing fails, remove stdout-writing wrappers.
 - If remote registration is absent, verify exact startup value `1` and restart the server.
+- If trust-list registration is absent, verify exact `CODEX_PREFLIGHT_ENABLE_TRUST_READ=1` and
+  restart the server.
 - If a remote error is retryable, request a new challenge before retrying; tokens are one-time.
 - Disable remote authority by removing the environment flag and restarting. Local tools remain
   functional and outstanding tokens are invalidated.
+- Disable trust read by removing its flag and restarting. Cursors are invalidated; CLI trust data,
+  migration backups, and trust-read audit files are preserved.
 
 ## Unavailable capabilities
 
-No mode exposes trust-list or trust-mutation MCP tools, planned command execution, arbitrary hosts,
-private-repository credentials, proxy overrides, browser automation, artifact execution, package
-installation, submodule/LFS target fetch, or redirect following. The default process exposes only
-`preflight_check` and `corpus_scan`; the opt-in process adds only `remote_repository_scan`.
+No mode exposes trust mutation, planned command execution, arbitrary hosts, private-repository
+credentials, proxy overrides, browser automation, artifact execution, package installation,
+submodule/LFS target fetch, or redirect following. The default process exposes only
+`preflight_check` and `corpus_scan`; independent exact flags add only `remote_repository_scan`, only
+`trust_list`, or both. `trust_approve` and `trust_revoke` remain absent in every inventory.

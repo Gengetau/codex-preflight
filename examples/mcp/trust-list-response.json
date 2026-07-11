@@ -1,0 +1,61 @@
+{
+  "mcpSchemaVersion": "1.0",
+  "tool": "trust_list",
+  "schemaVersion": "trust-list/v1",
+  "sourceType": "trust-cache",
+  "trustReadOnly": true,
+  "trustMutationAllowed": false,
+  "entries": [
+    {
+      "entryId": "123e4567-e89b-42d3-a456-426614174000",
+      "entryVersion": 1,
+      "repoIdHash": "hmac-sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repoIdRedacted": true,
+      "hasRemoteUrl": false,
+      "remoteUrlHash": null,
+      "headCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "criticalFingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "commandScope": "test",
+      "decision": "USER_APPROVED",
+      "approvedAt": "2026-07-11T00:00:00+00:00",
+      "expiresAt": "2026-07-18T00:00:00+00:00",
+      "approvedBy": "local-user",
+      "policyVersion": "default-v1",
+      "rulesetVersion": "2026.07.02",
+      "provenance": {
+        "schema": "trust-cache-array-v2",
+        "source": "cli-trust-approve",
+        "migrationVersion": "v0.3.3-trust-read-foundation",
+        "migrated": false,
+        "migratedAt": null,
+        "createdAt": "2026-07-11T00:00:00+00:00"
+      }
+    }
+  ],
+  "pagination": {
+    "resultCount": 1,
+    "limit": 2,
+    "nextCursor": null,
+    "complete": true,
+    "snapshotDigest": "hmac-sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  },
+  "runtimeIdentity": {
+    "transport": "stdio",
+    "identityStatus": "unavailable",
+    "clientId": null,
+    "sessionId": null
+  },
+  "auditEventId": "123e4567-e89b-42d3-a456-426614174001",
+  "safety": {
+    "repositoryContentTrust": "untrusted",
+    "evidenceTreatAsData": true,
+    "trustReadOnly": true,
+    "trustMutationAllowed": false,
+    "preflightUsesTrust": false,
+    "remoteConfirmationUsesTrust": false,
+    "rawRepoIdReturned": false,
+    "rawPathReturned": false,
+    "rawRemoteUrlReturned": false,
+    "approvedCommandReturned": false
+  }
+}
