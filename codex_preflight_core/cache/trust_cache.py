@@ -240,16 +240,17 @@ class TrustCache:
             entries.append(entry)
             _validate_unique_entry_ids(entries)
             after_bytes = self._serialize_entries(entries)
+            result_entry = deepcopy(entry)
             plan = TrustCacheMutationPlan("approve", entry_id, before_bytes, after_bytes, mutation_audit_event_id)
             prepared = _validate_prepared(prepare(plan), planned_event_id=mutation_audit_event_id)
-            self._write_encoded_unlocked(after_bytes)
             result = TrustCacheMutationResult(
                 "approved",
                 True,
-                deepcopy(entry),
+                result_entry,
                 prepared.event_id,
                 None,
             )
+            self._write_encoded_unlocked(after_bytes)
             try:
                 final_event_id = _validate_uuid4(commit(prepared))
             except Exception:
@@ -318,16 +319,17 @@ class TrustCache:
 
             remaining = [candidate for candidate_index, candidate in enumerate(entries) if candidate_index != index]
             after_bytes = self._serialize_entries(remaining)
+            result_entry = deepcopy(entry)
             plan = TrustCacheMutationPlan("revoke", entry_id, before_bytes, after_bytes, None)
             prepared = _validate_prepared(prepare(plan), planned_event_id=None)
-            self._write_encoded_unlocked(after_bytes)
             result = TrustCacheMutationResult(
                 "revoked",
                 True,
-                deepcopy(entry),
+                result_entry,
                 prepared.event_id,
                 None,
             )
+            self._write_encoded_unlocked(after_bytes)
             try:
                 final_event_id = _validate_uuid4(commit(prepared))
             except Exception:

@@ -96,6 +96,50 @@ def arm_temp_exists_failure_after_atomic_replace(
     return replaced
 
 
+class ResultMaterializationFault(RuntimeError):
+    pass
+
+
+class ResultBoundaryState:
+    def __init__(self) -> None:
+        self.prepare_started = False
+        self.replaced = False
+
+
+class GuardedMutationPrepared(TrustCacheMutationPrepared):
+    def __init__(self, event_id: str, boundary: ResultBoundaryState) -> None:
+        super().__init__(event_id, None)
+        object.__setattr__(self, "_boundary", boundary)
+
+    def __getattribute__(self, name: str):
+        if name == "event_id":
+            boundary = object.__getattribute__(self, "_boundary")
+            if boundary.replaced:
+                raise ResultMaterializationFault("prepared event accessed after atomic replacement")
+        return object.__getattribute__(self, name)
+
+
+def arm_result_materialization_fault(
+    monkeypatch: pytest.MonkeyPatch,
+) -> ResultBoundaryState:
+    boundary = ResultBoundaryState()
+    real_write = trust_cache.write_bytes_atomic
+    real_deepcopy = trust_cache.deepcopy
+
+    def write_then_arm(target: Path, data: bytes) -> None:
+        real_write(target, data)
+        boundary.replaced = True
+
+    def copy_before_prepare(value: object):
+        if boundary.prepare_started:
+            raise ResultMaterializationFault("result payload copied after prepare began")
+        return real_deepcopy(value)
+
+    monkeypatch.setattr(trust_cache, "write_bytes_atomic", write_then_arm)
+    monkeypatch.setattr(trust_cache, "deepcopy", copy_before_prepare)
+    return boundary
+
+
 def legacy_entry(*, repo_id: str = "https://github.com/example/project") -> dict[str, object]:
     return {
         "repoId": repo_id,
@@ -1315,6 +1359,168 @@ def test_mcp_revocation_temp_cleanup_cannot_fail_after_atomic_replace(
     assert caught.value.result.entry == created.entry
     assert caught.value.result.prepared_event_id == MCP_PREPARED_EVENT_ID
     assert caught.value.result.final_event_id is None
+
+
+def test_mcp_approval_precomputes_commit_error_result_before_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "trust.json"
+    cache = TrustCache(path)
+    boundary = arm_result_materialization_fault(monkeypatch)
+    intended: list[bytes] = []
+    commit_calls: list[str] = []
+
+    def prepare(plan):
+        boundary.prepare_started = True
+        intended.append(plan.after_bytes)
+        return GuardedMutationPrepared(plan.planned_event_id, boundary)
+
+    def fail_commit(_prepared):
+        commit_calls.append("commit")
+        raise RuntimeError("commit failed")
+
+    with pytest.raises((ResultMaterializationFault, TrustCacheMutationCommitError)) as caught:
+        cache.approve_mcp(
+            **mcp_approval_kwargs(tmp_path),
+            prepare=prepare,
+            commit=fail_commit,
+        )
+
+    assert boundary.replaced is True
+    assert path.read_bytes() == intended[0]
+    assert (type(caught.value), commit_calls) == (TrustCacheMutationCommitError, ["commit"])
+    assert isinstance(caught.value, TrustCacheMutationCommitError)
+    assert caught.value.result.outcome == "approved"
+    assert caught.value.result.applied is True
+    assert caught.value.result.entry is not None
+    assert caught.value.result.entry["entryId"] == MCP_ENTRY_ID
+    assert caught.value.result.prepared_event_id == MCP_PREPARED_EVENT_ID
+    assert caught.value.result.final_event_id is None
+
+
+def test_mcp_revocation_precomputes_commit_error_result_before_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "trust.json"
+    cache = TrustCache(path)
+    created = cache.approve_mcp(
+        **mcp_approval_kwargs(tmp_path),
+        prepare=lambda plan: TrustCacheMutationPrepared(plan.planned_event_id, None),
+        commit=lambda _prepared: MCP_FINAL_EVENT_ID,
+    )
+    assert created.entry is not None
+    boundary = arm_result_materialization_fault(monkeypatch)
+    intended: list[bytes] = []
+    commit_calls: list[str] = []
+
+    def prepare(plan):
+        boundary.prepare_started = True
+        intended.append(plan.after_bytes)
+        return GuardedMutationPrepared(MCP_PREPARED_EVENT_ID, boundary)
+
+    def fail_commit(_prepared):
+        commit_calls.append("commit")
+        raise RuntimeError("commit failed")
+
+    with pytest.raises((ResultMaterializationFault, TrustCacheMutationCommitError)) as caught:
+        cache.revoke_entry_id(
+            MCP_ENTRY_ID,
+            expected_version=1,
+            expected_entry=created.entry,
+            prepare=prepare,
+            commit=fail_commit,
+        )
+
+    assert boundary.replaced is True
+    assert path.read_bytes() == intended[0]
+    assert (type(caught.value), commit_calls) == (TrustCacheMutationCommitError, ["commit"])
+    assert isinstance(caught.value, TrustCacheMutationCommitError)
+    assert caught.value.result.outcome == "revoked"
+    assert caught.value.result.applied is True
+    assert caught.value.result.entry == created.entry
+    assert caught.value.result.prepared_event_id == MCP_PREPARED_EVENT_ID
+    assert caught.value.result.final_event_id is None
+
+
+def test_mcp_approval_returns_without_post_replace_result_operations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "trust.json"
+    cache = TrustCache(path)
+    boundary = arm_result_materialization_fault(monkeypatch)
+    intended: list[bytes] = []
+    commit_calls: list[str] = []
+
+    def prepare(plan):
+        boundary.prepare_started = True
+        intended.append(plan.after_bytes)
+        return GuardedMutationPrepared(plan.planned_event_id, boundary)
+
+    def commit(_prepared):
+        commit_calls.append("commit")
+        return MCP_FINAL_EVENT_ID
+
+    result = cache.approve_mcp(
+        **mcp_approval_kwargs(tmp_path),
+        prepare=prepare,
+        commit=commit,
+    )
+
+    assert boundary.replaced is True
+    assert commit_calls == ["commit"]
+    assert path.read_bytes() == intended[0]
+    assert result.outcome == "approved"
+    assert result.applied is True
+    assert result.entry is not None
+    assert result.entry["entryId"] == MCP_ENTRY_ID
+    assert result.prepared_event_id == MCP_PREPARED_EVENT_ID
+    assert result.final_event_id == MCP_FINAL_EVENT_ID
+
+
+def test_mcp_revocation_returns_without_post_replace_result_operations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "trust.json"
+    cache = TrustCache(path)
+    created = cache.approve_mcp(
+        **mcp_approval_kwargs(tmp_path),
+        prepare=lambda plan: TrustCacheMutationPrepared(plan.planned_event_id, None),
+        commit=lambda _prepared: MCP_FINAL_EVENT_ID,
+    )
+    assert created.entry is not None
+    boundary = arm_result_materialization_fault(monkeypatch)
+    intended: list[bytes] = []
+    commit_calls: list[str] = []
+
+    def prepare(plan):
+        boundary.prepare_started = True
+        intended.append(plan.after_bytes)
+        return GuardedMutationPrepared(MCP_PREPARED_EVENT_ID, boundary)
+
+    def commit(_prepared):
+        commit_calls.append("commit")
+        return MCP_FINAL_EVENT_ID
+
+    result = cache.revoke_entry_id(
+        MCP_ENTRY_ID,
+        expected_version=1,
+        expected_entry=created.entry,
+        prepare=prepare,
+        commit=commit,
+    )
+
+    assert boundary.replaced is True
+    assert commit_calls == ["commit"]
+    assert path.read_bytes() == intended[0]
+    assert result.outcome == "revoked"
+    assert result.applied is True
+    assert result.entry == created.entry
+    assert result.prepared_event_id == MCP_PREPARED_EVENT_ID
+    assert result.final_event_id == MCP_FINAL_EVENT_ID
 
 
 def test_mcp_approval_rejects_an_intended_store_over_the_size_limit(tmp_path: Path) -> None:
