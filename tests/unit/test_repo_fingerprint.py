@@ -757,21 +757,94 @@ def test_strict_traversal_rejects_pending_directory_swap_before_enumeration(
     target: str | Path = r"\\192.0.2.1\unreachable-pending" if os.name == "nt" else outside
     real_open = safe_path_module._open_directory
     swapped = False
+    blocked = False
 
     def swap_before_pending_open(path: Path, parent_descriptor: int | None, name: str | None) -> int:
-        nonlocal swapped
-        if path == pending and not swapped:
-            _swap_directory_to_link(pending, moved, target)
-            swapped = True
+        nonlocal blocked, swapped
+        if path == pending and not swapped and not blocked:
+            try:
+                _swap_directory_to_link(pending, moved, target)
+                swapped = True
+            except PermissionError:
+                blocked = True
         return real_open(path, parent_descriptor, name)
 
     monkeypatch.setattr(safe_path_module, "_open_directory", swap_before_pending_open)
     try:
-        with pytest.raises(CriticalFileCollectionError):
-            collect_critical_files(tmp_path, reject_unsafe=True)
-        assert swapped is True
+        if os.name == "nt":
+            try:
+                collected = collect_critical_files(tmp_path, reject_unsafe=True)
+            except CriticalFileCollectionError:
+                collected = []
+            assert swapped or blocked
+            if blocked:
+                assert collected == [Path("pending/README.md")]
+            else:
+                assert collected == []
+        else:
+            with pytest.raises(CriticalFileCollectionError):
+                collect_critical_files(tmp_path, reject_unsafe=True)
+            assert swapped is True
     finally:
         _restore_swapped_directory(pending, moved)
+
+
+def test_root_directory_handle_retains_and_closes_parent_binding(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    root_descriptor = -1
+    parent_descriptor = -1
+
+    with safe_path_module.open_directory_handle_nofollow(root) as handle:
+        assert handle.name == root.name
+        assert handle.parent_descriptor is not None
+        root_descriptor = handle.descriptor
+        parent_descriptor = handle.parent_descriptor
+        assert os.fstat(root_descriptor)
+        assert os.fstat(parent_descriptor)
+
+    with pytest.raises(OSError):
+        os.fstat(root_descriptor)
+    with pytest.raises(OSError):
+        os.fstat(parent_descriptor)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX root replacement semantics")
+def test_strict_fingerprint_never_hashes_replacement_root_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "root"
+    moved = tmp_path / "original-root"
+    root.mkdir()
+    (root / "README.md").write_text("original root\n", encoding="utf-8")
+    original_fingerprint = compute_critical_fingerprint(root, strict_safety=True)
+    real_entries = safe_path_module._directory_entries
+    replaced = False
+
+    def replace_after_root_handle_acquisition(directory: Any):
+        nonlocal replaced
+        if directory.path == root and not replaced:
+            root.rename(moved)
+            root.mkdir()
+            (root / "README.md").write_text("replacement root\n", encoding="utf-8")
+            replaced = True
+        yield from real_entries(directory)
+
+    monkeypatch.setattr(safe_path_module, "_directory_entries", replace_after_root_handle_acquisition)
+    try:
+        try:
+            fingerprint = compute_critical_fingerprint(root, strict_safety=True)
+        except CriticalFingerprintError:
+            fingerprint = None
+
+        assert replaced is True
+        assert fingerprint is None or fingerprint == original_fingerprint
+    finally:
+        if replaced:
+            (root / "README.md").unlink()
+            root.rmdir()
+            moved.rename(root)
 
 
 def test_strict_traversal_never_accepts_queued_directory_replacement(

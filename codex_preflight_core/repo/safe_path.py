@@ -159,7 +159,22 @@ def open_directory_handle_nofollow(path: Path) -> Iterator[SafeDirectoryHandle]:
     absolute = local_absolute_path(path)
     held = _open_directory_chain(absolute)
     leaf = held.pop()
-    handle = SafeDirectoryHandle(leaf.path, leaf.descriptor)
+    parent_descriptor: int | None = None
+    try:
+        if leaf.parent_descriptor is not None:
+            parent_descriptor = os.dup(leaf.parent_descriptor)
+        handle = SafeDirectoryHandle(
+            leaf.path,
+            leaf.descriptor,
+            parent_descriptor=parent_descriptor,
+            name=leaf.name,
+        )
+    except Exception:
+        if parent_descriptor is not None:
+            os.close(parent_descriptor)
+        os.close(leaf.descriptor)
+        _close_directory_chain(held)
+        raise
     _close_directory_chain(held)
     try:
         yield handle
