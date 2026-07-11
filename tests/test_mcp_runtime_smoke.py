@@ -65,10 +65,11 @@ def test_stdio_initialization_returns_fixed_server_instructions() -> None:
 def test_stdio_trust_read_initialization_registers_exact_inventory(tmp_path: Path) -> None:
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
+    from mcp.types import TextContent
 
     from codex_preflight_mcp.server import TRUST_SERVER_INSTRUCTIONS
 
-    async def initialize() -> tuple[str | None, set[str]]:
+    async def initialize() -> tuple[str | None, set[str], dict, str]:
         environment = {
             **os.environ,
             "CODEX_PREFLIGHT_ENABLE_TRUST_READ": "1",
@@ -84,11 +85,29 @@ def test_stdio_trust_read_initialization_registers_exact_inventory(tmp_path: Pat
             async with ClientSession(read_stream, write_stream) as session:
                 result = await session.initialize()
                 tools = await session.list_tools()
-                return result.instructions, {tool.name for tool in tools.tools}
+                trust_result = await session.call_tool("trust_list", arguments={})
+                assert trust_result.structuredContent is not None
+                invalid = await session.call_tool(
+                    "trust_list",
+                    arguments={"outputPath": "private/path"},
+                )
+                invalid_text = "\n".join(
+                    item.text for item in invalid.content if isinstance(item, TextContent)
+                )
+                return (
+                    result.instructions,
+                    {tool.name for tool in tools.tools},
+                    trust_result.structuredContent,
+                    invalid_text,
+                )
 
-    instructions, tool_names = asyncio.run(initialize())
+    instructions, tool_names, trust_result, invalid_text = asyncio.run(initialize())
     assert instructions == TRUST_SERVER_INSTRUCTIONS
     assert tool_names == {"preflight_check", "corpus_scan", "trust_list"}
+    assert trust_result["tool"] == "trust_list"
+    assert trust_result["entries"] == []
+    assert "MCP_TRUST_LIST_INVALID_ARGUMENT" in invalid_text
+    assert "private/path" not in invalid_text
     audit = tmp_path / "trust-read" / "audit.jsonl"
     assert audit.exists()
     assert '"event":"registration_state"' in audit.read_text(encoding="utf-8")

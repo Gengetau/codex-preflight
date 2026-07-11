@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -71,12 +72,11 @@ def test_trust_list_schema_is_closed_and_bounded(monkeypatch: pytest.MonkeyPatch
         "additionalProperties": False,
         "properties": {
             "repoId": {
-                "type": ["string", "null"],
-                "default": None,
+                "type": "string",
                 "description": "Exact stored repository identity filter; never opened or returned.",
             },
             "commandScope": {
-                "type": ["string", "null"],
+                "type": "string",
                 "enum": [
                     "dependency_install",
                     "script_execution",
@@ -86,9 +86,7 @@ def test_trust_list_schema_is_closed_and_bounded(monkeypatch: pytest.MonkeyPatch
                     "network_shell",
                     "mcp_server_start",
                     "unknown_shell",
-                    None,
                 ],
-                "default": None,
             },
             "limit": {
                 "type": "integer",
@@ -97,9 +95,8 @@ def test_trust_list_schema_is_closed_and_bounded(monkeypatch: pytest.MonkeyPatch
                 "default": 50,
             },
             "cursor": {
-                "type": ["string", "null"],
+                "type": "string",
                 "maxLength": 512,
-                "default": None,
             },
         },
     }
@@ -193,6 +190,56 @@ def test_registration_audit_failure_fails_closed(monkeypatch: pytest.MonkeyPatch
         server.create_mcp_server()
 
     assert caught.value.detail.code is McpErrorCode.TRUST_LIST_AUDIT_FAILED
+
+
+@pytest.mark.parametrize(
+    ("arguments", "expected_code"),
+    [
+        ({"outputPath": "private/path"}, "MCP_TRUST_LIST_INVALID_ARGUMENT"),
+        ({"repoId": None}, "MCP_TRUST_LIST_INVALID_ARGUMENT"),
+        ({"repoId": 7}, "MCP_TRUST_LIST_INVALID_ARGUMENT"),
+        ({"commandScope": None}, "MCP_TRUST_LIST_INVALID_ARGUMENT"),
+        ({"limit": None}, "MCP_TRUST_LIST_LIMIT_EXCEEDED"),
+        ({"limit": "1"}, "MCP_TRUST_LIST_LIMIT_EXCEEDED"),
+        ({"cursor": None}, "MCP_TRUST_LIST_CURSOR_INVALID"),
+    ],
+)
+def test_transport_arguments_use_stable_trust_errors(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    arguments: dict[str, object],
+    expected_code: str,
+) -> None:
+    from codex_preflight_mcp import server
+
+    monkeypatch.setenv("CODEX_PREFLIGHT_ENABLE_TRUST_READ", "1")
+    monkeypatch.delenv("CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN", raising=False)
+    monkeypatch.setenv("CODEX_PREFLIGHT_HOME", str(tmp_path))
+    mcp = server.create_mcp_server()
+
+    with pytest.raises(Exception) as caught:
+        asyncio.run(mcp._tool_manager.call_tool("trust_list", arguments))
+
+    assert expected_code in str(caught.value)
+    assert "private/path" not in str(caught.value)
+
+
+def test_transport_adapter_preserves_success_response(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from codex_preflight_mcp import server
+
+    monkeypatch.setenv("CODEX_PREFLIGHT_ENABLE_TRUST_READ", "1")
+    monkeypatch.delenv("CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN", raising=False)
+    monkeypatch.setenv("CODEX_PREFLIGHT_HOME", str(tmp_path))
+    mcp = server.create_mcp_server()
+
+    result = asyncio.run(mcp._tool_manager.call_tool("trust_list", {}))
+
+    assert result["tool"] == "trust_list"
+    assert result["entries"] == []
+    assert result["pagination"]["limit"] == 50
 
 
 def test_unexpected_trust_list_failure_is_normalized_without_details(

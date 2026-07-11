@@ -39,6 +39,7 @@ TRUST_LIST_SAFETY = {
 
 _PROCESS_PRIVACY_KEY = secrets.token_bytes(32)
 _PROCESS_CURSOR_MANAGER = TrustCursorManager()
+_MISSING = object()
 _COMMAND_SCOPES = {
     "dependency_install",
     "script_execution",
@@ -93,16 +94,17 @@ class TrustReadService:
     def list(
         self,
         *,
-        repo_id: object = None,
-        command_scope: object = None,
+        repo_id: object = _MISSING,
+        command_scope: object = _MISSING,
         limit: object = 50,
-        cursor: object = None,
+        cursor: object = _MISSING,
     ) -> dict[str, Any]:
+        cursor_provided = cursor is not _MISSING
         try:
-            validated_repo_id = _validate_repo_id(repo_id)
-            validated_scope = _validate_command_scope(command_scope)
+            validated_repo_id = None if repo_id is _MISSING else _validate_repo_id(repo_id)
+            validated_scope = None if command_scope is _MISSING else _validate_command_scope(command_scope)
             validated_limit = _validate_limit(limit)
-            validated_cursor = _validate_cursor(cursor)
+            validated_cursor = None if cursor is _MISSING else _validate_cursor(cursor)
         except TrustReadError as error:
             self._audit_or_raise(
                 "request_validation_failed",
@@ -113,7 +115,7 @@ class TrustReadService:
                     else None
                 ),
                 result_count=0,
-                cursor_status="rejected" if cursor is not None else "absent",
+                cursor_status="rejected" if cursor_provided else "absent",
                 migration_status="not-started",
                 outcome="failed",
                 error_code=error.code,
@@ -200,7 +202,7 @@ class TrustReadService:
         ]
         public_entries = [_public_entry(entry, self.privacy_key) for entry in filtered]
         public_entries.sort(key=_entry_sort_key)
-        snapshot_digest = _snapshot_digest(public_entries, self.privacy_key)
+        snapshot_digest = _snapshot_digest(filtered, self.privacy_key)
         self._audit_or_raise(
             "filter_applied",
             repo_id=validated_repo_id,
@@ -415,8 +417,6 @@ def _snapshot_digest(entries: list[dict[str, Any]], privacy_key: bytes) -> str:
 
 
 def _validate_repo_id(value: object) -> str | None:
-    if value is None:
-        return None
     if (
         not isinstance(value, str)
         or not value
@@ -432,8 +432,6 @@ def _validate_repo_id(value: object) -> str | None:
 
 
 def _validate_command_scope(value: object) -> str | None:
-    if value is None:
-        return None
     if not isinstance(value, str) or value not in _COMMAND_SCOPES:
         raise TrustReadError(
             "MCP_TRUST_LIST_INVALID_ARGUMENT",
@@ -454,8 +452,6 @@ def _validate_limit(value: object) -> int:
 
 
 def _validate_cursor(value: object) -> str | None:
-    if value is None:
-        return None
     if not isinstance(value, str) or not value or len(value.encode("utf-8")) > 512 or _CONTROL.search(value):
         raise TrustReadError(
             "MCP_TRUST_LIST_CURSOR_INVALID",

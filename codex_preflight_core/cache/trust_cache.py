@@ -226,6 +226,7 @@ class TrustCache:
         original: bytes,
     ) -> list[dict[str, Any]]:
         self._create_backup_unlocked(original)
+        self._prune_backups_unlocked()
         migrated_at = self._now().isoformat()
         try:
             for index in legacy_indexes:

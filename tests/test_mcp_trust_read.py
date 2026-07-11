@@ -182,14 +182,17 @@ def test_hashes_snapshot_and_sorting_are_stable_within_process(tmp_path: Path) -
         ({"repo_id": "repo\nvalue"}, "MCP_TRUST_LIST_INVALID_ARGUMENT"),
         ({"repo_id": "repo\x00value"}, "MCP_TRUST_LIST_INVALID_ARGUMENT"),
         ({"repo_id": "repo\x85value"}, "MCP_TRUST_LIST_INVALID_ARGUMENT"),
+        ({"repo_id": None}, "MCP_TRUST_LIST_INVALID_ARGUMENT"),
         ({"repo_id": 7}, "MCP_TRUST_LIST_INVALID_ARGUMENT"),
         ({"command_scope": "anything"}, "MCP_TRUST_LIST_INVALID_ARGUMENT"),
+        ({"command_scope": None}, "MCP_TRUST_LIST_INVALID_ARGUMENT"),
         ({"command_scope": []}, "MCP_TRUST_LIST_INVALID_ARGUMENT"),
         ({"limit": 0}, "MCP_TRUST_LIST_LIMIT_EXCEEDED"),
         ({"limit": 101}, "MCP_TRUST_LIST_LIMIT_EXCEEDED"),
         ({"limit": True}, "MCP_TRUST_LIST_LIMIT_EXCEEDED"),
         ({"limit": "1"}, "MCP_TRUST_LIST_LIMIT_EXCEEDED"),
         ({"cursor": "x" * 513}, "MCP_TRUST_LIST_CURSOR_INVALID"),
+        ({"cursor": None}, "MCP_TRUST_LIST_CURSOR_INVALID"),
         ({"cursor": 1}, "MCP_TRUST_LIST_CURSOR_INVALID"),
     ],
 )
@@ -223,6 +226,20 @@ def test_cursor_fails_after_trust_snapshot_changes(tmp_path: Path) -> None:
 
     with pytest.raises(TrustReadError) as caught:
         service.list(limit=1, cursor=first["pagination"]["nextCursor"])
+    assert caught.value.code == "MCP_TRUST_LIST_CURSOR_INVALID"
+
+
+@pytest.mark.parametrize("field", ["path", "approvedCommand"])
+def test_cursor_binds_private_stored_fields(tmp_path: Path, field: str) -> None:
+    service, cache = build_service(tmp_path, limit_entries=2)
+    first = service.list(limit=1)
+    stored = json.loads(cache.path.read_text(encoding="utf-8"))
+    stored[0][field] = f"changed-{field}"
+    cache.path.write_text(json.dumps(stored), encoding="utf-8")
+
+    with pytest.raises(TrustReadError) as caught:
+        service.list(limit=1, cursor=first["pagination"]["nextCursor"])
+
     assert caught.value.code == "MCP_TRUST_LIST_CURSOR_INVALID"
 
 

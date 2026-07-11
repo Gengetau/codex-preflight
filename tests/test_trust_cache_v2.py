@@ -155,6 +155,28 @@ def test_migration_write_failure_keeps_original_and_reports_migration_error(
     assert len(list(tmp_path.glob("trust.json.v0.3.3-migration.*.bak"))) == 1
 
 
+def test_failed_migrations_keep_three_backups(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "trust.json"
+    original = json.dumps([legacy_entry()]).encode("utf-8")
+    path.write_bytes(original)
+
+    def fail_write(_path: Path, _data: object) -> None:
+        raise OSError("hidden replace detail")
+
+    monkeypatch.setattr(trust_cache, "write_json_atomic", fail_write)
+
+    for _ in range(7):
+        with pytest.raises(TrustCacheError) as caught:
+            TrustCache(path).list()
+        assert caught.value.code == "migration-failed"
+        assert path.read_bytes() == original
+
+    assert len(list(tmp_path.glob("trust.json.v0.3.3-migration.*.bak"))) == 3
+
+
 def test_migration_retains_at_most_three_bounded_backups(tmp_path: Path) -> None:
     path = tmp_path / "trust.json"
     path.write_text(json.dumps([legacy_entry()]), encoding="utf-8")

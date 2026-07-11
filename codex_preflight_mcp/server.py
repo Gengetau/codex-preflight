@@ -115,6 +115,8 @@ REMOTE_TRUST_SERVER_INSTRUCTIONS = (
 
 _REMOTE_CONFIRMATIONS = RemoteConfirmationManager()
 _REMOTE_LIMITS = ResourceLimits()
+_MISSING = object()
+_TRUST_LIST_ARGUMENTS = {"repoId", "commandScope", "limit", "cursor"}
 
 
 def tool_definitions() -> list[dict[str, Any]]:
@@ -185,14 +187,13 @@ def tool_definitions() -> list[dict[str, Any]]:
                     "additionalProperties": False,
                     "properties": {
                         "repoId": {
-                            "type": ["string", "null"],
-                            "default": None,
+                            "type": "string",
                             "description": (
                                 "Exact stored repository identity filter; never opened or returned."
                             ),
                         },
                         "commandScope": {
-                            "type": ["string", "null"],
+                            "type": "string",
                             "enum": [
                                 "dependency_install",
                                 "script_execution",
@@ -202,9 +203,7 @@ def tool_definitions() -> list[dict[str, Any]]:
                                 "network_shell",
                                 "mcp_server_start",
                                 "unknown_shell",
-                                None,
                             ],
-                            "default": None,
                         },
                         "limit": {
                             "type": "integer",
@@ -213,9 +212,8 @@ def tool_definitions() -> list[dict[str, Any]]:
                             "default": 50,
                         },
                         "cursor": {
-                            "type": ["string", "null"],
+                            "type": "string",
                             "maxLength": 512,
-                            "default": None,
                         },
                     },
                 },
@@ -292,10 +290,10 @@ def corpus_scan(case_id: str | None = None) -> dict[str, Any]:
 
 
 def trust_list(
-    repoId: object = None,
-    commandScope: object = None,
+    repoId: object = _MISSING,
+    commandScope: object = _MISSING,
     limit: object = 50,
-    cursor: object = None,
+    cursor: object = _MISSING,
     **kwargs: object,
 ) -> dict[str, Any]:
     if not trust_read_enabled():
@@ -305,27 +303,20 @@ def trust_list(
             "Restart with CODEX_PREFLIGHT_ENABLE_TRUST_READ=1 only after approving local trust-read authority.",
             safety_boundary="The default MCP inventory cannot read or mutate the local trust store.",
         )
-    if kwargs:
-        unsupported = next(iter(sorted(kwargs)))
-        field = unsupported if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", unsupported) else None
-        raise _error(
-            McpErrorCode.TRUST_LIST_INVALID_ARGUMENT,
-            "trust_list received an unsupported argument.",
-            "Remove unsupported fields; trust_list accepts only repoId, commandScope, limit, and cursor.",
-            field=field,
-            safety_boundary="Request fields cannot select files, URLs, cache paths, or output destinations.",
-        )
     try:
         service = default_trust_read_service()
     except Exception as error:
         raise _trust_list_internal_error() from error
-    return _run_trust_list(
-        service,
-        repo_id=repoId,
-        command_scope=commandScope,
-        limit=limit,
-        cursor=cursor,
-    )
+    arguments = dict(kwargs)
+    for name, value in (
+        ("repoId", repoId),
+        ("commandScope", commandScope),
+        ("limit", limit),
+        ("cursor", cursor),
+    ):
+        if value is not _MISSING:
+            arguments[name] = value
+    return _run_trust_list_arguments(service, arguments)
 
 
 def remote_repository_scan(
@@ -454,25 +445,57 @@ def _server_instructions() -> str:
     return SERVER_INSTRUCTIONS
 
 
-def _run_trust_list(
+def _run_trust_list_arguments(
     service: TrustReadService,
-    *,
-    repo_id: object,
-    command_scope: object,
-    limit: object,
-    cursor: object,
+    arguments: dict[str, object],
 ) -> dict[str, Any]:
-    try:
-        return service.list(
-            repo_id=repo_id,
-            command_scope=command_scope,
-            limit=limit,
-            cursor=cursor,
+    unknown = sorted(set(arguments) - _TRUST_LIST_ARGUMENTS)
+    if unknown:
+        unsupported = unknown[0]
+        field = unsupported if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", unsupported) else None
+        raise _error(
+            McpErrorCode.TRUST_LIST_INVALID_ARGUMENT,
+            "trust_list received an unsupported argument.",
+            "Remove unsupported fields; trust_list accepts only repoId, commandScope, limit, and cursor.",
+            field=field,
+            safety_boundary="Request fields cannot select files, URLs, cache paths, or output destinations.",
         )
+    service_arguments: dict[str, object] = {}
+    for public_name, internal_name in (
+        ("repoId", "repo_id"),
+        ("commandScope", "command_scope"),
+        ("limit", "limit"),
+        ("cursor", "cursor"),
+    ):
+        if public_name in arguments:
+            service_arguments[internal_name] = arguments[public_name]
+    try:
+        return service.list(**service_arguments)
     except TrustReadError as error:
         raise _trust_list_error(error) from error
     except Exception as error:
         raise _trust_list_internal_error() from error
+
+
+class _TrustListRuntimeMetadata:
+    def __init__(self, delegate: Any, service: TrustReadService) -> None:
+        self.delegate = delegate
+        self.service = service
+
+    async def call_fn_with_arg_validation(
+        self,
+        _fn: Callable[..., Any],
+        _fn_is_async: bool,
+        arguments_to_validate: dict[str, Any],
+        _arguments_to_pass_directly: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        return _run_trust_list_arguments(self.service, dict(arguments_to_validate))
+
+    def convert_result(self, result: object) -> object:
+        return self.delegate.convert_result(result)
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self.delegate, name)
 
 
 def create_mcp_server(*, fastmcp_factory: Callable[..., Any] | None = None):
@@ -526,18 +549,28 @@ def create_mcp_server(*, fastmcp_factory: Callable[..., Any] | None = None):
             limit: int = 50,
             cursor: str | None = None,
         ) -> dict[str, Any]:
-            return _run_trust_list(
-                trust_service,
-                repo_id=repoId,
-                command_scope=commandScope,
-                limit=limit,
-                cursor=cursor,
-            )
+            arguments: dict[str, object] = {"limit": limit}
+            if repoId is not None:
+                arguments["repoId"] = repoId
+            if commandScope is not None:
+                arguments["commandScope"] = commandScope
+            if cursor is not None:
+                arguments["cursor"] = cursor
+            return _run_trust_list_arguments(trust_service, arguments)
 
     for definition in tool_definitions():
         registered = mcp._tool_manager.get_tool(definition["name"])
         if registered is not None:
             registered.parameters = definition["inputSchema"]
+
+    if trust_service is not None:
+        registered_trust = mcp._tool_manager.get_tool("trust_list")
+        if registered_trust is not None:
+            # FastMCP ignores extras and may coerce scalars before callbacks; trust inputs require exact raw validation.
+            registered_trust.fn_metadata = _TrustListRuntimeMetadata(
+                registered_trust.fn_metadata,
+                trust_service,
+            )
 
     if trust_service is not None:
         try:
