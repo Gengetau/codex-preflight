@@ -16,11 +16,34 @@ def render_markdown_report(report_json: str | dict[str, Any]) -> str:
         "",
         report["agentInstruction"],
         "",
+        "## Policy Explanation",
+        "",
+        f"Selected by: `{report['policyExplanation']['selectedBy']['type']}`",
+        f"Final decision: `{report['policyExplanation']['finalDecision']}`",
+        f"Command scope: `{report['policyExplanation']['commandScope']}`",
+        "",
+        "| Rule | Matrix | Minimum | Gate effect | Rationale |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for contribution in report["policyExplanation"]["ruleContributions"]:
+        lines.append(
+            "| {rule} | {matched} | {minimum} | {effect} | {rationale} |".format(
+                rule=contribution["ruleId"],
+                matched="yes" if contribution["matrixMatched"] else "no",
+                minimum=contribution["minimumDecision"] or "none",
+                effect="gate" if contribution["affectedFinalGate"] else "report-only",
+                rationale=str(contribution["rationale"] or "none").replace("|", "\\|"),
+            )
+        )
+    lines.extend(
+        [
+        "",
         "## Summary",
         "",
         "| Severity | Count |",
         "| --- | ---: |",
-    ]
+        ]
+    )
     for severity, count in report["summary"].items():
         lines.append(f"| {severity.upper()} | {count} |")
     lines.extend(["", "## Findings", ""])

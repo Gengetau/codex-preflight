@@ -1,5 +1,18 @@
 # Release History
 
+## v0.3.1
+
+Coverage calibration and report explainability:
+
+- Added deterministic, additive policy explanations to JSON and Markdown reports.
+- Added local-only `codex-preflight report compare` JSON/Markdown comparison with bounded input,
+  stable identities, volatile metadata normalization, and structured errors.
+- Grouped corpus output by category and exposed expected/actual rules plus negative-control labels.
+- Added clean Rust and Go corpus fixtures while preserving warning-oriented Cargo and Go policy.
+- Preserved existing CLI and MCP request shapes and kept the MCP runtime exactly
+  `preflight_check` and `corpus_scan`.
+- Added no network, remote-scan, trust, command-execution, browser, or artifact-download authority.
+
 ## v0.3.0
 
 Rust and Go ecosystem coverage foundation:

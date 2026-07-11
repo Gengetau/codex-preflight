@@ -1,3 +1,4 @@
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -52,6 +53,7 @@ def scan_corpus(case_id: str | None = None, root: Path = DEFAULT_CORPUS_ROOT) ->
     return {
         "passed": all(result["passed"] for result in results),
         "cases": results,
+        "groups": _group_results(results),
     }
 
 
@@ -59,14 +61,34 @@ def render_corpus_markdown(result: dict[str, Any]) -> str:
     lines = [
         "# Codex Preflight Corpus Scan",
         "",
-        "| Case | Actual | Expected | Result |",
-        "| --- | --- | --- | --- |",
+        f"Overall result: {'pass' if result['passed'] else 'fail'}",
+        "",
     ]
-    for case in result["cases"]:
-        status = "pass" if case["passed"] else "fail"
-        lines.append(
-            f"| {case['id']} | {case['actualDecision']} | {case['expectedDecision']} | {status} |"
+    for group in result.get("groups", _group_results(result["cases"])):
+        lines.extend(
+            [
+                f"## Category: {group['category']}",
+                "",
+                "| Case | Negative control | Expected | Actual | Expected rules | Actual rules | Result |",
+                "| --- | --- | --- | --- | --- | --- | --- |",
+            ]
         )
+        for case in group["cases"]:
+            status = "pass" if case["passed"] else "fail"
+            expected_rules = ", ".join(case["expectedRules"]) or "none"
+            actual_rules = ", ".join(case["actualRules"]) or "none"
+            lines.append(
+                "| {id} | {negative} | {expected} | {actual} | {expected_rules} | {actual_rules} | {status} |".format(
+                    id=case["id"],
+                    negative="yes" if case["negativeControl"] else "no",
+                    expected=case["expectedDecision"],
+                    actual=case["actualDecision"],
+                    expected_rules=expected_rules,
+                    actual_rules=actual_rules,
+                    status=status,
+                )
+            )
+        lines.append("")
     return "\n".join(lines) + "\n"
 
 
@@ -83,5 +105,21 @@ def _scan_case(case: CorpusCase) -> dict[str, Any]:
         "actualDecision": report["decision"],
         "expectedRules": case.expected_rules,
         "actualRules": actual_rules,
+        "negativeControl": case.expected_decision == "ALLOW" and not case.expected_rules,
         "passed": passed,
     }
+
+
+def _group_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for result in results:
+        grouped[str(result["category"])].append(result)
+    return [
+        {
+            "category": category,
+            "passed": all(case["passed"] for case in grouped[category]),
+            "negativeControls": sum(1 for case in grouped[category] if case["negativeControl"]),
+            "cases": sorted(grouped[category], key=lambda case: case["id"]),
+        }
+        for category in sorted(grouped)
+    ]

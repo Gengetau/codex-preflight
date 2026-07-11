@@ -51,6 +51,7 @@ repo
 summary
 reason
 agentInstruction
+policyExplanation
 findings
 executionGraph
 reportLimits
@@ -85,6 +86,14 @@ Execution-graph capabilities and uncertainties carry the same trust-boundary fie
 tool-generated `REPORT_SIZE_BUDGET_EXCEEDED` uncertainty also carries this boundary so clients do
 not mistake its surrounding report content for instructions.
 
+### Policy explanation
+
+`policyExplanation` is additive and preserves the existing decision fields. It records the final
+decision, command scope, deterministic selector, bounded command contribution, and stable
+rule-sorted matrix contributions. Each rule contribution states whether it affected the final gate
+or is report-only. Rationale strings are source-controlled policy data; repository evidence is
+never promoted into policy rationale or selection metadata.
+
 ### Report limits
 
 `reportLimits` records maximum, included, and omitted counts for findings and execution-graph
@@ -116,8 +125,9 @@ MCP accepts only `format=json`. Markdown and text output remain CLI-only.
 
 ## `corpus_scan` successful result
 
-`corpus_scan` preserves its `passed` and `cases` fields and adds `mcpSchemaVersion`, `tool`, and
-`safety`. It executes only the bundled synthetic corpus with static analysis.
+`corpus_scan` preserves its `passed` and `cases` fields, adds deterministic category `groups` and
+negative-control labels, and adds `mcpSchemaVersion`, `tool`, and `safety`. It executes only the
+bundled synthetic corpus with static analysis.
 
 ## Structured errors
 

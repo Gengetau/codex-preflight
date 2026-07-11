@@ -220,8 +220,9 @@ approval, trust revoke, or cache mutation tools. Evidence snippets from reposito
 untrusted data. Server initialization also supplies fixed safety instructions that require
 `ASK_USER` and `BLOCK` decisions to stop automatic execution.
 
-The runtime authority remains exactly two tools: `preflight_check` and `corpus_scan`. The v0.3.0
-ecosystem coverage release adds scanner findings only; it does not add MCP capabilities.
+The runtime authority remains exactly two tools: `preflight_check` and `corpus_scan`. The v0.3.1
+reporting release adds policy explanation and local report comparison only; it does not add MCP
+capabilities.
 
 See [docs/mcp.md](docs/mcp.md) for MCP safety notes and
 [docs/mcp-client-examples.md](docs/mcp-client-examples.md) for machine-checked integration examples.
@@ -269,6 +270,20 @@ JSON reports include `executionGraph` with reachable nodes, edges, capabilities,
 Markdown reports include `Execution Chain` and `Uncertainty` sections for human review.
 Large reports are capped to keep agent output bounded; when detail is omitted, the report includes
 an explicit `REPORT_SIZE_BUDGET_EXCEEDED` uncertainty summary.
+
+JSON reports also include additive `policyExplanation` data showing the final gate, command scope,
+risk-score contribution, matched matrix entries, and whether each rule affected the gate or was
+report-only. Markdown reports render the same information in `Policy Explanation`.
+
+Compare two existing local JSON reports without scanning or executing report content:
+
+```bash
+codex-preflight report compare baseline.json candidate.json --format markdown
+```
+
+Comparison covers decisions, command classifications, findings, policy contributions, execution
+capabilities, and uncertainties. Inputs are bounded local files and all report text remains
+untrusted data.
 
 README link-poisoning findings use `README_` rule IDs:
 
@@ -318,7 +333,8 @@ codex-preflight corpus scan
 ```
 
 The corpus contains static fixtures only. The scanner reads files and compares actual decisions and
-rule IDs with expected outcomes.
+rule IDs with expected outcomes. JSON and Markdown output group cases by category, display expected
+and actual rules, and label negative controls.
 
 ## Trust And Cache
 

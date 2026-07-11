@@ -1,0 +1,8 @@
+id: rust-clean-minimal
+title: Clean minimal Rust package
+category: ecosystem-rust
+command: cargo test
+expectedDecision: ALLOW
+expectedRules: []
+description: Minimal Rust package without build scripts, aliases, source replacement, or git dependencies.
+safetyNote: Contains static Cargo metadata only; Cargo commands are never executed during corpus scanning.

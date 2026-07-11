@@ -20,7 +20,37 @@
         "SCRIPT_INDIRECT_EXECUTION",
         "JS_CHILD_PROCESS_EXEC"
       ],
+      "negativeControl": false,
       "passed": true
+    }
+  ],
+  "groups": [
+    {
+      "category": "reachability",
+      "passed": true,
+      "negativeControls": 0,
+      "cases": [
+        {
+          "id": "nested-node-child-process",
+          "title": "Nested package lifecycle reaches Node child process",
+          "category": "reachability",
+          "command": "pnpm install",
+          "expectedDecision": "ASK_USER",
+          "actualDecision": "ASK_USER",
+          "expectedRules": [
+            "NODE_POSTINSTALL_SCRIPT",
+            "SCRIPT_INDIRECT_EXECUTION",
+            "JS_CHILD_PROCESS_EXEC"
+          ],
+          "actualRules": [
+            "NODE_POSTINSTALL_SCRIPT",
+            "SCRIPT_INDIRECT_EXECUTION",
+            "JS_CHILD_PROCESS_EXEC"
+          ],
+          "negativeControl": false,
+          "passed": true
+        }
+      ]
     }
   ],
   "safety": {
