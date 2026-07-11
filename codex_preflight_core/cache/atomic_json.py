@@ -39,8 +39,8 @@ def write_bytes_atomic(path: Path, data: bytes) -> None:
             os.chmod(temp_path, 0o600)
         os.replace(temp_path, path)
     finally:
-        if temp_path is not None and temp_path.exists():
+        if temp_path is not None:
             try:
-                temp_path.unlink()
+                temp_path.unlink(missing_ok=True)
             except OSError:
                 pass
