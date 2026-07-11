@@ -87,3 +87,52 @@ def test_direct_remote_call_is_disabled_without_startup_flag(monkeypatch: pytest
 
     assert caught.value.detail.code is McpErrorCode.REMOTE_DISABLED
 
+
+@pytest.mark.parametrize(
+    ("code", "retryable"),
+    [
+        ("MCP_REMOTE_ADDRESS_NOT_ALLOWED", False),
+        ("MCP_REMOTE_REF_NOT_FOUND", False),
+        ("MCP_REMOTE_TIMEOUT", True),
+        ("MCP_REMOTE_CANCELLED", False),
+        ("MCP_REMOTE_LIMIT_EXCEEDED", False),
+        ("MCP_REMOTE_TREE_UNSAFE", False),
+        ("MCP_REMOTE_ACQUISITION_FAILED", True),
+        ("MCP_REMOTE_SCAN_FAILED", False),
+        ("MCP_REMOTE_CACHE_FAILED", False),
+        ("MCP_REMOTE_CLEANUP_FAILED", False),
+    ],
+)
+def test_remote_operation_errors_keep_stable_mcp_codes(
+    monkeypatch: pytest.MonkeyPatch,
+    code: str,
+    retryable: bool,
+) -> None:
+    from codex_preflight_mcp import server
+    from codex_preflight_mcp.remote_confirmation import RemoteConfirmationManager
+    from codex_preflight_mcp.remote_operation import RemoteOperationError
+
+    monkeypatch.setenv("CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN", "1")
+    monkeypatch.setattr(server, "_REMOTE_CONFIRMATIONS", RemoteConfirmationManager(secret=b"x" * 32))
+    with pytest.raises(McpToolError) as challenge:
+        server.remote_repository_scan(
+            remoteUrl="https://github.com/example/project",
+            requestedRef="refs/heads/main",
+        )
+    token = challenge.value.to_dict()["error"]["context"]["confirmationToken"]
+
+    def fail(**_kwargs: object) -> dict:
+        raise RemoteOperationError(code, "Stable remote failure.", retryable)
+
+    monkeypatch.setattr(server, "run_remote_operation", fail)
+    with pytest.raises(McpToolError) as caught:
+        server.remote_repository_scan(
+            remoteUrl="https://github.com/example/project",
+            requestedRef="refs/heads/main",
+            confirmationToken=token,
+        )
+
+    detail = caught.value.to_dict()["error"]
+    assert detail["code"] == code
+    assert detail["retryable"] is retryable
+    assert "internal" not in detail["message"].lower()

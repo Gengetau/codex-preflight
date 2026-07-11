@@ -14,7 +14,7 @@ from codex_preflight_core.preflight import run_preflight
 from codex_preflight_mcp.contract import build_mcp_result
 from codex_preflight_mcp.errors import McpErrorCode, McpErrorDetail, McpToolError
 from codex_preflight_mcp.remote_confirmation import ConfirmationError, RemoteConfirmationManager
-from codex_preflight_mcp.remote_operation import run_remote_operation
+from codex_preflight_mcp.remote_operation import RemoteOperationError, run_remote_operation
 from codex_preflight_mcp.remote_policy import (
     RemotePolicyError,
     ResourceLimits,
@@ -279,8 +279,15 @@ def remote_repository_scan(
             challenge_id=challenge_id,
             limits=_REMOTE_LIMITS,
         )
-    except McpToolError:
-        raise
+    except RemoteOperationError as error:
+        raise _error(
+            McpErrorCode(error.code),
+            error.message,
+            "Review the stable remote error code, then retry only if retryable is true and the same "
+            "safety limits remain acceptable.",
+            retryable=error.retryable,
+            safety_boundary="Remote failures do not create trust or expose remote subprocess output.",
+        ) from error
     except Exception as error:
         raise _internal_error() from error
     return build_mcp_result(
