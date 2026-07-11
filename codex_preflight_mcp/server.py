@@ -453,13 +453,13 @@ def _run_trust_list_arguments(
     if unknown:
         unsupported = unknown[0]
         field = unsupported if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", unsupported) else None
-        raise _error(
-            McpErrorCode.TRUST_LIST_INVALID_ARGUMENT,
-            "trust_list received an unsupported argument.",
-            "Remove unsupported fields; trust_list accepts only repoId, commandScope, limit, and cursor.",
-            field=field,
-            safety_boundary="Request fields cannot select files, URLs, cache paths, or output destinations.",
-        )
+        try:
+            service.reject_invalid_argument(field=field)
+        except TrustReadError as error:
+            raise _trust_list_error(error) from error
+        except Exception as error:
+            raise _trust_list_internal_error() from error
+        raise _trust_list_internal_error()
     service_arguments: dict[str, object] = {}
     for public_name, internal_name in (
         ("repoId", "repo_id"),

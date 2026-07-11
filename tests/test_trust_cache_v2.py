@@ -177,6 +177,36 @@ def test_failed_migrations_keep_three_backups(
     assert len(list(tmp_path.glob("trust.json.v0.3.3-migration.*.bak"))) == 3
 
 
+def test_prune_failure_does_not_add_backup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "trust.json"
+    original = json.dumps([legacy_entry()]).encode("utf-8")
+    path.write_bytes(original)
+    for index in range(3):
+        (tmp_path / f"trust.json.v0.3.3-migration.20000101T00000000000{index}Z.old.bak").write_text(
+            "[]",
+            encoding="utf-8",
+        )
+    real_unlink = Path.unlink
+
+    def fail_backup_unlink(target: Path, *args: object, **kwargs: object) -> None:
+        if ".v0.3.3-migration." in target.name:
+            raise OSError("hidden prune failure")
+        real_unlink(target, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_backup_unlink)
+
+    for _ in range(3):
+        with pytest.raises(TrustCacheError) as caught:
+            TrustCache(path).list()
+        assert caught.value.code == "migration-failed"
+        assert path.read_bytes() == original
+
+    assert len(list(tmp_path.glob("trust.json.v0.3.3-migration.*.bak"))) == 3
+
+
 def test_migration_retains_at_most_three_bounded_backups(tmp_path: Path) -> None:
     path = tmp_path / "trust.json"
     path.write_text(json.dumps([legacy_entry()]), encoding="utf-8")
@@ -204,11 +234,13 @@ def test_migration_retains_at_most_three_bounded_backups(tmp_path: Path) -> None
         (lambda entry: entry.update(commandScope="anything"), "corrupt"),
         (lambda entry: entry.update(repoId=""), "corrupt"),
         (lambda entry: entry.update(repoId="repo\x85value"), "corrupt"),
+        (lambda entry: entry.update(repoId="repo\ud800value"), "corrupt"),
         (lambda entry: entry.update(path=7), "corrupt"),
         (lambda entry: entry.update(approvedCommand="run\x00hidden"), "corrupt"),
         (lambda entry: entry.update(remoteUrl=""), "corrupt"),
         (lambda entry: entry.update(policyVersion="x" * 4097), "corrupt"),
         (lambda entry: entry.update(approvedAt="not-a-timestamp"), "corrupt"),
+        (lambda entry: entry.update(approvedAt="2026-01-01T00:00:00\ud800+00:00"), "corrupt"),
         (lambda entry: entry.update(approvedAt="2026-01-01 00:00:00+00:00"), "corrupt"),
         (
             lambda entry: entry.update(approvedAt=f"2026-01-01T00:00:00.{'1' * 4100}+00:00"),
@@ -225,11 +257,13 @@ def test_migration_retains_at_most_three_bounded_backups(tmp_path: Path) -> None
         "scope",
         "empty-repo-id",
         "repo-id-c1-control",
+        "repo-id-unpaired-surrogate",
         "path-type",
         "command-control",
         "empty-remote-url",
         "oversized-policy",
         "approved-at",
+        "approved-at-unpaired-surrogate",
         "approved-at-space",
         "approved-at-oversized",
         "expires-at",

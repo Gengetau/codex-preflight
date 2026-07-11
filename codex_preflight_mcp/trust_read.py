@@ -91,6 +91,24 @@ class TrustReadService:
             error_code=None,
         )
 
+    def reject_invalid_argument(self, *, field: str | None) -> None:
+        error = TrustReadError(
+            "MCP_TRUST_LIST_INVALID_ARGUMENT",
+            "trust_list received an unsupported argument.",
+            field=field,
+        )
+        self._audit_or_raise(
+            "request_validation_failed",
+            repo_id=None,
+            command_scope=None,
+            result_count=0,
+            cursor_status="absent",
+            migration_status="not-started",
+            outcome="failed",
+            error_code=error.code,
+        )
+        raise error
+
     def list(
         self,
         *,
@@ -108,7 +126,7 @@ class TrustReadService:
         except TrustReadError as error:
             self._audit_or_raise(
                 "request_validation_failed",
-                repo_id=repo_id if isinstance(repo_id, str) else None,
+                repo_id=_auditable_repo_id(repo_id),
                 command_scope=(
                     command_scope
                     if isinstance(command_scope, str) and command_scope in _COMMAND_SCOPES
@@ -417,10 +435,12 @@ def _snapshot_digest(entries: list[dict[str, Any]], privacy_key: bytes) -> str:
 
 
 def _validate_repo_id(value: object) -> str | None:
+    encoded_length = _utf8_length(value) if isinstance(value, str) else None
     if (
         not isinstance(value, str)
         or not value
-        or len(value.encode("utf-8")) > 4096
+        or encoded_length is None
+        or encoded_length > 4096
         or _CONTROL.search(value)
     ):
         raise TrustReadError(
@@ -452,13 +472,33 @@ def _validate_limit(value: object) -> int:
 
 
 def _validate_cursor(value: object) -> str | None:
-    if not isinstance(value, str) or not value or len(value.encode("utf-8")) > 512 or _CONTROL.search(value):
+    encoded_length = _utf8_length(value) if isinstance(value, str) else None
+    if (
+        not isinstance(value, str)
+        or not value
+        or encoded_length is None
+        or encoded_length > 512
+        or _CONTROL.search(value)
+    ):
         raise TrustReadError(
             "MCP_TRUST_LIST_CURSOR_INVALID",
             "cursor must be a bounded opaque token returned by trust_list.",
             field="cursor",
         )
     return value
+
+
+def _auditable_repo_id(value: object) -> str | None:
+    if isinstance(value, str) and _utf8_length(value) is not None:
+        return value
+    return None
+
+
+def _utf8_length(value: str) -> int | None:
+    try:
+        return len(value.encode("utf-8"))
+    except UnicodeEncodeError:
+        return None
 
 
 def _map_cache_error(error: TrustCacheError) -> tuple[str, str, str]:

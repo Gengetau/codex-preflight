@@ -129,6 +129,13 @@ def test_trust_list_maps_service_and_unknown_argument_errors(
                 "The local trust store is corrupt.",
             )
 
+        def reject_invalid_argument(self, *, field: str | None) -> None:
+            raise TrustReadError(
+                "MCP_TRUST_LIST_INVALID_ARGUMENT",
+                "trust_list received an unsupported argument.",
+                field=field,
+            )
+
     monkeypatch.setenv("CODEX_PREFLIGHT_ENABLE_TRUST_READ", "1")
     monkeypatch.setattr(server, "default_trust_read_service", FailingService)
 
@@ -198,6 +205,7 @@ def test_registration_audit_failure_fails_closed(monkeypatch: pytest.MonkeyPatch
         ({"outputPath": "private/path"}, "MCP_TRUST_LIST_INVALID_ARGUMENT"),
         ({"repoId": None}, "MCP_TRUST_LIST_INVALID_ARGUMENT"),
         ({"repoId": 7}, "MCP_TRUST_LIST_INVALID_ARGUMENT"),
+        ({"repoId": "repo\ud800value"}, "MCP_TRUST_LIST_INVALID_ARGUMENT"),
         ({"commandScope": None}, "MCP_TRUST_LIST_INVALID_ARGUMENT"),
         ({"limit": None}, "MCP_TRUST_LIST_LIMIT_EXCEEDED"),
         ({"limit": "1"}, "MCP_TRUST_LIST_LIMIT_EXCEEDED"),
@@ -240,6 +248,60 @@ def test_transport_adapter_preserves_success_response(
     assert result["tool"] == "trust_list"
     assert result["entries"] == []
     assert result["pagination"]["limit"] == 50
+
+
+def test_unknown_transport_argument_is_audited(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import json
+
+    from codex_preflight_mcp import server
+
+    monkeypatch.setenv("CODEX_PREFLIGHT_ENABLE_TRUST_READ", "1")
+    monkeypatch.delenv("CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN", raising=False)
+    monkeypatch.setenv("CODEX_PREFLIGHT_HOME", str(tmp_path))
+    mcp = server.create_mcp_server()
+
+    with pytest.raises(Exception, match="MCP_TRUST_LIST_INVALID_ARGUMENT"):
+        asyncio.run(mcp._tool_manager.call_tool("trust_list", {"outputPath": "private/path"}))
+
+    records = [
+        json.loads(line)
+        for line in (tmp_path / "trust-read" / "audit.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert [record["event"] for record in records] == [
+        "registration_state",
+        "request_validation_failed",
+    ]
+
+
+def test_unknown_argument_audit_failure_takes_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
+    from codex_preflight_mcp import server
+
+    class AuditFailService:
+        def record_registration_state(self) -> str:
+            return "registration-event"
+
+        def reject_invalid_argument(self, *, field: str | None) -> None:
+            raise TrustReadError(
+                "MCP_TRUST_LIST_AUDIT_FAILED",
+                "The dedicated trust-read audit log failed closed.",
+                field=field,
+            )
+
+        def list(self, **_kwargs: object) -> dict[str, Any]:
+            return {"tool": "trust_list"}
+
+    monkeypatch.setenv("CODEX_PREFLIGHT_ENABLE_TRUST_READ", "1")
+    monkeypatch.setattr(server, "default_trust_read_service", AuditFailService)
+    mcp = server.create_mcp_server()
+
+    with pytest.raises(Exception) as caught:
+        asyncio.run(mcp._tool_manager.call_tool("trust_list", {"outputPath": "private/path"}))
+
+    assert "MCP_TRUST_LIST_AUDIT_FAILED" in str(caught.value)
+    assert "MCP_TRUST_LIST_INVALID_ARGUMENT" not in str(caught.value)
 
 
 def test_unexpected_trust_list_failure_is_normalized_without_details(

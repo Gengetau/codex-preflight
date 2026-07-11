@@ -225,8 +225,8 @@ class TrustCache:
         legacy_indexes: list[int],
         original: bytes,
     ) -> list[dict[str, Any]]:
+        self._prune_backups_unlocked(retain=TRUST_CACHE_MAX_MIGRATION_BACKUPS - 1)
         self._create_backup_unlocked(original)
-        self._prune_backups_unlocked()
         migrated_at = self._now().isoformat()
         try:
             for index in legacy_indexes:
@@ -264,10 +264,10 @@ class TrustCache:
                 pass
             raise TrustCacheError("migration-failed", "The trust metadata backup failed closed.") from error
 
-    def _prune_backups_unlocked(self) -> None:
+    def _prune_backups_unlocked(self, *, retain: int = TRUST_CACHE_MAX_MIGRATION_BACKUPS) -> None:
         backups = sorted(self.path.parent.glob(f"{self.path.name}.v0.3.3-migration.*.bak"))
         try:
-            for backup in backups[:-TRUST_CACHE_MAX_MIGRATION_BACKUPS]:
+            for backup in backups[: max(0, len(backups) - retain)]:
                 backup.unlink()
         except OSError as error:
             raise TrustCacheError("migration-failed", "Trust migration backup retention failed closed.") from error
@@ -357,10 +357,12 @@ def _validate_entry(entry: dict[str, Any], *, migrated: bool | None) -> None:
 
 
 def _bounded_string(value: object) -> str:
+    encoded_length = _utf8_length(value) if isinstance(value, str) else None
     if (
         not isinstance(value, str)
         or not value
-        or len(value.encode("utf-8")) > 4096
+        or encoded_length is None
+        or encoded_length > 4096
         or _CONTROL.search(value)
     ):
         raise TrustCacheError("corrupt", "The local trust store contains an invalid string field.")
@@ -368,9 +370,11 @@ def _bounded_string(value: object) -> str:
 
 
 def _timestamp(value: object) -> datetime:
+    encoded_length = _utf8_length(value) if isinstance(value, str) else None
     if (
         not isinstance(value, str)
-        or len(value.encode("utf-8")) > 4096
+        or encoded_length is None
+        or encoded_length > 4096
         or _CONTROL.search(value)
         or not _RFC3339.fullmatch(value)
     ):
@@ -382,6 +386,13 @@ def _timestamp(value: object) -> datetime:
     if parsed.tzinfo is None:
         raise TrustCacheError("corrupt", "The local trust store timestamp is invalid.")
     return parsed.astimezone(UTC)
+
+
+def _utf8_length(value: str) -> int | None:
+    try:
+        return len(value.encode("utf-8"))
+    except UnicodeEncodeError:
+        return None
 
 
 def _validate_unique_entry_ids(entries: list[dict[str, Any]]) -> None:
