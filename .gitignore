@@ -12,3 +12,4 @@ test-tmp/
 dist/
 build/
 *.egg-info/
+.superpowers/
