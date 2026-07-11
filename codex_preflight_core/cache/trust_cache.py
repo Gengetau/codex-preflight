@@ -78,6 +78,12 @@ class TrustCacheMutationPrepared:
     state: object
 
 
+@dataclass(frozen=True)
+class _TrustCacheSnapshot:
+    entries: list[dict[str, Any]]
+    raw_bytes: bytes | None
+
+
 class MutationPrepareHook(Protocol):
     def __call__(self, plan: TrustCacheMutationPlan) -> TrustCacheMutationPrepared: ...
 
@@ -188,22 +194,9 @@ class TrustCache:
         commit: MutationCommitHook,
     ) -> TrustCacheMutationResult:
         with locked_cache_file(self.path):
-            entries = self._read_all_unlocked()
-            before_bytes = self._read_store_bytes_unlocked()
-            now = self._now()
-            existing = _matching_entry(
-                entries,
-                repo_id=repo_id,
-                head_commit=head_commit,
-                critical_fingerprint=critical_fingerprint,
-                command_scope=command_scope,
-                policy_version=policy_version,
-                ruleset_version=ruleset_version,
-                now=now,
-            )
-            if existing is not None:
-                return TrustCacheMutationResult("already-approved", False, deepcopy(existing), None, None)
-
+            snapshot = self._read_snapshot_unlocked()
+            entries = snapshot.entries
+            before_bytes = snapshot.raw_bytes
             entry = {
                 "repoId": repo_id,
                 "path": str(path),
@@ -230,6 +223,20 @@ class TrustCache:
                 },
             }
             _validate_entry(entry, migrated=False)
+            now = self._now()
+            existing = _matching_entry(
+                entries,
+                repo_id=repo_id,
+                head_commit=head_commit,
+                critical_fingerprint=critical_fingerprint,
+                command_scope=command_scope,
+                policy_version=policy_version,
+                ruleset_version=ruleset_version,
+                now=now,
+            )
+            if existing is not None:
+                return TrustCacheMutationResult("already-approved", False, deepcopy(existing), None, None)
+
             entries.append(entry)
             _validate_unique_entry_ids(entries)
             after_bytes = self._serialize_entries(entries)
@@ -282,15 +289,18 @@ class TrustCache:
         entry_id: str,
         *,
         expected_version: object,
+        expected_entry: dict[str, Any],
         prepare: MutationPrepareHook,
         commit: MutationCommitHook,
-        expected_entry: dict[str, Any] | None = None,
     ) -> TrustCacheMutationResult:
+        entry_id = _validate_uuid4(entry_id)
         if type(expected_version) is not int or expected_version != TRUST_CACHE_ENTRY_VERSION:
             raise ValueError("expected_version must be exactly integer 1")
+        expected_entry = _validate_expected_entry(expected_entry, entry_id, expected_version)
         with locked_cache_file(self.path):
-            entries = self._read_all_unlocked()
-            before_bytes = self._read_store_bytes_unlocked()
+            snapshot = self._read_snapshot_unlocked()
+            entries = snapshot.entries
+            before_bytes = snapshot.raw_bytes
             now = self._now()
             index = next(
                 (
@@ -303,11 +313,8 @@ class TrustCache:
             if index is None:
                 return TrustCacheMutationResult("not-found", False, None, None, None)
             entry = entries[index]
-            if expected_entry is not None:
-                if not isinstance(expected_entry, dict):
-                    raise ValueError("expected_entry must be a complete trust entry")
-                if entry != expected_entry:
-                    return TrustCacheMutationResult("version-conflict", False, deepcopy(entry), None, None)
+            if entry != expected_entry:
+                return TrustCacheMutationResult("version-conflict", False, deepcopy(entry), None, None)
 
             remaining = [candidate for candidate_index, candidate in enumerate(entries) if candidate_index != index]
             after_bytes = self._serialize_entries(remaining)
@@ -351,10 +358,17 @@ class TrustCache:
             return removed
 
     def _read_all_unlocked(self, *, event_hook: Callable[[str], None] | None = None) -> list[dict[str, Any]]:
+        return self._read_snapshot_unlocked(event_hook=event_hook).entries
+
+    def _read_snapshot_unlocked(
+        self,
+        *,
+        event_hook: Callable[[str], None] | None = None,
+    ) -> _TrustCacheSnapshot:
         raw = self._read_store_bytes_unlocked()
         if raw is None:
             _notify(event_hook, "trust_file_missing")
-            return []
+            return _TrustCacheSnapshot([], None)
         try:
             payload = json.loads(raw.decode("utf-8", "strict"))
         except (UnicodeError, json.JSONDecodeError) as error:
@@ -389,12 +403,12 @@ class TrustCache:
         if legacy_indexes:
             _notify(event_hook, "migration_started")
             try:
-                entries = self._migrate_unlocked(entries, legacy_indexes, raw)
+                entries, raw = self._migrate_unlocked(entries, legacy_indexes, raw)
             except BaseException:
                 _notify(event_hook, "migration_failed")
                 raise
             _notify(event_hook, "migration_completed")
-        return entries
+        return _TrustCacheSnapshot(entries, raw)
 
     def _read_store_bytes_unlocked(self) -> bytes | None:
         if not self.path.exists():
@@ -417,7 +431,7 @@ class TrustCache:
         entries: list[dict[str, Any]],
         legacy_indexes: list[int],
         original: bytes,
-    ) -> list[dict[str, Any]]:
+    ) -> tuple[list[dict[str, Any]], bytes]:
         self._prune_backups_unlocked(retain=TRUST_CACHE_MAX_MIGRATION_BACKUPS - 1)
         self._create_backup_unlocked(original)
         migrated_at = self._now().isoformat()
@@ -433,11 +447,11 @@ class TrustCache:
                 }
                 _validate_entry(entries[index], migrated=True)
             _validate_unique_entry_ids(entries)
-            self._write_unlocked(entries)
+            migrated_bytes = self._write_unlocked(entries)
         except Exception as error:
             raise TrustCacheError("migration-failed", "The trust metadata migration failed closed.") from error
         self._prune_backups_unlocked()
-        return entries
+        return entries, migrated_bytes
 
     def _create_backup_unlocked(self, original: bytes) -> None:
         timestamp = self._now().strftime("%Y%m%dT%H%M%S%fZ")
@@ -465,9 +479,9 @@ class TrustCache:
         except OSError as error:
             raise TrustCacheError("migration-failed", "Trust migration backup retention failed closed.") from error
 
-    def _write_unlocked(self, entries: list[dict[str, Any]]) -> None:
+    def _write_unlocked(self, entries: list[dict[str, Any]]) -> bytes:
         try:
-            self._serialize_entries(entries)
+            encoded = self._serialize_entries(entries)
             write_json_atomic(self.path, entries)
             if self.path.stat().st_size > self.max_bytes:
                 raise TrustCacheError("unavailable", "The local trust store exceeds its size limit.")
@@ -475,6 +489,7 @@ class TrustCache:
             raise
         except OSError as error:
             raise TrustCacheError("unavailable", "The local trust store could not be written safely.") from error
+        return encoded
 
     def _serialize_entries(self, entries: list[dict[str, Any]]) -> bytes:
         try:
@@ -702,6 +717,23 @@ def _validate_prepared(
     if planned_event_id is not None and event_id != _validate_uuid4(planned_event_id):
         raise ValueError("prepared audit event does not match the planned event")
     return prepared
+
+
+def _validate_expected_entry(
+    expected_entry: object,
+    entry_id: str,
+    expected_version: int,
+) -> dict[str, Any]:
+    if type(expected_entry) is not dict:
+        raise ValueError("expected_entry must be a complete canonical trust entry")
+    candidate = deepcopy(expected_entry)
+    try:
+        _validate_entry(candidate, migrated=False)
+    except TrustCacheError:
+        raise ValueError("expected_entry must be a complete canonical trust entry") from None
+    if candidate["entryId"] != entry_id or candidate["entryVersion"] != expected_version:
+        raise ValueError("expected_entry does not match the requested entry identity")
+    return candidate
 
 
 def _validate_uuid4(value: object) -> str:

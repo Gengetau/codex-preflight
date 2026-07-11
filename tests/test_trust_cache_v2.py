@@ -612,6 +612,66 @@ def test_mcp_approval_duplicate_is_a_no_write_no_ttl_extension(tmp_path: Path) -
     assert path.read_bytes() == before
 
 
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"repo_id": ""},
+        {"path": ""},
+        {"remote_url": ""},
+        {"head_commit": "not-a-commit"},
+        {"critical_fingerprint": "sha256:invalid"},
+        {"command_scope": "invalid"},
+        {"approved_command": ""},
+        {"approved_at": "2026-07-12T00:00:00+00:00"},
+        {"expires_at": "2030-07-12T00:00:00+00:00"},
+        {"policy_version": ""},
+        {"ruleset_version": ""},
+        {"entry_id": "123e4567-e89b-52d3-a456-426614174003"},
+        {"approval_reason": ""},
+        {"mutation_audit_event_id": "123e4567-e89b-52d3-a456-426614174004"},
+    ],
+    ids=[
+        "repo-id",
+        "path",
+        "remote-url",
+        "head-commit",
+        "fingerprint",
+        "command-scope",
+        "approved-command",
+        "approved-at",
+        "expires-at",
+        "policy-version",
+        "ruleset-version",
+        "entry-id",
+        "approval-reason",
+        "audit-event-id",
+    ],
+)
+def test_mcp_duplicate_approval_validates_complete_candidate_before_noop(
+    tmp_path: Path,
+    overrides: dict[str, object],
+) -> None:
+    path = tmp_path / "trust.json"
+    cache = TrustCache(path)
+    cache.approve_mcp(
+        **mcp_approval_kwargs(tmp_path),
+        prepare=lambda plan: TrustCacheMutationPrepared(plan.planned_event_id, None),
+        commit=lambda _prepared: MCP_FINAL_EVENT_ID,
+    )
+    before = path.read_bytes()
+    callbacks: list[str] = []
+
+    with pytest.raises((TrustCacheError, ValueError)):
+        cache.approve_mcp(
+            **mcp_approval_kwargs(tmp_path, **overrides),
+            prepare=lambda _plan: callbacks.append("prepare"),
+            commit=lambda _prepared: callbacks.append("commit"),
+        )
+
+    assert callbacks == []
+    assert path.read_bytes() == before
+
+
 def test_mcp_approval_rejects_an_entry_id_collision_before_preparing(tmp_path: Path) -> None:
     path = tmp_path / "trust.json"
     cache = TrustCache(path)
@@ -664,6 +724,7 @@ def test_mcp_mutations_preserve_expired_and_unrelated_entries(tmp_path: Path) ->
     absent = cache.revoke_entry_id(
         expired["entryId"],
         expected_version=1,
+        expected_entry=expired,
         prepare=lambda _plan: (_ for _ in ()).throw(AssertionError("expired entry is not revocable")),
         commit=lambda _prepared: (_ for _ in ()).throw(AssertionError("expired entry is not revocable")),
     )
@@ -712,13 +773,18 @@ def test_mcp_revocation_deletes_only_one_entry_and_hides_missing_ids(tmp_path: P
     revoked = cache.revoke_entry_id(
         first.entry["entryId"],
         expected_version=1,
+        expected_entry=first.entry,
         prepare=revoke_prepare,
         commit=lambda _prepared: MCP_FINAL_EVENT_ID,
     )
     after_revoke = path.read_bytes()
+    missing_entry_id = "123e4567-e89b-42d3-a456-426614174007"
+    missing_expected_entry = deepcopy(first.entry)
+    missing_expected_entry["entryId"] = missing_entry_id
     missing = cache.revoke_entry_id(
-        "123e4567-e89b-42d3-a456-426614174007",
+        missing_entry_id,
         expected_version=1,
+        expected_entry=missing_expected_entry,
         prepare=lambda _plan: (_ for _ in ()).throw(AssertionError("missing entry must not prepare")),
         commit=lambda _prepared: (_ for _ in ()).throw(AssertionError("missing entry must not commit")),
     )
@@ -760,6 +826,118 @@ def test_mcp_revocation_detects_complete_entry_drift_without_writing(tmp_path: P
     assert path.read_bytes() == before
 
 
+def test_mcp_revocation_requires_expected_entry_argument(tmp_path: Path) -> None:
+    path = tmp_path / "trust.json"
+    cache = TrustCache(path)
+    created = cache.approve_mcp(
+        **mcp_approval_kwargs(tmp_path),
+        prepare=lambda plan: TrustCacheMutationPrepared(plan.planned_event_id, None),
+        commit=lambda _prepared: MCP_FINAL_EVENT_ID,
+    )
+    assert created.entry is not None
+    before = path.read_bytes()
+    callbacks: list[str] = []
+
+    def prepare(_plan):
+        callbacks.append("prepare")
+        return TrustCacheMutationPrepared(MCP_PREPARED_EVENT_ID, None)
+
+    def commit(_prepared):
+        callbacks.append("commit")
+        return MCP_FINAL_EVENT_ID
+
+    with pytest.raises(TypeError):
+        cache.revoke_entry_id(
+            MCP_ENTRY_ID,
+            expected_version=1,
+            prepare=prepare,
+            commit=commit,
+        )
+
+    assert callbacks == []
+    assert path.read_bytes() == before
+
+
+def test_mcp_revocation_rejects_none_expected_entry_without_writing(tmp_path: Path) -> None:
+    path = tmp_path / "trust.json"
+    cache = TrustCache(path)
+    created = cache.approve_mcp(
+        **mcp_approval_kwargs(tmp_path),
+        prepare=lambda plan: TrustCacheMutationPrepared(plan.planned_event_id, None),
+        commit=lambda _prepared: MCP_FINAL_EVENT_ID,
+    )
+    assert created.entry is not None
+    before = path.read_bytes()
+    callbacks: list[str] = []
+
+    def prepare(_plan):
+        callbacks.append("prepare")
+        return TrustCacheMutationPrepared(MCP_PREPARED_EVENT_ID, None)
+
+    def commit(_prepared):
+        callbacks.append("commit")
+        return MCP_FINAL_EVENT_ID
+
+    with pytest.raises(ValueError):
+        cache.revoke_entry_id(
+            MCP_ENTRY_ID,
+            expected_version=1,
+            expected_entry=None,
+            prepare=prepare,
+            commit=commit,
+        )
+
+    assert callbacks == []
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["malformed-id", "non-v4-id", "partial-entry", "mismatched-id", "invalid-entry"],
+)
+def test_mcp_missing_revocation_validates_complete_binding_before_not_found(
+    tmp_path: Path,
+    case: str,
+) -> None:
+    path = tmp_path / "trust.json"
+    cache = TrustCache(path)
+    created = cache.approve_mcp(
+        **mcp_approval_kwargs(tmp_path),
+        prepare=lambda plan: TrustCacheMutationPrepared(plan.planned_event_id, None),
+        commit=lambda _prepared: MCP_FINAL_EVENT_ID,
+    )
+    assert created.entry is not None
+    entry_id = "123e4567-e89b-42d3-a456-426614174007"
+    expected_entry = deepcopy(created.entry)
+    expected_entry["entryId"] = entry_id
+    if case == "malformed-id":
+        entry_id = "not-a-uuid"
+        expected_entry["entryId"] = entry_id
+    elif case == "non-v4-id":
+        entry_id = "123e4567-e89b-52d3-a456-426614174007"
+        expected_entry["entryId"] = entry_id
+    elif case == "partial-entry":
+        expected_entry = {"entryId": entry_id}
+    elif case == "mismatched-id":
+        expected_entry["entryId"] = MCP_ENTRY_ID
+    else:
+        expected_entry["approvedCommand"] = ""
+    before = path.read_bytes()
+    callbacks: list[str] = []
+
+    with pytest.raises((TrustCacheError, ValueError)):
+        cache.revoke_entry_id(
+            entry_id,
+            expected_version=1,
+            expected_entry=expected_entry,
+            prepare=lambda _plan: callbacks.append("prepare"),
+            commit=lambda _prepared: callbacks.append("commit"),
+        )
+
+    assert callbacks == []
+    assert path.read_bytes() == before
+
+
 @pytest.mark.parametrize("expected_version", [True, 1.0], ids=["boolean", "float"])
 def test_mcp_revocation_rejects_non_integer_expected_versions(
     tmp_path: Path,
@@ -767,17 +945,19 @@ def test_mcp_revocation_rejects_non_integer_expected_versions(
 ) -> None:
     path = tmp_path / "trust.json"
     cache = TrustCache(path)
-    cache.approve_mcp(
+    created = cache.approve_mcp(
         **mcp_approval_kwargs(tmp_path),
         prepare=lambda plan: TrustCacheMutationPrepared(plan.planned_event_id, None),
         commit=lambda _prepared: MCP_FINAL_EVENT_ID,
     )
+    assert created.entry is not None
     before = path.read_bytes()
 
     with pytest.raises(ValueError):
         cache.revoke_entry_id(
             MCP_ENTRY_ID,
             expected_version=expected_version,
+            expected_entry=created.entry,
             prepare=lambda _plan: (_ for _ in ()).throw(AssertionError("must not prepare")),
             commit=lambda _prepared: (_ for _ in ()).throw(AssertionError("must not commit")),
         )
@@ -805,6 +985,104 @@ def test_mcp_callback_failure_before_replace_preserves_store(tmp_path: Path) -> 
 
     assert committed is False
     assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("operation", ["approve", "revoke"])
+def test_mcp_mutation_uses_one_exact_raw_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+) -> None:
+    path = tmp_path / "trust.json"
+    cache = TrustCache(path)
+    created = cache.approve_mcp(
+        **mcp_approval_kwargs(tmp_path),
+        prepare=lambda plan: TrustCacheMutationPrepared(plan.planned_event_id, None),
+        commit=lambda _prepared: MCP_FINAL_EVENT_ID,
+    )
+    assert created.entry is not None
+    original = path.read_bytes()
+    path_type = type(path)
+    real_read_bytes = path_type.read_bytes
+    read_count = 0
+
+    def changing_read_bytes(target: Path) -> bytes:
+        nonlocal read_count
+        data = real_read_bytes(target)
+        if target == path:
+            read_count += 1
+            return data if read_count == 1 else b"[]"
+        return data
+
+    monkeypatch.setattr(path_type, "read_bytes", changing_read_bytes)
+
+    def prepare(plan):
+        assert plan.before_bytes == original
+        assert read_count == 1
+        return TrustCacheMutationPrepared(plan.planned_event_id or MCP_PREPARED_EVENT_ID, None)
+
+    if operation == "approve":
+        cache.approve_mcp(
+            **mcp_approval_kwargs(
+                tmp_path,
+                repo_id="snapshot-repository",
+                critical_fingerprint=f"sha256:{'9' * 64}",
+                entry_id="123e4567-e89b-42d3-a456-426614174008",
+                mutation_audit_event_id="123e4567-e89b-42d3-a456-426614174009",
+            ),
+            prepare=prepare,
+            commit=lambda _prepared: MCP_FINAL_EVENT_ID,
+        )
+    else:
+        cache.revoke_entry_id(
+            MCP_ENTRY_ID,
+            expected_version=1,
+            expected_entry=created.entry,
+            prepare=prepare,
+            commit=lambda _prepared: MCP_FINAL_EVENT_ID,
+        )
+
+    assert read_count == 1
+
+
+def test_mcp_approval_missing_store_snapshot_is_none(tmp_path: Path) -> None:
+    path = tmp_path / "trust.json"
+    cache = TrustCache(path)
+    before: list[bytes | None] = []
+
+    def prepare(plan):
+        before.append(plan.before_bytes)
+        return TrustCacheMutationPrepared(plan.planned_event_id, None)
+
+    cache.approve_mcp(
+        **mcp_approval_kwargs(tmp_path),
+        prepare=prepare,
+        commit=lambda _prepared: MCP_FINAL_EVENT_ID,
+    )
+
+    assert before == [None]
+
+
+def test_mcp_approval_legacy_migration_snapshot_is_exact_written_bytes(tmp_path: Path) -> None:
+    path = tmp_path / "trust.json"
+    path.write_text(json.dumps([legacy_entry(repo_id="legacy")]), encoding="utf-8")
+    cache = TrustCache(path)
+    before: list[bytes | None] = []
+
+    def prepare(plan):
+        before.append(plan.before_bytes)
+        assert plan.before_bytes == path.read_bytes()
+        assert plan.before_bytes is not None
+        assert json.loads(plan.before_bytes)[0]["provenance"]["source"] == "legacy-migration"
+        return TrustCacheMutationPrepared(plan.planned_event_id, None)
+
+    cache.approve_mcp(
+        **mcp_approval_kwargs(tmp_path),
+        prepare=prepare,
+        commit=lambda _prepared: MCP_FINAL_EVENT_ID,
+    )
+
+    assert len(before) == 1
 
 
 def test_mcp_callback_failure_after_replace_reports_committed_state(tmp_path: Path) -> None:
