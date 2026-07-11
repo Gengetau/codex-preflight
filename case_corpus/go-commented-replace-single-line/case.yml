@@ -1,0 +1,8 @@
+id: go-commented-replace-single-line
+title: Commented single-line Go replacement stays inactive
+category: ecosystem-go
+command: go test ./...
+expectedDecision: ALLOW
+expectedRules: []
+description: A commented single-line replace directive must remain inert.
+safetyNote: Contains static Go module metadata and benign source only; Go commands are never executed.

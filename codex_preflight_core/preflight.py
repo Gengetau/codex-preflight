@@ -8,6 +8,7 @@ from codex_preflight_core.command.classifier import classify_command
 from codex_preflight_core.command.risk import analyze_command_risk
 from codex_preflight_core.policy.decision import Decision, PolicyResult
 from codex_preflight_core.policy.engine import evaluate_policy
+from codex_preflight_core.policy.explanation import build_policy_explanation
 from codex_preflight_core.reachability.resolver import build_execution_graph
 from codex_preflight_core.repo.fingerprint import compute_critical_fingerprint
 from codex_preflight_core.repo.identity import RepoIdentity, resolve_repo_identity
@@ -16,6 +17,7 @@ from codex_preflight_core.scanner.engine import scan_repository
 
 POLICY_VERSION = "default-v1"
 RULESET_VERSION = "2026.07.08"
+REPORT_FORMAT_VERSION = "policy-explanation-v1"
 
 
 def run_preflight(
@@ -91,6 +93,7 @@ def run_preflight(
         cache_status=cache_status,
         source_metadata=source_metadata,
         execution_graph=graph.to_report(),
+        policy_explanation=build_policy_explanation(findings, classification, policy, trusted=bool(trust)),
     )
     if use_cache and not trust:
         try:
@@ -108,6 +111,7 @@ def _cache_key(identity: RepoIdentity, fingerprint: str, command_scope: str) -> 
         "commandScope": command_scope,
         "policyVersion": POLICY_VERSION,
         "rulesetVersion": RULESET_VERSION,
+        "reportFormatVersion": REPORT_FORMAT_VERSION,
     }
 
 

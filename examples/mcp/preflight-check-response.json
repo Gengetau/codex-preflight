@@ -6,6 +6,33 @@
   "riskScore": 10,
   "command": "python -m pytest",
   "commandScope": "script_execution",
+  "policyExplanation": {
+    "finalDecision": "ASK_USER",
+    "commandScope": "script_execution",
+    "selectedBy": {
+      "type": "policy_matrix",
+      "decision": "ASK_USER",
+      "ruleId": "SCRIPT_TARGET_MISSING"
+    },
+    "commandContribution": {
+      "riskScore": 10,
+      "minimumDecision": "WARN",
+      "affectedFinalGate": false
+    },
+    "ruleContributions": [
+      {
+        "ruleId": "SCRIPT_TARGET_MISSING",
+        "findingCount": 1,
+        "riskScore": 10,
+        "matrixMatched": true,
+        "minimumDecision": "ASK_USER",
+        "hardBlock": false,
+        "rationale": "Referenced local script target is missing.",
+        "affectedFinalGate": true,
+        "reportOnly": false
+      }
+    ]
+  },
   "repo": {
     "path": "/path/to/local/repository",
     "sourceType": "local",

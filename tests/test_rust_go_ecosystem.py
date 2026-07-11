@@ -47,13 +47,26 @@ def test_cargo_build_reaches_static_rust_ecosystem_surfaces(tmp_path: Path) -> N
 
 
 def test_clean_cargo_project_allows_cargo_test(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
     (tmp_path / "Cargo.toml").write_text(
         '[package]\nname = "demo"\nversion = "0.1.0"\nedition = "2021"\n',
         encoding="utf-8",
     )
     (tmp_path / "Cargo.lock").write_text('[[package]]\nname = "demo"\n', encoding="utf-8")
+    (tmp_path / "src" / "lib.rs").write_text("pub fn clean() -> bool { true }\n", encoding="utf-8")
 
     report = run_preflight(tmp_path, "cargo test", use_cache=False)
+
+    assert report["decision"] == "ALLOW"
+    assert rule_ids(report) == []
+    assert capability_ids(report) == []
+
+
+def test_clean_go_project_allows_go_test(tmp_path: Path) -> None:
+    (tmp_path / "go.mod").write_text("module example.com/demo\n\ngo 1.22\n", encoding="utf-8")
+    (tmp_path / "clean.go").write_text("package demo\n\nfunc Clean() bool { return true }\n", encoding="utf-8")
+
+    report = run_preflight(tmp_path, "go test ./...", use_cache=False)
 
     assert report["decision"] == "ALLOW"
     assert rule_ids(report) == []
@@ -135,6 +148,21 @@ def test_go_mod_block_form_ignores_commented_replacement(tmp_path: Path) -> None
         ")\n",
         encoding="utf-8",
     )
+
+    report = run_preflight(tmp_path, "go test ./...", use_cache=False)
+
+    assert report["decision"] == "ALLOW"
+    assert rule_ids(report) == []
+    assert capability_ids(report) == []
+
+
+def test_go_mod_single_line_ignores_commented_replacement(tmp_path: Path) -> None:
+    (tmp_path / "go.mod").write_text(
+        "module example.com/demo\n\n"
+        "// replace example.com/disabled => ../disabled\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "clean.go").write_text("package demo\n", encoding="utf-8")
 
     report = run_preflight(tmp_path, "go test ./...", use_cache=False)
 

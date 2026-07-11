@@ -4,6 +4,10 @@ from typing import Any
 
 def render_markdown_report(report_json: str | dict[str, Any]) -> str:
     report = json.loads(report_json) if isinstance(report_json, str) else report_json
+    explanation = report["policyExplanation"]
+    selector = explanation["selectedBy"]
+    command_contribution = explanation["commandContribution"]
+    command_effect = "gate" if command_contribution["affectedFinalGate"] else "report-only"
     lines = [
         "# Codex Preflight Report",
         "",
@@ -16,11 +20,39 @@ def render_markdown_report(report_json: str | dict[str, Any]) -> str:
         "",
         report["agentInstruction"],
         "",
+        "## Policy Explanation",
+        "",
+        f"Selector type: `{_inline_code(selector['type'])}`",
+        f"Selector decision: `{_inline_code(selector['decision'])}`",
+        f"Selector rule: `{_inline_code(selector['ruleId'] or 'none')}`",
+        f"Final decision: `{_inline_code(explanation['finalDecision'])}`",
+        f"Command scope: `{_inline_code(explanation['commandScope'])}`",
+        f"Command risk score: `{command_contribution['riskScore']}`",
+        f"Command minimum decision: `{_inline_code(command_contribution['minimumDecision'])}`",
+        f"Command gate effect: `{command_effect}`",
+        "",
+        "| Rule | Matrix | Minimum | Gate effect | Rationale |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for contribution in explanation["ruleContributions"]:
+        lines.append(
+            "| {rule} | {matched} | {minimum} | {effect} | {rationale} |".format(
+                rule=contribution["ruleId"],
+                matched="yes" if contribution["matrixMatched"] else "no",
+                minimum=contribution["minimumDecision"] or "none",
+                effect="gate" if contribution["affectedFinalGate"] else "report-only",
+                rationale=str(contribution["rationale"] or "none").replace("|", "\\|"),
+            )
+        )
+    lines.extend(
+        [
+        "",
         "## Summary",
         "",
         "| Severity | Count |",
         "| --- | ---: |",
-    ]
+        ]
+    )
     for severity, count in report["summary"].items():
         lines.append(f"| {severity.upper()} | {count} |")
     lines.extend(["", "## Findings", ""])
@@ -79,3 +111,7 @@ def render_markdown_report(report_json: str | dict[str, Any]) -> str:
         ]
     )
     return "\n".join(lines) + "\n"
+
+
+def _inline_code(value: object) -> str:
+    return str(value).replace("`", "'").replace("\r", " ").replace("\n", " ")

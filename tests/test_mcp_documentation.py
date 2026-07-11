@@ -48,6 +48,7 @@ def test_success_examples_match_stable_contracts(tmp_path: Path) -> None:
         "riskScore",
         "command",
         "commandScope",
+        "policyExplanation",
         "repo",
         "summary",
         "reason",
@@ -67,6 +68,8 @@ def test_success_examples_match_stable_contracts(tmp_path: Path) -> None:
     assert corpus["tool"] == "corpus_scan"
     assert corpus["safety"] == MCP_SAFETY_METADATA
     assert corpus["cases"][0]["passed"] is True
+    assert corpus["cases"][0]["negativeControl"] is False
+    assert corpus["groups"][0]["category"] == "reachability"
 
     actual_preflight = preflight_check(cwd=str(tmp_path), command="python -m pytest")
     actual_preflight["repo"] = preflight["repo"]

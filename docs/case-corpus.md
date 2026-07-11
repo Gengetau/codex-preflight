@@ -28,15 +28,24 @@ Run one case:
 codex-preflight corpus scan --case npm-postinstall-remote-exec
 ```
 
-The corpus includes Rust and Go ecosystem fixtures for v0.3.0:
+The corpus includes Rust and Go ecosystem calibration fixtures:
 
+- `rust-clean-minimal`
 - `rust-build-script-source-replacement`
+- `go-clean-minimal`
 - `go-commented-replace-block`
+- `go-commented-replace-single-line`
 - `go-generation-testmain-cgo`
 - `go-replace-block`
 
-The scanner compares the actual decision and rule IDs with the expected values. The command exits
-nonzero if any expectation fails.
+The clean Rust fixture includes a minimal Cargo library target, and the clean Go fixture includes a
+minimal ordinary Go source file. Commented single-line and block-form replacements have separate
+public negative controls.
+
+The scanner compares the actual decision and rule IDs with the expected values. JSON retains the
+top-level `cases` array and adds deterministic `groups` by category. Markdown shows category,
+expected and actual decisions, expected and actual rule IDs, and whether a case is a negative
+control. The command exits nonzero if any expectation fails.
 
 Safety rules:
 

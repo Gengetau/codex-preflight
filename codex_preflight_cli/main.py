@@ -20,6 +20,12 @@ from codex_preflight_core.preflight import run_preflight
 from codex_preflight_core.repo.fingerprint import compute_critical_fingerprint
 from codex_preflight_core.repo.identity import resolve_repo_identity
 from codex_preflight_core.repo.temp_clone import RepoCloneError, clone_repo_to_temp, resolve_cloned_commit
+from codex_preflight_core.report.comparison import (
+    ReportComparisonError,
+    compare_report_files,
+    render_report_comparison_markdown,
+    validate_local_report_path,
+)
 from codex_preflight_core.report.markdown_renderer import render_markdown_report
 from codex_preflight_core.scanner.engine import list_rule_ids
 
@@ -33,6 +39,7 @@ cache_app = typer.Typer(help="Manage local scan cache.")
 corpus_app = typer.Typer(help="Scan synthetic historical attack-pattern fixtures.")
 batch_app = typer.Typer(help="Scan a YAML list of external repositories.")
 mcp_app = typer.Typer(help="Inspect Codex MCP configuration and installation health.")
+report_app = typer.Typer(help="Inspect and compare existing local report files.")
 
 app.add_typer(rules_app, name="rules")
 app.add_typer(trust_app, name="trust")
@@ -40,6 +47,7 @@ app.add_typer(cache_app, name="cache")
 app.add_typer(corpus_app, name="corpus")
 app.add_typer(batch_app, name="batch")
 app.add_typer(mcp_app, name="mcp")
+app.add_typer(report_app, name="report")
 
 
 @app.callback()
@@ -238,6 +246,39 @@ def scan_corpus_command(
     rendered = json.dumps(result, indent=2) if format == "json" else render_corpus_markdown(result)
     typer.echo(rendered)
     raise typer.Exit(0 if result["passed"] else 1)
+
+
+@report_app.command("compare")
+def compare_reports_command(
+    baseline: Annotated[str, typer.Argument(help="Existing local baseline JSON report.")],
+    candidate: Annotated[str, typer.Argument(help="Existing local candidate JSON report.")],
+    format: Annotated[
+        str,
+        typer.Option("--format", help="Comparison format: json or markdown."),
+    ] = "json",
+    output: Annotated[
+        str | None,
+        typer.Option("--output", help="Optional comparison output path."),
+    ] = None,
+) -> None:
+    """Compare two existing local JSON reports without scanning or executing content."""
+    if format not in {"json", "markdown"}:
+        raise typer.BadParameter("Format must be json or markdown.", param_hint="--format")
+    try:
+        output_path = validate_local_report_path(output, "output") if output is not None else None
+        comparison = compare_report_files(baseline, candidate)
+    except ReportComparisonError as error:
+        typer.echo(json.dumps(error.to_report()), err=True)
+        raise typer.Exit(2) from error
+    rendered = (
+        json.dumps(comparison, indent=2)
+        if format == "json"
+        else render_report_comparison_markdown(comparison)
+    )
+    if output_path:
+        output_path.write_text(rendered, encoding="utf-8")
+    else:
+        typer.echo(rendered)
 
 
 @batch_app.command("scan")

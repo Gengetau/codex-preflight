@@ -1,0 +1,8 @@
+id: go-clean-minimal
+title: Clean minimal Go module
+category: ecosystem-go
+command: go test ./...
+expectedDecision: ALLOW
+expectedRules: []
+description: Minimal Go module without generators, cgo, TestMain, or replacements.
+safetyNote: Contains static Go module metadata only; Go commands are never executed during corpus scanning.

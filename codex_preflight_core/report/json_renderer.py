@@ -4,6 +4,7 @@ from typing import Any
 
 from codex_preflight_core.command.classifier import CommandClassification
 from codex_preflight_core.policy.decision import PolicyResult
+from codex_preflight_core.policy.explanation import build_policy_explanation
 from codex_preflight_core.repo.identity import RepoIdentity
 from codex_preflight_core.report.schema import SCHEMA_VERSION
 from codex_preflight_core.scanner.finding import Finding, Severity, evidence_metadata
@@ -35,6 +36,7 @@ def render_json_report(
     cache_status: dict[str, Any],
     source_metadata: dict[str, Any] | None = None,
     execution_graph: dict[str, Any] | None = None,
+    policy_explanation: dict[str, Any] | None = None,
 ) -> str:
     report = build_report(
         command=command,
@@ -47,6 +49,7 @@ def render_json_report(
         cache_status=cache_status,
         source_metadata=source_metadata,
         execution_graph=execution_graph,
+        policy_explanation=policy_explanation,
     )
     return json.dumps(report, indent=2, sort_keys=False)
 
@@ -63,6 +66,7 @@ def build_report(
     cache_status: dict[str, Any],
     source_metadata: dict[str, Any] | None = None,
     execution_graph: dict[str, Any] | None = None,
+    policy_explanation: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     summary = {severity.value.lower(): 0 for severity in Severity}
     for finding in findings:
@@ -101,6 +105,8 @@ def build_report(
         "summary": summary,
         "reason": policy.reason,
         "agentInstruction": policy.agent_instruction,
+        "policyExplanation": policy_explanation
+        or build_policy_explanation(findings, classification, policy),
         "findings": capped_findings,
         "executionGraph": graph,
         "reportLimits": {

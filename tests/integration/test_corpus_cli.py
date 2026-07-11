@@ -59,6 +59,7 @@ EXPECTED_CASES = {
     ),
     "github-actions-pull-request-target": ("ASK_USER", ["GHA_PULL_REQUEST_TARGET"]),
     "go-commented-replace-block": ("ALLOW", []),
+    "go-commented-replace-single-line": ("ALLOW", []),
     "go-generation-testmain-cgo": (
         "WARN",
         [
@@ -73,6 +74,7 @@ EXPECTED_CASES = {
         "WARN",
         ["GO_LOCAL_MODULE_REPLACE", "GO_MODULE_REPLACE"],
     ),
+    "go-clean-minimal": ("ALLOW", []),
     "leaked-secret-fixture": ("BLOCK", ["SECRET_PRIVATE_KEY"]),
     "node-dynamic-require-uncertain": (
         "ASK_USER",
@@ -91,6 +93,7 @@ EXPECTED_CASES = {
             "RUST_BUILD_SCRIPT",
         ],
     ),
+    "rust-clean-minimal": ("ALLOW", []),
     "safe-node-package": ("ALLOW", []),
     "shell-source-indirection": ("ASK_USER", ["SHELL_SOURCE_INDIRECTION"]),
     "wide-fanout-exceeded": (
@@ -123,6 +126,27 @@ def test_corpus_scan_json_passes_all_expectations() -> None:
         assert case["expectedRules"] == expected_rules
         assert case["passed"] is True
 
+    groups = payload["groups"]
+    assert [group["category"] for group in groups] == sorted(group["category"] for group in groups)
+    assert {case["id"] for group in groups for case in group["cases"]} == set(EXPECTED_CASES)
+    negative_ids = {
+        case["id"]
+        for group in groups
+        for case in group["cases"]
+        if case["negativeControl"]
+    }
+    assert {
+        "go-clean-minimal",
+        "go-commented-replace-block",
+        "go-commented-replace-single-line",
+        "rust-clean-minimal",
+    } <= negative_ids
+
+
+def test_clean_ecosystem_corpus_controls_include_representative_sources() -> None:
+    assert (CASE_ROOT / "rust-clean-minimal" / "src" / "lib.rs").read_text(encoding="utf-8")
+    assert (CASE_ROOT / "go-clean-minimal" / "clean.go").read_text(encoding="utf-8")
+
 
 def test_corpus_scan_single_case_markdown() -> None:
     result = CliRunner().invoke(
@@ -131,7 +155,9 @@ def test_corpus_scan_single_case_markdown() -> None:
     )
 
     assert result.exit_code == 0
-    assert "| npm-postinstall-remote-exec | BLOCK | BLOCK | pass |" in result.output
+    assert "## Category: dependency-install" in result.output
+    assert "| npm-postinstall-remote-exec | no | BLOCK | BLOCK |" in result.output
+    assert "NODE_LIFECYCLE_REMOTE_EXEC" in result.output
 
 
 def test_corpus_fixtures_do_not_contain_active_payload_urls_or_real_secret_markers() -> None:
