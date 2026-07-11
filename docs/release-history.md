@@ -1,5 +1,22 @@
 # Release History
 
+## v0.3.0
+
+Rust and Go ecosystem coverage foundation:
+
+- Added warning-oriented static Rust/Cargo findings for `build.rs`, package build scripts, Cargo
+  source replacement, Cargo aliases, and git-sourced `Cargo.lock` entries.
+- Added warning-oriented static Go findings for `//go:generate`, `TestMain`, cgo imports, Go module
+  replacement, and local module redirection.
+- Connected `cargo build`, `cargo test`, `go build`, `go test`, and `go generate` commands to
+  Rust/Go metadata and source files in the execution graph.
+- Added deterministic Rust and Go corpus fixtures with clean static-only safety notes.
+- Preserved existing CLI and MCP request shapes and kept the MCP runtime tool set exactly
+  `preflight_check` and `corpus_scan`.
+- Kept the release local and static: no Cargo or Go execution, no package-manager execution, no
+  remote repository scanning, no trust tools, no cache mutation through MCP, no browser automation,
+  and no artifact download.
+
 ## v0.2.9
 
 Instruction-capable MCP runtime hotfix:

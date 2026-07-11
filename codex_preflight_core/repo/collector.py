@@ -16,6 +16,11 @@ CRITICAL_BASENAMES = {
     "setup.cfg",
     "poetry.lock",
     "uv.lock",
+    "Cargo.toml",
+    "Cargo.lock",
+    "build.rs",
+    "go.mod",
+    "go.sum",
     "Makefile",
     "Dockerfile",
     "docker-compose.yml",
@@ -43,6 +48,7 @@ CRITICAL_PREFIXES = (
     "bin/",
     "tools/",
     ".mcp/",
+    ".cargo/",
 )
 SKIP_DIRS = {".git", "node_modules", "vendor", "target", "dist", "build", "__pycache__", ".venv", "venv"}
 COMMAND_TARGET_TOOLS = {"bash", "sh", "python", "node", "powershell", "pwsh"}
@@ -56,6 +62,7 @@ def is_critical_path(relative_path: str) -> bool:
         basename in CRITICAL_BASENAMES
         or normalized in ROOT_DOCUMENTATION_BASENAMES
         or _is_bounded_documentation_surface(normalized)
+        or normalized.endswith(".go")
         or any(normalized.startswith(prefix) for prefix in CRITICAL_PREFIXES)
     )
 

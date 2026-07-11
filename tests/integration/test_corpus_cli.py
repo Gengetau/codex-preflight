@@ -58,6 +58,16 @@ EXPECTED_CASES = {
         ["NODE_POSTINSTALL_SCRIPT", "SCRIPT_INDIRECT_EXECUTION", "JS_CHILD_PROCESS_EXEC"],
     ),
     "github-actions-pull-request-target": ("ASK_USER", ["GHA_PULL_REQUEST_TARGET"]),
+    "go-generation-testmain-cgo": (
+        "WARN",
+        [
+            "GO_GENERATE_DIRECTIVE",
+            "GO_CGO_USAGE",
+            "GO_LOCAL_MODULE_REPLACE",
+            "GO_MODULE_REPLACE",
+            "GO_TESTMAIN",
+        ],
+    ),
     "leaked-secret-fixture": ("BLOCK", ["SECRET_PRIVATE_KEY"]),
     "node-dynamic-require-uncertain": (
         "ASK_USER",
@@ -66,6 +76,15 @@ EXPECTED_CASES = {
     "node-require-payload-chain": (
         "ASK_USER",
         ["NODE_POSTINSTALL_SCRIPT", "SCRIPT_INDIRECT_EXECUTION", "JS_CHILD_PROCESS_EXEC"],
+    ),
+    "rust-build-script-source-replacement": (
+        "WARN",
+        [
+            "RUST_CARGO_SOURCE_REPLACEMENT",
+            "RUST_CARGO_ALIAS",
+            "RUST_CARGO_GIT_SOURCE",
+            "RUST_BUILD_SCRIPT",
+        ],
     ),
     "safe-node-package": ("ALLOW", []),
     "shell-source-indirection": ("ASK_USER", ["SHELL_SOURCE_INDIRECTION"]),

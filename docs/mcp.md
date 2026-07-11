@@ -20,7 +20,7 @@ The future remote-repository capability is documented only as an unavailable des
 implement a remote tool.
 
 Future trust-management contracts are documented only as an unavailable design in
-[MCP Trust Management Design](design/mcp-trust-management.md). v0.2.9 does not register trust tools,
+[MCP Trust Management Design](design/mcp-trust-management.md). v0.3.0 does not register trust tools,
 and MCP scans continue to ignore trust approvals.
 
 ## Runtime Shape
@@ -149,7 +149,7 @@ transport output reserved for protocol messages.
 
 ## Tools
 
-The v0.2.9 tool set remains deliberately narrow and unchanged:
+The v0.3.0 tool set remains deliberately narrow and unchanged:
 
 - `preflight_check`: scans an existing local directory and planned command with static analysis.
 - `corpus_scan`: runs the bundled synthetic corpus.

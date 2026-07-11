@@ -1,0 +1,12 @@
+id: rust-build-script-source-replacement
+title: Rust build script and Cargo source replacement
+category: ecosystem-rust
+command: cargo build
+expectedDecision: WARN
+expectedRules:
+  - RUST_CARGO_SOURCE_REPLACEMENT
+  - RUST_CARGO_ALIAS
+  - RUST_CARGO_GIT_SOURCE
+  - RUST_BUILD_SCRIPT
+description: Synthetic Rust fixture with a build script, Cargo source replacement, alias, and git-sourced lock entry.
+safetyNote: Contains static Cargo metadata only; Cargo is never executed during corpus scanning.
