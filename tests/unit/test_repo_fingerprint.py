@@ -774,6 +774,118 @@ def test_strict_traversal_rejects_pending_directory_swap_before_enumeration(
         _restore_swapped_directory(pending, moved)
 
 
+def test_strict_traversal_never_accepts_queued_directory_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    child = tmp_path / "child"
+    moved = tmp_path / "original-child"
+    child.mkdir()
+    (child / "README.md").write_text("original\n", encoding="utf-8")
+    original_fingerprint = compute_critical_fingerprint(tmp_path, strict_safety=True)
+    real_entries = safe_path_module._directory_entries
+    replacement_installed = False
+    replacement_blocked = False
+
+    def replace_after_parent_enumeration(directory: Any):
+        nonlocal replacement_blocked, replacement_installed
+        yield from real_entries(directory)
+        if directory.path == tmp_path:
+            try:
+                child.rename(moved)
+                child.mkdir()
+                (child / "README.md").write_text("replacement\n", encoding="utf-8")
+                (child / "package.json").write_text('{"replacement": true}\n', encoding="utf-8")
+                replacement_installed = True
+            except PermissionError:
+                replacement_blocked = True
+
+    monkeypatch.setattr(safe_path_module, "_directory_entries", replace_after_parent_enumeration)
+    try:
+        try:
+            fingerprint = compute_critical_fingerprint(tmp_path, strict_safety=True)
+        except CriticalFingerprintError:
+            fingerprint = None
+
+        assert replacement_installed or replacement_blocked
+        assert fingerprint is None or fingerprint == original_fingerprint
+    finally:
+        if replacement_installed:
+            (child / "package.json").unlink()
+            (child / "README.md").unlink()
+            child.rmdir()
+            moved.rename(child)
+
+
+@pytest.mark.parametrize("outcome", ["success", "error", "cancelled"])
+def test_strict_traversal_closes_all_directory_handles(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    outcome: str,
+) -> None:
+    child = tmp_path / "child"
+    child.mkdir()
+    (child / "README.md").write_text("content\n", encoding="utf-8")
+    real_open = safe_path_module._open_directory
+    real_dup = safe_path_module.os.dup
+    opened: list[int] = []
+
+    def track_open(path: Path, parent_descriptor: int | None, name: str | None) -> int:
+        descriptor = real_open(path, parent_descriptor, name)
+        opened.append(descriptor)
+        return descriptor
+
+    monkeypatch.setattr(safe_path_module, "_open_directory", track_open)
+
+    def track_dup(descriptor: int) -> int:
+        duplicated = real_dup(descriptor)
+        opened.append(duplicated)
+        return duplicated
+
+    monkeypatch.setattr(safe_path_module.os, "dup", track_dup)
+    child_opened = False
+    if outcome == "error":
+        real_entries = safe_path_module._directory_entries
+
+        def fail_after_parent_enumeration(directory: Any):
+            yield from real_entries(directory)
+            if directory.path == tmp_path:
+                raise safe_path_module.SafePathError("injected enumeration failure")
+
+        monkeypatch.setattr(safe_path_module, "_directory_entries", fail_after_parent_enumeration)
+    elif outcome == "cancelled":
+        real_open_child = safe_path_module.SafeDirectoryHandle.open_child
+
+        def observe_child_open(
+            directory: safe_path_module.SafeDirectoryHandle,
+            entry: safe_path_module.SafeDirectoryEntry,
+        ) -> safe_path_module.SafeDirectoryHandle:
+            nonlocal child_opened
+            handle = real_open_child(directory, entry)
+            child_opened = True
+            return handle
+
+        monkeypatch.setattr(safe_path_module.SafeDirectoryHandle, "open_child", observe_child_open)
+
+    def budget_check() -> None:
+        if outcome == "cancelled" and child_opened:
+            raise CriticalFingerprintError("cancelled", "injected cancellation")
+
+    if outcome == "success":
+        assert collect_critical_files(tmp_path, reject_unsafe=True) == [Path("child/README.md")]
+    elif outcome == "error":
+        with pytest.raises(CriticalFileCollectionError):
+            collect_critical_files(tmp_path, reject_unsafe=True)
+    else:
+        with pytest.raises(CriticalFingerprintError):
+            collect_critical_files(tmp_path, budget_check=budget_check, reject_unsafe=True)
+
+    assert opened
+    for descriptor in set(opened):
+        with pytest.raises(OSError):
+            os.fstat(descriptor)
+
+
 def test_strict_fixture_marker_lookup_is_bound_to_held_directory(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -804,11 +916,7 @@ def test_strict_fixture_marker_lookup_is_bound_to_held_directory(
 
     monkeypatch.setattr(safe_path_module, "_directory_entries", swap_after_directory_is_held)
     try:
-        if os.name == "nt":
-            assert collect_critical_files(tmp_path, reject_unsafe=True) == []
-        else:
-            with pytest.raises(CriticalFileCollectionError):
-                collect_critical_files(tmp_path, reject_unsafe=True)
+        assert collect_critical_files(tmp_path, reject_unsafe=True) == []
         assert attempted is True
     finally:
         if swapped:

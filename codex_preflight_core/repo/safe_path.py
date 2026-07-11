@@ -31,6 +31,101 @@ class SafeDirectoryEntry:
     name: str
     mode: int
     reparse: bool
+    device: int | None
+    inode: int
+
+
+class SafeDirectoryHandle:
+    def __init__(
+        self,
+        path: Path,
+        descriptor: int,
+        *,
+        parent_descriptor: int | None = None,
+        name: str | None = None,
+    ) -> None:
+        self.path = path
+        self.descriptor = descriptor
+        self.parent_descriptor = parent_descriptor
+        self.name = name
+
+    @contextmanager
+    def entries(self) -> Iterator[Iterator[SafeDirectoryEntry]]:
+        self._require_open()
+        self._verify_binding()
+        iterator = _directory_entries(
+            _HeldDirectory(self.path, self.descriptor, None, None),
+        )
+        try:
+            yield iterator
+        finally:
+            iterator.close()
+            self._verify_binding()
+
+    def open_child(self, entry: SafeDirectoryEntry) -> SafeDirectoryHandle:
+        self._require_open()
+        child_path = self.path / entry.name
+        descriptor = _open_directory(child_path, self.descriptor, entry.name)
+        parent_descriptor: int | None = None
+        try:
+            opened = os.fstat(descriptor)
+            if entry.device is not None and opened.st_dev != entry.device:
+                raise SafePathError("The directory entry changed before it was opened.")
+            if opened.st_ino != entry.inode:
+                raise SafePathError("The directory entry changed before it was opened.")
+            parent_descriptor = os.dup(self.descriptor)
+            return SafeDirectoryHandle(
+                child_path,
+                descriptor,
+                parent_descriptor=parent_descriptor,
+                name=entry.name,
+            )
+        except Exception:
+            if parent_descriptor is not None:
+                os.close(parent_descriptor)
+            os.close(descriptor)
+            raise
+
+    def close(self) -> None:
+        if self.descriptor < 0:
+            return
+        descriptor = self.descriptor
+        self.descriptor = -1
+        try:
+            os.close(descriptor)
+        finally:
+            if self.parent_descriptor is not None:
+                parent_descriptor = self.parent_descriptor
+                self.parent_descriptor = None
+                os.close(parent_descriptor)
+
+    def _require_open(self) -> None:
+        if self.descriptor < 0:
+            raise SafePathError("The directory handle is closed.")
+
+    def _verify_binding(self) -> None:
+        if self.parent_descriptor is None:
+            return
+        assert self.name is not None
+        try:
+            opened = os.fstat(self.descriptor)
+            if os.name == "nt":
+                named = self.path.lstat()
+            else:
+                named = os.stat(
+                    self.name,
+                    dir_fd=self.parent_descriptor,
+                    follow_symlinks=False,
+                )
+            _validate_directory_info(opened)
+            _validate_directory_info(named)
+            _require_same_object(opened, named)
+        except FileNotFoundError:
+            raise
+        except SafePathError:
+            raise
+        except Exception as error:
+            raise SafePathError("The directory entry changed during traversal.") from error
 
 
 def local_absolute_path(value: str | Path, *, base: Path | None = None) -> Path:
@@ -60,14 +155,23 @@ def hold_directory_nofollow(path: Path) -> Iterator[Path]:
 
 
 @contextmanager
-def iterate_directory_nofollow(path: Path) -> Iterator[Iterator[SafeDirectoryEntry]]:
+def open_directory_handle_nofollow(path: Path) -> Iterator[SafeDirectoryHandle]:
     absolute = local_absolute_path(path)
     held = _open_directory_chain(absolute)
+    leaf = held.pop()
+    handle = SafeDirectoryHandle(leaf.path, leaf.descriptor)
+    _close_directory_chain(held)
     try:
-        yield _directory_entries(held[-1])
-        _verify_directory_chain(held)
+        yield handle
     finally:
-        _close_directory_chain(held)
+        handle.close()
+
+
+@contextmanager
+def iterate_directory_nofollow(path: Path) -> Iterator[Iterator[SafeDirectoryEntry]]:
+    with open_directory_handle_nofollow(path) as directory:
+        with directory.entries() as iterator:
+            yield iterator
 
 
 @contextmanager
@@ -251,7 +355,13 @@ def _directory_entries(directory: _HeldDirectory) -> Iterator[SafeDirectoryEntry
         with os.scandir(directory.descriptor) as iterator:
             for entry in iterator:
                 info = entry.stat(follow_symlinks=False)
-                yield SafeDirectoryEntry(entry.name, info.st_mode, _is_reparse(info))
+                yield SafeDirectoryEntry(
+                    entry.name,
+                    info.st_mode,
+                    _is_reparse(info),
+                    info.st_dev,
+                    info.st_ino,
+                )
     except OSError as error:
         raise SafePathError("The directory could not be enumerated safely.") from error
 
@@ -301,6 +411,7 @@ if os.name == "nt":
     _WINDOWS_DIRECTORY_BUFFER_BYTES = 64 * 1024
     _WINDOWS_DIRECTORY_ATTRIBUTES_OFFSET = 56
     _WINDOWS_DIRECTORY_NAME_LENGTH_OFFSET = 60
+    _WINDOWS_DIRECTORY_FILE_ID_OFFSET = 96
     _WINDOWS_DIRECTORY_NAME_OFFSET = 104
 
 
@@ -372,12 +483,21 @@ def _windows_directory_entries(descriptor: int) -> Iterator[SafeDirectoryEntry]:
             )
             name_start = offset + _WINDOWS_DIRECTORY_NAME_OFFSET
             name = bytes(buffer[name_start : name_start + name_length]).decode("utf-16-le", "strict")
+            file_id = int.from_bytes(
+                buffer[
+                    offset + _WINDOWS_DIRECTORY_FILE_ID_OFFSET :
+                    offset + _WINDOWS_DIRECTORY_FILE_ID_OFFSET + 8
+                ],
+                "little",
+            )
             if name not in {".", ".."}:
                 mode = stat.S_IFDIR if attributes & _FILE_ATTRIBUTE_DIRECTORY else stat.S_IFREG
                 yield SafeDirectoryEntry(
                     name,
                     mode,
                     bool(attributes & _FILE_ATTRIBUTE_REPARSE_POINT),
+                    None,
+                    file_id,
                 )
             if next_offset == 0:
                 break
