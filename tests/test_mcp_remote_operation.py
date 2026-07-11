@@ -684,10 +684,12 @@ def test_git_storage_and_total_deadline_limits_cleanup(tmp_path: Path) -> None:
     ],
 )
 def test_acquisition_ref_and_scan_failures_always_cleanup(
-    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
     phase: str,
     expected_code: str,
 ) -> None:
+    temp_parent = tmp_path_factory.mktemp("remote-op")
+
     def runner(args: list[str], **_kwargs: object) -> bytes:
         if phase == "fetch" and "fetch" in args:
             raise RemoteOperationError("MCP_REMOTE_ACQUISITION_FAILED", "hidden")
@@ -710,13 +712,15 @@ def test_acquisition_ref_and_scan_failures_always_cleanup(
                 resolver=lambda _host, _timeout: ("140.82.112.3",),
                 command_runner=runner,
                 scanner=scanner,
-                temp_parent=tmp_path,
+                temp_parent=temp_parent,
             ),
         )
 
     assert caught.value.code == expected_code
     assert "hidden" not in caught.value.message
-    assert not any(tmp_path.iterdir())
+    if phase == "fetch":
+        assert caught.value.message == "The remote operation failed without exposing internal details."
+    assert not any(temp_parent.iterdir())
 
 
 def test_cleanup_failure_keeps_operation_failed_even_after_directory_removal(tmp_path: Path) -> None:

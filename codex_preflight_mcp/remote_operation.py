@@ -91,6 +91,21 @@ _GIT_HARDENING = [
     "-c",
     "diff.external=",
 ]
+_PUBLIC_OPERATION_ERROR_MESSAGES = {
+    "MCP_REMOTE_ADDRESS_NOT_ALLOWED": "GitHub DNS resolution did not satisfy the public-address policy.",
+    "MCP_REMOTE_REF_NOT_FOUND": "The requested ref was not found or did not resolve to an immutable commit.",
+    "MCP_REMOTE_REDIRECT_NOT_ALLOWED": "The remote endpoint attempted an unauthorized redirect.",
+    "MCP_REMOTE_AUTH_NOT_ALLOWED": "The remote endpoint required authentication, which is not authorized.",
+    "MCP_REMOTE_TIMEOUT": "The bounded remote operation timed out.",
+    "MCP_REMOTE_CANCELLED": "The remote operation was cancelled.",
+    "MCP_REMOTE_LIMIT_EXCEEDED": "The remote operation exceeded a fixed resource limit.",
+    "MCP_REMOTE_TREE_UNSAFE": "The fetched tree contained an unsafe path or object.",
+    "MCP_REMOTE_ACQUISITION_FAILED": "The remote operation failed without exposing internal details.",
+    "MCP_REMOTE_SCAN_FAILED": "The isolated static scan failed without exposing repository output.",
+    "MCP_REMOTE_CACHE_FAILED": "The dedicated remote scan cache failed closed.",
+    "MCP_REMOTE_AUDIT_FAILED": "The redacted remote audit log failed closed.",
+    "MCP_REMOTE_CLEANUP_FAILED": "The remote operation could not verify complete temporary cleanup.",
+}
 
 
 @dataclass
@@ -778,7 +793,9 @@ def _normalize_operation_error(
     if pending_error is None:
         return None
     if isinstance(pending_error, RemoteOperationError):
-        return pending_error
+        message = _PUBLIC_OPERATION_ERROR_MESSAGES.get(pending_error.code)
+        if message is not None:
+            return RemoteOperationError(pending_error.code, message, pending_error.retryable)
     return RemoteOperationError(
         "MCP_REMOTE_ACQUISITION_FAILED",
         "The remote operation failed without exposing internal details.",
