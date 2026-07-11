@@ -58,6 +58,7 @@ EXPECTED_CASES = {
         ["NODE_POSTINSTALL_SCRIPT", "SCRIPT_INDIRECT_EXECUTION", "JS_CHILD_PROCESS_EXEC"],
     ),
     "github-actions-pull-request-target": ("ASK_USER", ["GHA_PULL_REQUEST_TARGET"]),
+    "go-commented-replace-block": ("ALLOW", []),
     "go-generation-testmain-cgo": (
         "WARN",
         [

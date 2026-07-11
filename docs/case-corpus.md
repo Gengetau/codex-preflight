@@ -31,6 +31,7 @@ codex-preflight corpus scan --case npm-postinstall-remote-exec
 The corpus includes Rust and Go ecosystem fixtures for v0.3.0:
 
 - `rust-build-script-source-replacement`
+- `go-commented-replace-block`
 - `go-generation-testmain-cgo`
 - `go-replace-block`
 
