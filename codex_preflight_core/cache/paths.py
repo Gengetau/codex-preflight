@@ -17,6 +17,10 @@ def trust_cache_path(base: Path | None = None) -> Path:
     return (base or default_cache_dir()) / "trust.json"
 
 
+def trust_read_audit_path(base: Path | None = None) -> Path:
+    return (base or default_cache_dir()) / "trust-read" / "audit.jsonl"
+
+
 def remote_scan_cache_path(base: Path | None = None) -> Path:
     return (base or default_cache_dir()) / "remote" / "scan-cache.json"
 

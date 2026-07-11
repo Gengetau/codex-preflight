@@ -72,9 +72,9 @@ class TrustCache:
         self.entry_id_factory = entry_id_factory or (lambda: str(uuid4()))
         self.max_bytes = max_bytes
 
-    def list(self) -> list[dict[str, Any]]:
+    def list(self, *, event_hook: Callable[[str], None] | None = None) -> list[dict[str, Any]]:
         with locked_cache_file(self.path):
-            entries = self._read_all_unlocked()
+            entries = self._read_all_unlocked(event_hook=event_hook)
             now = self._now()
             return [deepcopy(entry) for entry in entries if _timestamp(entry["expiresAt"]) > now]
 
@@ -163,8 +163,9 @@ class TrustCache:
             self._write_unlocked(kept)
             return removed
 
-    def _read_all_unlocked(self) -> list[dict[str, Any]]:
+    def _read_all_unlocked(self, *, event_hook: Callable[[str], None] | None = None) -> list[dict[str, Any]]:
         if not self.path.exists():
+            _notify(event_hook, "trust_file_missing")
             return []
         try:
             size = self.path.stat().st_size
@@ -183,6 +184,8 @@ class TrustCache:
             raise TrustCacheError("corrupt", "The local trust store is corrupt.") from error
         if not isinstance(payload, list):
             raise TrustCacheError("unsupported-schema", "The local trust store schema is unsupported.")
+        if not payload:
+            _notify(event_hook, "trust_file_empty")
 
         entries: list[dict[str, Any]] = []
         legacy_indexes: list[int] = []
@@ -203,7 +206,13 @@ class TrustCache:
             entries.append(entry)
 
         if legacy_indexes:
-            entries = self._migrate_unlocked(entries, legacy_indexes, raw)
+            _notify(event_hook, "migration_started")
+            try:
+                entries = self._migrate_unlocked(entries, legacy_indexes, raw)
+            except BaseException:
+                _notify(event_hook, "migration_failed")
+                raise
+            _notify(event_hook, "migration_completed")
         return entries
 
     def _migrate_unlocked(
@@ -359,3 +368,8 @@ def _timestamp(value: object) -> datetime:
     if parsed.tzinfo is None:
         raise TrustCacheError("corrupt", "The local trust store timestamp is invalid.")
     return parsed.astimezone(UTC)
+
+
+def _notify(event_hook: Callable[[str], None] | None, event: str) -> None:
+    if event_hook is not None:
+        event_hook(event)
