@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import pytest
 
@@ -97,10 +99,12 @@ def test_confirmation_concurrent_consume_has_one_winner() -> None:
 
 def test_first_remote_call_returns_challenge_without_network(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     from codex_preflight_mcp import server
 
     monkeypatch.setenv("CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN", "1")
+    monkeypatch.setenv("CODEX_PREFLIGHT_HOME", str(tmp_path))
     monkeypatch.setattr(
         server,
         "run_remote_operation",
@@ -120,4 +124,41 @@ def test_first_remote_call_returns_challenge_without_network(
     assert detail["context"]["requestedRef"] == "refs/heads/main"
     assert detail["context"]["confirmationToken"]
     assert detail["context"]["expiresInSeconds"] == 300
+    assert not (tmp_path / "remote" / "scan-cache.json").exists()
 
+
+def test_confirmation_audit_records_issue_and_consume_without_raw_authority(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from codex_preflight_mcp import server
+
+    monkeypatch.setenv("CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN", "1")
+    monkeypatch.setenv("CODEX_PREFLIGHT_HOME", str(tmp_path))
+    monkeypatch.setattr(server, "_REMOTE_CONFIRMATIONS", RemoteConfirmationManager(secret=b"x" * 32))
+    monkeypatch.setattr(
+        server,
+        "run_remote_operation",
+        lambda **_kwargs: {"decision": "ALLOW", "repo": {}, "remoteProvenance": {}},
+    )
+
+    with pytest.raises(server.McpToolError) as challenge:
+        server.remote_repository_scan(
+            remoteUrl="https://github.com/example/project",
+            requestedRef="refs/heads/main",
+        )
+    token = challenge.value.to_dict()["error"]["context"]["confirmationToken"]
+    result = server.remote_repository_scan(
+        remoteUrl="https://github.com/example/project",
+        requestedRef="refs/heads/main",
+        confirmationToken=token,
+    )
+
+    audit_path = tmp_path / "remote" / "audit.jsonl"
+    audit_text = audit_path.read_text(encoding="utf-8")
+    events = [json.loads(line)["event"] for line in audit_text.splitlines()]
+    assert events == ["challenge_issue", "confirmation_consume"]
+    assert result["safety"]["remoteRepositoryAccess"] is True
+    assert token not in audit_text
+    assert "https://github.com/example/project" not in audit_text
+    assert "refs/heads/main" not in audit_text

@@ -20,9 +20,18 @@ from concurrent.futures import TimeoutError as FutureTimeoutError
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Any
+from typing import Any, Protocol
 
+from codex_preflight_core.cache.paths import remote_audit_path, remote_scan_cache_path
 from codex_preflight_mcp.remote_policy import RemoteTarget, ResourceLimits
+from codex_preflight_mcp.remote_state import (
+    HOST_POLICY_VERSION,
+    RESOURCE_LIMIT_PROFILE,
+    RemoteAuditLog,
+    RemoteScanCache,
+    RemoteStateError,
+    build_remote_cache_key,
+)
 
 _OBJECT_ID = re.compile(r"^[0-9a-f]{40}$")
 _TEMP_PREFIX = "cpf-r-"
@@ -37,6 +46,10 @@ _WINDOWS_RESERVED = {
 }
 _GIT_HARDENING = [
     "-c",
+    "protocol.allow=never",
+    "-c",
+    "protocol.https.allow=always",
+    "-c",
     "protocol.ext.allow=never",
     "-c",
     "protocol.file.allow=never",
@@ -44,6 +57,18 @@ _GIT_HARDENING = [
     "protocol.ssh.allow=never",
     "-c",
     "http.followRedirects=false",
+    "-c",
+    "http.curloptResolve=",
+    "-c",
+    "http.extraHeader=",
+    "-c",
+    "http.cookieFile=",
+    "-c",
+    "http.saveCookies=false",
+    "-c",
+    "http.proxy=",
+    "-c",
+    "https.proxy=",
     "-c",
     "credential.helper=",
     "-c",
@@ -92,20 +117,42 @@ Resolver = Callable[[str, int], tuple[str, ...]]
 Cleanup = Callable[[Path, Path], None]
 
 
+class RemoteCache(Protocol):
+    def get(self, key: dict[str, str]) -> dict[str, Any] | None: ...
+
+    def store(self, key: dict[str, str], report: dict[str, Any]) -> None: ...
+
+
+class RemoteAudit(Protocol):
+    def record(self, event: str, **values: object) -> None: ...
+
+
 @dataclass(frozen=True)
 class RemoteDependencies:
-    resolver: Resolver = None  # type: ignore[assignment]
-    command_runner: CommandRunner = None  # type: ignore[assignment]
-    scanner: Scanner = None  # type: ignore[assignment]
-    cleanup: Cleanup = None  # type: ignore[assignment]
+    resolver: Resolver | None = None
+    command_runner: CommandRunner | None = None
+    scanner: Scanner | None = None
+    cleanup: Cleanup | None = None
     temp_parent: Path | None = None
     clock: Callable[[], float] = time.monotonic
+    cache: RemoteCache | None = None
+    audit: RemoteAudit | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "resolver", self.resolver or resolve_public_addresses)
         object.__setattr__(self, "command_runner", self.command_runner or run_command)
         object.__setattr__(self, "scanner", self.scanner or run_scan_worker)
         object.__setattr__(self, "cleanup", self.cleanup or safe_cleanup)
+
+
+@dataclass
+class _OperationContext:
+    operation_id: str
+    resolved_commit: str | None = None
+    cache_status: str | None = None
+    resource_usage: dict[str, int] | None = None
+    cleanup_status: str | None = None
+    failure_recorded: bool = False
 
 
 _GLOBAL_OPERATION_SLOTS = threading.BoundedSemaphore(2)
@@ -175,47 +222,163 @@ def run_remote_operation(
     dependencies: RemoteDependencies | None = None,
     cancellation: CancellationToken | None = None,
 ) -> dict[str, Any]:
-    deps = dependencies or RemoteDependencies()
+    deps = dependencies or RemoteDependencies(
+        cache=RemoteScanCache(remote_scan_cache_path()),
+        audit=RemoteAuditLog(remote_audit_path()),
+    )
     token = cancellation or CancellationToken()
-    _check_cancelled(token)
     started = deps.clock()
     deadline = started + limits.total_timeout_seconds
-    with _operation_slot(target.canonical_url):
-        parent = (deps.temp_parent or Path(tempfile.gettempdir())).resolve()
-        parent.mkdir(parents=True, exist_ok=True)
-        operation_root = _create_operation_root(parent)
-        result: dict[str, Any] | None = None
-        pending_error: BaseException | None = None
-        try:
-            result = _execute_operation(
+    context = _OperationContext(operation_id=secrets.token_hex(16))
+    _audit_event(
+        deps,
+        "operation_start",
+        target,
+        requested_ref,
+        challenge_id,
+        context,
+        outcome="started",
+    )
+    try:
+        _check_cancelled(token)
+        with _operation_slot(target.canonical_url):
+            return _run_owned_operation(
                 target=target,
                 requested_ref=requested_ref,
                 challenge_id=challenge_id,
                 limits=limits,
                 deps=deps,
                 cancellation=token,
-                operation_root=operation_root,
                 deadline=deadline,
                 started=started,
+                context=context,
             )
-        except BaseException as error:
-            pending_error = error
-        try:
-            deps.cleanup(operation_root, parent)
-        except BaseException as cleanup_error:
-            raise RemoteOperationError(
-                "MCP_REMOTE_CLEANUP_FAILED",
-                "The remote operation could not verify complete temporary cleanup.",
-            ) from cleanup_error
-        if pending_error is not None:
-            raise pending_error
-        if result is None:
-            raise RemoteOperationError("MCP_REMOTE_SCAN_FAILED", "The remote scan produced no result.")
-        result["remoteProvenance"]["cleanupStatus"] = "removed"
-        result["remoteProvenance"]["operationTiming"]["totalMilliseconds"] = int(
-            (deps.clock() - started) * 1000
+    except RemoteOperationError as error:
+        if error.code == "MCP_REMOTE_CANCELLED":
+            _audit_terminal_event(
+                deps, "cancellation", target, requested_ref, challenge_id, context, error.code
+            )
+        elif error.code == "MCP_REMOTE_TIMEOUT":
+            _audit_terminal_event(deps, "timeout", target, requested_ref, challenge_id, context, error.code)
+        elif error.code == "MCP_REMOTE_LIMIT_EXCEEDED":
+            _audit_terminal_event(
+                deps, "limit_breach", target, requested_ref, challenge_id, context, error.code
+            )
+        if not context.failure_recorded:
+            _audit_event(
+                deps,
+                "cleanup",
+                target,
+                requested_ref,
+                challenge_id,
+                context,
+                outcome="not-created",
+                error_code=error.code,
+                cleanup_status="not-created",
+            )
+            _audit_failure_best_effort(
+                deps,
+                target,
+                requested_ref,
+                challenge_id,
+                context,
+                error,
+                "not-created",
+            )
+            context.failure_recorded = True
+        raise
+
+
+def _run_owned_operation(
+    *,
+    target: RemoteTarget,
+    requested_ref: str,
+    challenge_id: str,
+    limits: ResourceLimits,
+    deps: RemoteDependencies,
+    cancellation: CancellationToken,
+    deadline: float,
+    started: float,
+    context: _OperationContext,
+) -> dict[str, Any]:
+    parent = (deps.temp_parent or Path(tempfile.gettempdir())).resolve()
+    parent.mkdir(parents=True, exist_ok=True)
+    operation_root = _create_operation_root(parent)
+    result: dict[str, Any] | None = None
+    pending_error: BaseException | None = None
+    cleanup_error: BaseException | None = None
+    try:
+        result = _execute_operation(
+            target=target,
+            requested_ref=requested_ref,
+            challenge_id=challenge_id,
+            limits=limits,
+            deps=deps,
+            cancellation=cancellation,
+            operation_root=operation_root,
+            deadline=deadline,
+            started=started,
+            context=context,
         )
-        return result
+    except BaseException as error:
+        pending_error = error
+    try:
+        cleanup = deps.cleanup
+        if cleanup is None:
+            raise RuntimeError("cleanup dependency missing")
+        cleanup(operation_root, parent)
+    except BaseException as error:
+        cleanup_error = error
+
+    final_error = _normalize_operation_error(pending_error, cleanup_error)
+    cleanup_status = "failed" if cleanup_error is not None else "removed"
+    context.cleanup_status = cleanup_status
+    try:
+        _audit_event(
+            deps,
+            "cleanup",
+            target,
+            requested_ref,
+            challenge_id,
+            context,
+            outcome=cleanup_status,
+            error_code=final_error.code if final_error is not None else None,
+            cleanup_status=cleanup_status,
+        )
+    except RemoteOperationError as audit_error:
+        final_error = audit_error
+
+    if final_error is not None:
+        _audit_failure_best_effort(
+            deps,
+            target,
+            requested_ref,
+            challenge_id,
+            context,
+            final_error,
+            cleanup_status,
+        )
+        context.failure_recorded = True
+        raise final_error
+    if result is None:
+        raise RemoteOperationError("MCP_REMOTE_SCAN_FAILED", "The remote scan produced no result.")
+    provenance = result.get("remoteProvenance")
+    if not isinstance(provenance, dict):
+        raise RemoteOperationError("MCP_REMOTE_SCAN_FAILED", "The remote provenance was invalid.")
+    provenance["cleanupStatus"] = "removed"
+    provenance["operationTiming"]["totalMilliseconds"] = int((deps.clock() - started) * 1000)
+    _audit_event(
+        deps,
+        "success",
+        target,
+        requested_ref,
+        challenge_id,
+        context,
+        outcome="success",
+        cleanup_status="removed",
+        cache_status=context.cache_status,
+    )
+    return result
 
 
 def _execute_operation(
@@ -229,33 +392,41 @@ def _execute_operation(
     operation_root: Path,
     deadline: float,
     started: float,
+    context: _OperationContext,
 ) -> dict[str, Any]:
     _check_deadline(deps.clock, deadline)
-    bare_repo = operation_root / "objects.git"
-    scan_root = operation_root / "scan"
-    hooks = operation_root / "empty-hooks"
-    templates = operation_root / "empty-templates"
+    bare_repo = operation_root / "o.git"
+    scan_root = operation_root / "s"
+    hooks = operation_root / "h"
+    templates = operation_root / "t"
     for directory in (scan_root, hooks, templates):
         directory.mkdir()
     environment = git_environment(operation_root)
     git = ["git", *_GIT_HARDENING, "-c", f"core.hooksPath={hooks}", "-c", f"init.templateDir={templates}"]
-    deps.command_runner(
+    command_runner = deps.command_runner
+    resolver = deps.resolver
+    scanner = deps.scanner
+    if command_runner is None or resolver is None or scanner is None:
+        raise RemoteOperationError("MCP_REMOTE_ACQUISITION_FAILED", "Remote dependencies were unavailable.")
+    command_runner(
         [*git, "init", "--bare", str(bare_repo)],
         cwd=None,
         env=environment,
         timeout=min(limits.git_timeout_seconds, _remaining(deps.clock, deadline)),
-        monitor_root=operation_root,
+        monitor_root=bare_repo,
         limits=limits,
         cancellation=cancellation,
     )
     _check_deadline(deps.clock, deadline)
-    deps.resolver("github.com", limits.dns_timeout_seconds)
-    deps.command_runner(
+    addresses = resolver("github.com", limits.dns_timeout_seconds)
+    network_git = [*git, "-c", f"http.curloptResolve={_curl_resolve_entry(addresses)}"]
+    command_runner(
         [
-            *git,
+            *network_git,
             "-C",
             str(bare_repo),
             "fetch",
+            "--quiet",
             "--depth=1",
             "--no-tags",
             "--recurse-submodules=no",
@@ -265,16 +436,18 @@ def _execute_operation(
         cwd=None,
         env=environment,
         timeout=min(limits.git_timeout_seconds, _remaining(deps.clock, deadline)),
-        monitor_root=operation_root,
+        monitor_root=bare_repo,
         limits=limits,
         cancellation=cancellation,
     )
-    resolved_commit = deps.command_runner(
+    if directory_size(bare_repo) > limits.max_git_bytes:
+        raise _limit_error()
+    resolved_commit = command_runner(
         [*git, "-C", str(bare_repo), "rev-parse", "--verify", "FETCH_HEAD^{commit}"],
         cwd=None,
         env=environment,
         timeout=min(limits.git_timeout_seconds, _remaining(deps.clock, deadline)),
-        monitor_root=operation_root,
+        monitor_root=bare_repo,
         limits=limits,
         cancellation=cancellation,
     ).decode("ascii", "strict").strip().lower()
@@ -288,12 +461,83 @@ def _execute_operation(
             "MCP_REMOTE_REF_NOT_FOUND",
             "The requested immutable commit did not match the fetched commit.",
         )
-    tree_output = deps.command_runner(
+    context.resolved_commit = resolved_commit
+    _audit_event(
+        deps,
+        "ref_resolution",
+        target,
+        requested_ref,
+        challenge_id,
+        context,
+        outcome="resolved",
+    )
+    cache_key = build_remote_cache_key(target.canonical_url, resolved_commit)
+    cached_report: dict[str, Any] | None = None
+    if deps.cache is not None:
+        try:
+            cached_report = deps.cache.get(cache_key)
+        except RemoteStateError as error:
+            raise _remote_state_operation_error(error) from error
+        context.cache_status = "hit" if cached_report is not None else "miss"
+        _audit_event(
+            deps,
+            "cache_result",
+            target,
+            requested_ref,
+            challenge_id,
+            context,
+            outcome=context.cache_status,
+            cache_status=context.cache_status,
+        )
+    else:
+        context.cache_status = "disabled"
+
+    if cached_report is not None:
+        git_bytes = directory_size(bare_repo)
+        if git_bytes > limits.max_git_bytes:
+            raise _limit_error()
+        context.resource_usage = {
+            "gitBytes": git_bytes,
+            "materializedBytes": 0,
+            "materializedFiles": 0,
+        }
+        _audit_event(
+            deps,
+            "acquisition_complete",
+            target,
+            requested_ref,
+            challenge_id,
+            context,
+            outcome="cache-hit",
+            cache_status="hit",
+        )
+        _update_remote_repo(cached_report, target, requested_ref, resolved_commit)
+        return _add_remote_provenance(
+            cached_report,
+            target=target,
+            requested_ref=requested_ref,
+            resolved_commit=resolved_commit,
+            challenge_id=challenge_id,
+            limits=limits,
+            usage={
+                "materializedBytes": 0,
+                "materializedFiles": 0,
+                "skippedSymlinks": 0,
+                "skippedSubmodules": 0,
+                "skippedLfsPointers": 0,
+            },
+            git_bytes=git_bytes,
+            cache_status="hit",
+            started=started,
+            clock=deps.clock,
+        )
+
+    tree_output = command_runner(
         [*git, "-C", str(bare_repo), "ls-tree", "-r", "-z", "-l", resolved_commit],
         cwd=None,
         env=environment,
         timeout=min(limits.git_timeout_seconds, _remaining(deps.clock, deadline)),
-        monitor_root=operation_root,
+        monitor_root=bare_repo,
         limits=limits,
         cancellation=cancellation,
     )
@@ -303,11 +547,27 @@ def _execute_operation(
         scan_root=scan_root,
         git=git,
         environment=environment,
-        operation_root=operation_root,
         limits=limits,
         dependencies=deps,
         cancellation=cancellation,
         deadline=deadline,
+    )
+    git_bytes = directory_size(bare_repo)
+    if git_bytes > limits.max_git_bytes:
+        raise _limit_error()
+    context.resource_usage = {
+        **usage,
+        "gitBytes": git_bytes,
+    }
+    _audit_event(
+        deps,
+        "acquisition_complete",
+        target,
+        requested_ref,
+        challenge_id,
+        context,
+        outcome="materialized",
+        cache_status=context.cache_status,
     )
     _check_deadline(deps.clock, deadline)
     source_metadata: dict[str, object] = {
@@ -317,14 +577,69 @@ def _execute_operation(
         "resolvedCommit": resolved_commit,
         "remoteUrl": target.canonical_url,
     }
-    report = deps.scanner(
-        scan_root,
-        source_metadata,
-        min(limits.scan_timeout_seconds, _remaining(deps.clock, deadline)),
-        cancellation,
-    )
+    try:
+        report = scanner(
+            scan_root,
+            source_metadata,
+            min(limits.scan_timeout_seconds, _remaining(deps.clock, deadline)),
+            cancellation,
+        )
+    except RemoteOperationError:
+        raise
+    except Exception as error:
+        raise RemoteOperationError(
+            "MCP_REMOTE_SCAN_FAILED",
+            "The isolated static scan worker failed without exposing repository output.",
+        ) from error
     if not isinstance(report, dict):
         raise RemoteOperationError("MCP_REMOTE_SCAN_FAILED", "The remote static scan result was invalid.")
+    _update_remote_repo(report, target, requested_ref, resolved_commit)
+    _audit_event(
+        deps,
+        "scan_complete",
+        target,
+        requested_ref,
+        challenge_id,
+        context,
+        outcome="scanned",
+        cache_status=context.cache_status,
+    )
+    if deps.cache is not None:
+        try:
+            deps.cache.store(cache_key, report)
+        except RemoteStateError as error:
+            raise _remote_state_operation_error(error) from error
+        _audit_event(
+            deps,
+            "cache_write",
+            target,
+            requested_ref,
+            challenge_id,
+            context,
+            outcome="stored",
+            cache_status="miss",
+        )
+    return _add_remote_provenance(
+        report,
+        target=target,
+        requested_ref=requested_ref,
+        resolved_commit=resolved_commit,
+        challenge_id=challenge_id,
+        limits=limits,
+        usage=usage,
+        git_bytes=git_bytes,
+        cache_status=context.cache_status or "disabled",
+        started=started,
+        clock=deps.clock,
+    )
+
+
+def _update_remote_repo(
+    report: dict[str, Any],
+    target: RemoteTarget,
+    requested_ref: str,
+    resolved_commit: str,
+) -> None:
     repo = report.setdefault("repo", {})
     if not isinstance(repo, dict):
         raise RemoteOperationError("MCP_REMOTE_SCAN_FAILED", "The remote report repository metadata was invalid.")
@@ -339,34 +654,150 @@ def _execute_operation(
             "headCommit": resolved_commit,
         }
     )
-    git_bytes = directory_size(bare_repo)
-    if git_bytes > limits.max_git_bytes:
-        raise _limit_error()
-    skipped_symlinks = usage.pop("skippedSymlinks")
-    skipped_submodules = usage.pop("skippedSubmodules")
-    skipped_lfs_pointers = usage.pop("skippedLfsPointers")
+
+
+def _add_remote_provenance(
+    report: dict[str, Any],
+    *,
+    target: RemoteTarget,
+    requested_ref: str,
+    resolved_commit: str,
+    challenge_id: str,
+    limits: ResourceLimits,
+    usage: dict[str, int],
+    git_bytes: int,
+    cache_status: str,
+    started: float,
+    clock: Callable[[], float],
+) -> dict[str, Any]:
     report["remoteProvenance"] = {
         "requestedUrl": target.requested_url,
         "canonicalUrl": target.canonical_url,
         "requestedRef": requested_ref,
         "resolvedCommit": resolved_commit,
         "sourceType": "remote",
-        "hostPolicyVersion": "github-public-v1",
-        "resourceLimitProfile": "remote-bounded-v1",
+        "hostPolicyVersion": HOST_POLICY_VERSION,
+        "resourceLimitProfile": RESOURCE_LIMIT_PROFILE,
         "resourceLimits": limits.to_dict(),
-        "resourceUsage": {**usage, "gitBytes": git_bytes},
+        "resourceUsage": {
+            "materializedBytes": usage.get("materializedBytes", 0),
+            "materializedFiles": usage.get("materializedFiles", 0),
+            "gitBytes": git_bytes,
+        },
         "confirmationChallengeId": challenge_id,
         "confirmationConsumed": True,
         "redirectsFollowed": 0,
-        "cacheStatus": "not-checked",
+        "cacheStatus": cache_status,
         "cleanupStatus": "pending",
-        "operationTiming": {"totalMilliseconds": int((deps.clock() - started) * 1000)},
+        "operationTiming": {"totalMilliseconds": int((clock() - started) * 1000)},
         "complete": True,
-        "skippedSymlinks": skipped_symlinks,
-        "skippedSubmodules": skipped_submodules,
-        "skippedLfsPointers": skipped_lfs_pointers,
+        "skippedSymlinks": usage.get("skippedSymlinks", 0),
+        "skippedSubmodules": usage.get("skippedSubmodules", 0),
+        "skippedLfsPointers": usage.get("skippedLfsPointers", 0),
     }
     return report
+
+
+def _normalize_operation_error(
+    pending_error: BaseException | None,
+    cleanup_error: BaseException | None,
+) -> RemoteOperationError | None:
+    if cleanup_error is not None:
+        return RemoteOperationError(
+            "MCP_REMOTE_CLEANUP_FAILED",
+            "The remote operation could not verify complete temporary cleanup.",
+        )
+    if pending_error is None:
+        return None
+    if isinstance(pending_error, RemoteOperationError):
+        return pending_error
+    return RemoteOperationError(
+        "MCP_REMOTE_ACQUISITION_FAILED",
+        "The remote operation failed without exposing internal details.",
+    )
+
+
+def _audit_event(
+    deps: RemoteDependencies,
+    event: str,
+    target: RemoteTarget,
+    requested_ref: str,
+    challenge_id: str,
+    context: _OperationContext,
+    **values: object,
+) -> None:
+    if deps.audit is None:
+        return
+    try:
+        deps.audit.record(
+            event,
+            operation_id=context.operation_id,
+            challenge_id=challenge_id,
+            canonical_url=target.canonical_url,
+            requested_ref=requested_ref,
+            resolved_commit=context.resolved_commit,
+            resource_usage=context.resource_usage,
+            **values,
+        )
+    except RemoteStateError as error:
+        raise _remote_state_operation_error(error) from error
+
+
+def _audit_terminal_event(
+    deps: RemoteDependencies,
+    event: str,
+    target: RemoteTarget,
+    requested_ref: str,
+    challenge_id: str,
+    context: _OperationContext,
+    error_code: str,
+) -> None:
+    _audit_event(
+        deps,
+        event,
+        target,
+        requested_ref,
+        challenge_id,
+        context,
+        outcome="failed",
+        error_code=error_code,
+        cache_status=context.cache_status,
+    )
+
+
+def _audit_failure_best_effort(
+    deps: RemoteDependencies,
+    target: RemoteTarget,
+    requested_ref: str,
+    challenge_id: str,
+    context: _OperationContext,
+    error: RemoteOperationError,
+    cleanup_status: str,
+) -> None:
+    try:
+        _audit_event(
+            deps,
+            "failure",
+            target,
+            requested_ref,
+            challenge_id,
+            context,
+            outcome="failed",
+            error_code=error.code,
+            cleanup_status=cleanup_status,
+            cache_status=context.cache_status,
+        )
+    except RemoteOperationError:
+        pass
+
+
+def _remote_state_operation_error(error: RemoteStateError) -> RemoteOperationError:
+    message = (
+        "The redacted remote audit log failed closed."
+        if error.code == "MCP_REMOTE_AUDIT_FAILED"
+        else "The dedicated remote scan cache failed closed."
+    )
+    return RemoteOperationError(error.code, message)
 
 
 def _materialize_tree(
@@ -376,7 +807,6 @@ def _materialize_tree(
     scan_root: Path,
     git: list[str],
     environment: dict[str, str],
-    operation_root: Path,
     limits: ResourceLimits,
     dependencies: RemoteDependencies,
     cancellation: CancellationToken,
@@ -428,7 +858,7 @@ def _materialize_tree(
             cwd=None,
             env=environment,
             timeout=min(limits.git_timeout_seconds, _remaining(dependencies.clock, deadline)),
-            monitor_root=operation_root,
+            monitor_root=bare_repo,
             limits=limits,
             cancellation=cancellation,
         )
@@ -493,17 +923,24 @@ def git_environment(operation_root: Path) -> dict[str, str]:
     config = operation_root / "process-config"
     for directory in (temp, home, config):
         directory.mkdir(exist_ok=True)
+    global_config = config / "gitconfig"
+    global_config.touch(exist_ok=True)
     environment.update(
         {
             "TEMP": str(temp),
             "TMP": str(temp),
             "HOME": str(home),
             "USERPROFILE": str(home),
+            "APPDATA": str(config),
+            "LOCALAPPDATA": str(config),
             "XDG_CONFIG_HOME": str(config),
+            "GIT_CONFIG_GLOBAL": str(global_config),
             "GIT_CONFIG_NOSYSTEM": "1",
             "GIT_CEILING_DIRECTORIES": str(operation_root),
             "GIT_DISCOVERY_ACROSS_FILESYSTEM": "0",
             "GIT_TERMINAL_PROMPT": "0",
+            "GIT_PROTOCOL_FROM_USER": "0",
+            "GIT_OPTIONAL_LOCKS": "0",
             "GCM_INTERACTIVE": "never",
             "GIT_LFS_SKIP_SMUDGE": "1",
             "LC_ALL": "C",
@@ -563,6 +1000,8 @@ def run_command(
                 raise _limit_error() from None
     if process.returncode != 0:
         raise _classify_subprocess_failure(args, stderr)
+    if len(stdout) + len(stderr) > limits.max_git_bytes or directory_size(monitor_root) > limits.max_git_bytes:
+        raise _limit_error()
     return stdout
 
 
@@ -601,6 +1040,13 @@ def _classify_subprocess_failure(args: list[str], stderr: bytes) -> RemoteOperat
         "The bounded Git or scan subprocess failed without exposing remote output.",
         True,
     )
+
+
+def _curl_resolve_entry(addresses: tuple[str, ...]) -> str:
+    if not addresses:
+        raise _address_error()
+    pinned = [f"[{address}]" if ":" in address else address for address in addresses]
+    return f"github.com:443:{','.join(pinned)}"
 
 
 def terminate_process_tree(process: subprocess.Popen[bytes]) -> None:
@@ -657,7 +1103,7 @@ def run_scan_worker(
             cwd=operation_root,
             env=environment,
             timeout=timeout,
-            monitor_root=operation_root,
+            monitor_root=result_path,
             limits=ResourceLimits(),
             cancellation=cancellation,
         )
@@ -736,6 +1182,14 @@ def _create_operation_root(parent: Path) -> Path:
 
 
 def directory_size(path: Path) -> int:
+    if path.is_file() and not path.is_symlink():
+        try:
+            return path.stat().st_size
+        except OSError as error:
+            raise RemoteOperationError(
+                "MCP_REMOTE_ACQUISITION_FAILED",
+                "Temporary resource usage could not be measured safely.",
+            ) from error
     total = 0
     try:
         for item in path.rglob("*"):

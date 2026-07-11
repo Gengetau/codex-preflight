@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -100,11 +101,13 @@ def test_direct_remote_call_is_disabled_without_startup_flag(monkeypatch: pytest
         ("MCP_REMOTE_ACQUISITION_FAILED", True),
         ("MCP_REMOTE_SCAN_FAILED", False),
         ("MCP_REMOTE_CACHE_FAILED", False),
+        ("MCP_REMOTE_AUDIT_FAILED", False),
         ("MCP_REMOTE_CLEANUP_FAILED", False),
     ],
 )
 def test_remote_operation_errors_keep_stable_mcp_codes(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
     code: str,
     retryable: bool,
 ) -> None:
@@ -113,6 +116,7 @@ def test_remote_operation_errors_keep_stable_mcp_codes(
     from codex_preflight_mcp.remote_operation import RemoteOperationError
 
     monkeypatch.setenv("CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN", "1")
+    monkeypatch.setenv("CODEX_PREFLIGHT_HOME", str(tmp_path))
     monkeypatch.setattr(server, "_REMOTE_CONFIRMATIONS", RemoteConfirmationManager(secret=b"x" * 32))
     with pytest.raises(McpToolError) as challenge:
         server.remote_repository_scan(

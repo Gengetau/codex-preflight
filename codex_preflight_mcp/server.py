@@ -6,21 +6,29 @@ import os
 import re
 import sys
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
+from codex_preflight_core.cache.paths import remote_audit_path
 from codex_preflight_core.corpus import scan_corpus
 from codex_preflight_core.preflight import run_preflight
 from codex_preflight_mcp.contract import build_mcp_result
 from codex_preflight_mcp.errors import McpErrorCode, McpErrorDetail, McpToolError
 from codex_preflight_mcp.remote_confirmation import ConfirmationError, RemoteConfirmationManager
-from codex_preflight_mcp.remote_operation import RemoteOperationError, run_remote_operation
+from codex_preflight_mcp.remote_operation import (
+    CancellationToken,
+    RemoteOperationError,
+    run_remote_operation,
+)
 from codex_preflight_mcp.remote_policy import (
     RemotePolicyError,
+    RemoteTarget,
     ResourceLimits,
     validate_github_repository_url,
     validate_requested_ref,
 )
+from codex_preflight_mcp.remote_state import RemoteAuditLog, RemoteStateError
 from codex_preflight_mcp.runtime_compatibility import (
     McpRuntimeError,
     create_instruction_capable_fastmcp,
@@ -209,6 +217,7 @@ def remote_repository_scan(
     remoteUrl: str | None = None,
     requestedRef: str | None = None,
     confirmationToken: str | None = None,
+    cancellation: CancellationToken | None = None,
     **kwargs: object,
 ) -> dict[str, Any]:
     if not remote_scan_enabled():
@@ -240,6 +249,13 @@ def remote_repository_scan(
         ) from error
     if confirmationToken is None:
         challenge = _REMOTE_CONFIRMATIONS.issue(target, requested_ref, _REMOTE_LIMITS)
+        _remote_audit_event(
+            "challenge_issue",
+            target=target,
+            requested_ref=requested_ref,
+            challenge_id=challenge.challenge_id,
+            outcome="confirmation-required",
+        )
         raise _error(
             McpErrorCode.REMOTE_CONFIRMATION_REQUIRED,
             "Remote static scan requires one-time human confirmation before network access.",
@@ -265,6 +281,14 @@ def remote_repository_scan(
             _REMOTE_LIMITS,
         )
     except ConfirmationError as error:
+        _remote_audit_event(
+            "failure",
+            target=target,
+            requested_ref=requested_ref,
+            challenge_id="unavailable",
+            outcome="failed",
+            error_code=error.code,
+        )
         raise _error(
             McpErrorCode(error.code),
             error.message,
@@ -272,12 +296,20 @@ def remote_repository_scan(
             field="confirmationToken",
             safety_boundary="Invalid, expired, or replayed confirmation never authorizes network access or trust.",
         ) from error
+    _remote_audit_event(
+        "confirmation_consume",
+        target=target,
+        requested_ref=requested_ref,
+        challenge_id=challenge_id,
+        outcome="consumed",
+    )
     try:
         report = run_remote_operation(
             target=target,
             requested_ref=requested_ref,
             challenge_id=challenge_id,
             limits=_REMOTE_LIMITS,
+            cancellation=cancellation,
         )
     except RemoteOperationError as error:
         raise _error(
@@ -319,15 +351,18 @@ def create_mcp_server(*, fastmcp_factory: Callable[..., Any] | None = None):
     if remote_scan_enabled():
 
         @mcp.tool(name="remote_repository_scan", description=REMOTE_DESCRIPTION)
-        def mcp_remote_repository_scan(
+        async def mcp_remote_repository_scan(
             remoteUrl: str,
             requestedRef: str,
             confirmationToken: str | None = None,
         ) -> dict[str, Any]:
-            return remote_repository_scan(
-                remoteUrl=remoteUrl,
-                requestedRef=requestedRef,
-                confirmationToken=confirmationToken,
+            return await _run_cancellable_remote(
+                lambda cancellation: remote_repository_scan(
+                    remoteUrl=remoteUrl,
+                    requestedRef=requestedRef,
+                    confirmationToken=confirmationToken,
+                    cancellation=cancellation,
+                )
             )
 
     registered_preflight = mcp._tool_manager.get_tool("preflight_check")
@@ -459,6 +494,56 @@ def _error(
             context=context,
         )
     )
+
+
+def _remote_audit_event(
+    event: str,
+    *,
+    target: RemoteTarget,
+    requested_ref: str,
+    challenge_id: str,
+    outcome: str,
+    error_code: str | None = None,
+) -> None:
+    try:
+        RemoteAuditLog(remote_audit_path()).record(
+            event,
+            challenge_id=challenge_id,
+            canonical_url=target.canonical_url,
+            requested_ref=requested_ref,
+            outcome=outcome,
+            error_code=error_code,
+        )
+    except RemoteStateError as error:
+        raise _error(
+            McpErrorCode.REMOTE_AUDIT_FAILED,
+            "The redacted remote audit log failed closed.",
+            "Restore write access to the dedicated remote audit directory, then request a new confirmation.",
+            safety_boundary="Audit failure never authorizes network access or trust.",
+        ) from error
+
+
+async def _run_cancellable_remote(
+    operation: Callable[[CancellationToken], dict[str, Any]],
+) -> dict[str, Any]:
+    import anyio
+
+    cancellation = CancellationToken()
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="codex-preflight-remote")
+    future = executor.submit(operation, cancellation)
+    try:
+        while not future.done():
+            await anyio.sleep(0.01)
+        return future.result()
+    except anyio.get_cancelled_exc_class():
+        cancellation.cancel()
+        with anyio.CancelScope(shield=True):
+            while not future.done():
+                await anyio.sleep(0.01)
+        future.exception()
+        raise
+    finally:
+        executor.shutdown(wait=True, cancel_futures=False)
 
 
 def _cwd_permission_error() -> McpToolError:
