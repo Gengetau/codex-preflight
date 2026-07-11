@@ -11,6 +11,7 @@ from codex_preflight_core.repo.collector import (
     CriticalFileCollectionLimitError,
     collect_critical_files,
 )
+from codex_preflight_core.repo.safe_path import open_regular_file_nofollow
 
 _READ_CHUNK_BYTES = 64 * 1024
 
@@ -79,17 +80,6 @@ def compute_critical_fingerprint(
         path = root / relative
         try:
             _check_budget(deadline, cancellation_check, monotonic)
-            named = path.lstat() if strict_safety else path.stat()
-            if strict_safety:
-                _validate_regular_file(named)
-            expected_size = named.st_size
-            _check_budget(deadline, cancellation_check, monotonic)
-            if expected_size < 0:
-                raise OSError("negative file size")
-            if max_file_bytes is not None and expected_size > max_file_bytes:
-                raise CriticalFingerprintError("limit-exceeded", "The critical-file size limit was exceeded.")
-            if max_total_bytes is not None and total_bytes + expected_size > max_total_bytes:
-                raise CriticalFingerprintError("limit-exceeded", "The total critical-file limit was exceeded.")
             size, digest = _hash_bounded_file(
                 path,
                 total_bytes=total_bytes,
@@ -122,14 +112,19 @@ def _hash_bounded_file(
     size = 0
     digest = sha256()
     budget_check()
-    with path.open("rb") as handle:
+    context = open_regular_file_nofollow(path) if strict_safety else path.open("rb")
+    with context as handle:
+        opened = os.fstat(handle.fileno())
         if strict_safety:
-            opened = os.fstat(handle.fileno())
-            named = path.lstat()
             _validate_regular_file(opened)
-            _validate_regular_file(named)
-            if opened.st_dev != named.st_dev or opened.st_ino != named.st_ino:
-                raise OSError("critical file changed while opening")
+        expected_size = opened.st_size
+        budget_check()
+        if expected_size < 0:
+            raise OSError("negative file size")
+        if max_file_bytes is not None and expected_size > max_file_bytes:
+            raise CriticalFingerprintError("limit-exceeded", "The critical-file size limit was exceeded.")
+        if max_total_bytes is not None and total_bytes + expected_size > max_total_bytes:
+            raise CriticalFingerprintError("limit-exceeded", "The total critical-file limit was exceeded.")
         while True:
             budget_check()
             chunk = handle.read(_READ_CHUNK_BYTES)

@@ -6,12 +6,14 @@ import socket
 import subprocess
 import threading
 from collections.abc import Callable
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
 
+import codex_preflight_mcp.trust_mutation_audit as audit_module
 from codex_preflight_core.cache import trust_cache as trust_cache_module
 from codex_preflight_core.cache.trust_cache import TrustCache
 from codex_preflight_core.repo.identity import RepoIdentity
@@ -694,6 +696,122 @@ def test_revoke_committed_audit_pending_uses_fixed_operation_context(tmp_path: P
 
     assert pending.value.code == "MCP_TRUST_MUTATION_COMMITTED_AUDIT_PENDING"
     assert pending.value.context["operation"] == "approve-or-revoke"
+
+
+@pytest.mark.parametrize("operation", ["approve", "revoke"])
+@pytest.mark.parametrize("boundary", ["unlink", "fsync", "unlock"])
+def test_post_commit_transaction_exit_failure_is_exact_committed_pending_without_second_audit(
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+    boundary: str,
+) -> None:
+    from codex_preflight_mcp.trust_mutation import TrustMutationError
+
+    tmp_path = tmp_path_factory.mktemp("post-commit")
+    audit = _real_audit(tmp_path)
+    service, cache, root, _values, _unused = _service(tmp_path, audit=audit)  # type: ignore[arg-type]
+    if operation == "approve":
+        challenge = _approval_challenge(service, root)
+        entry_id: str | None = None
+    else:
+        entry = _approved_entry(service, root)
+        entry_id = str(entry["entryId"])
+        with pytest.raises(TrustMutationError) as challenge_error:
+            service.revoke(trust_entry_id=entry_id, expected_version=1, reason="remove after exact review")
+        challenge = challenge_error.value.context["confirmation"]
+
+    committed = False
+    original_commit = audit.commit_mutation
+
+    def observed_commit(*args: object, **kwargs: object) -> str:
+        nonlocal committed
+        result = original_commit(*args, **kwargs)  # type: ignore[arg-type]
+        committed = True
+        return result
+
+    monkeypatch.setattr(audit, "commit_mutation", observed_commit)
+    if boundary == "unlink":
+        original_unlink = audit_module._secure_unlink
+
+        def fail_marker_unlink(path: Path, *, missing_ok: bool = False) -> None:
+            if committed and path == audit.reservation_path:
+                raise OSError("private marker unlink failure")
+            original_unlink(path, missing_ok=missing_ok)
+
+        monkeypatch.setattr(audit_module, "_secure_unlink", fail_marker_unlink)
+    elif boundary == "fsync":
+        original_fsync = audit._fsync_directory
+
+        def fail_cleanup_fsync() -> None:
+            if committed:
+                raise OSError("private marker fsync failure")
+            original_fsync()
+
+        monkeypatch.setattr(audit, "_fsync_directory", fail_cleanup_fsync)
+    else:
+        original_reservation_locked = audit._reservation_locked
+
+        @contextmanager
+        def fail_reservation_unlock():
+            with original_reservation_locked():
+                yield
+            if committed:
+                raise OSError("private reservation unlock failure")
+
+        monkeypatch.setattr(audit, "_reservation_locked", fail_reservation_unlock)
+
+    post_commit_record_attempts = 0
+    original_record = audit.record
+
+    def observed_record(*args: object, **kwargs: object) -> str:
+        nonlocal post_commit_record_attempts
+        if committed:
+            post_commit_record_attempts += 1
+        return original_record(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(audit, "record", observed_record)
+    invalidations = 0
+    original_invalidate = service.confirmation.invalidate_all
+
+    def observed_invalidate() -> None:
+        nonlocal invalidations
+        invalidations += 1
+        original_invalidate()
+
+    monkeypatch.setattr(service.confirmation, "invalidate_all", observed_invalidate)
+
+    with pytest.raises(TrustMutationError) as pending:
+        if operation == "approve":
+            _confirm_approval(service, root, str(challenge["confirmationToken"]))
+        else:
+            service.revoke(
+                trust_entry_id=entry_id,
+                expected_version=1,
+                reason="remove after exact review",
+                confirmation_token=challenge["confirmationToken"],
+            )
+
+    assert pending.value.code == "MCP_TRUST_MUTATION_COMMITTED_AUDIT_PENDING"
+    assert pending.value.context["committed"] is True
+    assert pending.value.context["operation"] == "approve-or-revoke"
+    assert UUID(str(pending.value.context["entryId"])).version == 4
+    assert UUID(str(pending.value.context["preparedAuditEventId"])).version == 4
+    assert pending.value.__cause__ is None
+    assert pending.value.__context__ is None
+    assert post_commit_record_attempts == 0
+    assert invalidations == 1
+    assert _audit_events(audit)[-1] == "mutation_committed"
+    assert (len(cache.list()) == 1) is (operation == "approve")
+
+    with pytest.raises(TrustMutationError) as unhealthy:
+        service.approve(
+            cwd=str(root),
+            command="python another.py",
+            expires_at=EXPIRES_AT,
+            reason="must recover after committed cleanup failure",
+        )
+    assert unhealthy.value.code == "MCP_TRUST_MUTATION_RECOVERY_REQUIRED"
 
 
 def test_authentic_token_dependency_failures_are_normalized_without_private_context(

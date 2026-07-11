@@ -43,6 +43,7 @@ from codex_preflight_core.repo.identity import RepoIdentity, RepoIdentityError, 
 from codex_preflight_mcp.trust_mutation_audit import (
     AuditContext,
     PreparedMutation,
+    TrustMutationAuditCommitCleanupError,
     TrustMutationAuditError,
     TrustMutationAuditLog,
 )
@@ -502,6 +503,7 @@ class TrustMutationService:
                 )
             return self._commit_audit(prepared.state, context=context, reservation=audit_reservation)
 
+        result: TrustCacheMutationResult | None = None
         try:
             assert self.cache is not None
             with self._audit_reservation_lock:
@@ -532,6 +534,14 @@ class TrustMutationService:
         except TrustCacheMutationWriteError as error:
             self._mark_unhealthy()
             raise self._cache_error(error) from None
+        except TrustMutationAuditCommitCleanupError:
+            self._mark_unhealthy()
+            if result is None:
+                raise self._error(
+                    "MCP_TRUST_MUTATION_INTERNAL_ERROR",
+                    "The trust mutation entered an indeterminate state.",
+                ) from None
+            raise self._committed_pending_error(result) from None
         except _TargetDrift:
             error = self._error(
                 "MCP_TRUST_MUTATION_TARGET_DRIFT",
@@ -566,6 +576,7 @@ class TrustMutationService:
         extras: Mapping[str, object],
     ) -> dict[str, object]:
         consumed, binding, operation_id = self._consume("revoke", token)
+        result: TrustCacheMutationResult | None = None
         try:
             request = self._validate_revoke_request(trust_entry_id, expected_version, reason, extras)
         except TrustMutationError as error:
@@ -656,6 +667,14 @@ class TrustMutationService:
         except TrustCacheMutationWriteError as error:
             self._mark_unhealthy()
             raise self._cache_error(error) from None
+        except TrustMutationAuditCommitCleanupError:
+            self._mark_unhealthy()
+            if result is None:
+                raise self._error(
+                    "MCP_TRUST_MUTATION_INTERNAL_ERROR",
+                    "The trust mutation entered an indeterminate state.",
+                ) from None
+            raise self._committed_pending_error(result) from None
         except _TargetDrift:
             error = self._error(
                 "MCP_TRUST_MUTATION_TARGET_DRIFT",

@@ -153,6 +153,10 @@ class TrustMutationAuditError(RuntimeError):
         super().__init__(f"{code}: {message}")
 
 
+class TrustMutationAuditCommitCleanupError(TrustMutationAuditError):
+    pass
+
+
 class _IntegrityError(RuntimeError):
     pass
 
@@ -437,16 +441,20 @@ class TrustMutationAuditLog:
                     pass
             raise
         else:
+            cleanup_failed = False
             try:
                 self._finish_reservation(reservation)
             except Exception:
+                cleanup_failed = True
+            reservation.active = False
+            try:
+                lock.__exit__(None, None, None)
+            except Exception:
+                cleanup_failed = True
+            if cleanup_failed:
+                if reservation.completed:
+                    raise _commit_cleanup_failed() from None
                 raise _audit_failed() from None
-            finally:
-                reservation.active = False
-                try:
-                    lock.__exit__(None, None, None)
-                except Exception:
-                    raise _audit_failed() from None
 
     def _prepare_mutation(
         self,
@@ -1794,6 +1802,13 @@ def _audit_failed() -> TrustMutationAuditError:
     return TrustMutationAuditError(
         "MCP_TRUST_MUTATION_AUDIT_FAILED",
         "The trust mutation audit operation failed closed.",
+    )
+
+
+def _commit_cleanup_failed() -> TrustMutationAuditCommitCleanupError:
+    return TrustMutationAuditCommitCleanupError(
+        "MCP_TRUST_MUTATION_COMMITTED_AUDIT_PENDING",
+        "The committed trust mutation requires cleanup recovery.",
     )
 
 

@@ -1,4 +1,5 @@
 import math
+import os
 import subprocess
 from pathlib import Path
 
@@ -21,6 +22,7 @@ def run_git(
         result = subprocess.run(
             ["git", *args],
             cwd=root,
+            env=_sanitized_git_environment(),
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
@@ -32,3 +34,20 @@ def run_git(
     if result.returncode != 0:
         return None
     return result.stdout.strip() or None
+
+
+def _sanitized_git_environment() -> dict[str, str]:
+    environment = {
+        name: value
+        for name, value in os.environ.items()
+        if not name.upper().startswith("GIT_") or name.upper() == "GIT_CEILING_DIRECTORIES"
+    }
+    environment.update(
+        {
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_TERMINAL_PROMPT": "0",
+            "GIT_OPTIONAL_LOCKS": "0",
+        }
+    )
+    return environment

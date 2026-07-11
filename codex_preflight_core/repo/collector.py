@@ -5,6 +5,11 @@ from collections.abc import Callable
 from pathlib import Path
 
 from codex_preflight_core.command.classifier import split_shell_segments
+from codex_preflight_core.repo.safe_path import (
+    SafePathError,
+    local_absolute_path,
+    verify_regular_file_nofollow,
+)
 
 CRITICAL_BASENAMES = {
     ".env",
@@ -236,17 +241,28 @@ def _command_target_files_for_segment(
     target = Path(parts[1].strip("\"'"))
     if target.is_absolute():
         return []
-    path = (root / target).absolute() if reject_unsafe else (root / target).resolve()
+    if reject_unsafe:
+        try:
+            path = local_absolute_path(root / target)
+            relative = path.relative_to(root)
+            verify_regular_file_nofollow(path)
+        except FileNotFoundError:
+            return []
+        except ValueError:
+            return []
+        except SafePathError as error:
+            raise CriticalFileCollectionError("A command target file is unsafe.") from error
+        return [Path(relative.as_posix())]
+
+    path = (root / target).resolve()
     _check_budget(budget_check)
     try:
         relative = path.relative_to(root)
     except ValueError:
         return []
-    if os.path.lexists(path) and not _is_safe_file(root, path, reject_unsafe=reject_unsafe):
-        if reject_unsafe:
-            raise CriticalFileCollectionError("A command target file is unsafe.")
+    if os.path.lexists(path) and not _is_safe_file(root, path, reject_unsafe=False):
         return []
-    if _is_safe_file(root, path, reject_unsafe=reject_unsafe):
+    if _is_safe_file(root, path, reject_unsafe=False):
         return [Path(relative.as_posix())]
     return []
 
