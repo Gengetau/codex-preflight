@@ -5,11 +5,13 @@ import json
 import os
 import stat
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 from uuid import UUID
 
 import pytest
 
+import codex_preflight_mcp.trust_mutation_audit as audit_module
 from codex_preflight_core.cache.paths import trust_mutation_audit_key_path, trust_mutation_audit_path
 from codex_preflight_mcp.trust_mutation_audit import (
     AUDIT_MAX_RECORD_BYTES,
@@ -91,9 +93,44 @@ def test_key_is_created_atomically_once_with_owner_only_permissions(tmp_path: Pa
 
     key_path = trust_mutation_audit_key_path(tmp_path)
     assert calls == [32]
-    assert key_path.read_bytes() == KEY
+    assert audit._read_key() == KEY
+    assert key_path.read_bytes() != KEY
     if os.name != "nt":
         assert stat.S_IMODE(key_path.stat().st_mode) == 0o600
+
+
+def test_directory_key_audit_lock_and_rotated_segments_are_owner_only_on_every_platform(tmp_path: Path) -> None:
+    audit = _audit(tmp_path, max_segment_bytes=1100, max_total_bytes=4400)
+    for index in range(5):
+        audit.record(
+            "request_validated",
+            context=_context(
+                operation_id=str(UUID(int=index + 1, version=4)),
+                outcome="validated",
+            ),
+        )
+
+    lock_path = audit.path.with_suffix(f"{audit.path.suffix}.lock")
+    paths = [audit.path.parent, audit.key_path, audit.path, lock_path, audit.path.with_name("audit.jsonl.1")]
+    assert all(path.exists() for path in paths)
+    assert audit_module._paths_are_owner_only(paths)
+
+
+def test_owner_only_enforcement_failure_is_fail_closed_before_audit_exposure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audit = _audit(tmp_path)
+
+    def cannot_prove(_handle: object, *, directory: bool) -> None:
+        raise OSError("private ACL detail")
+
+    monkeypatch.setattr(audit_module, "_enforce_and_verify_owner_only", cannot_prove)
+    with pytest.raises(TrustMutationAuditError) as caught:
+        audit.record("success", context=_context(outcome="success"))
+
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert not audit.path.exists()
 
 
 @pytest.mark.parametrize("stored_key", [b"", b"x" * 31])
@@ -153,6 +190,30 @@ def test_unexpected_runtime_failure_is_normalized(tmp_path: Path) -> None:
         audit.record("success", context=_context(outcome="success"))
 
     assert caught.value.code == "MCP_TRUST_MUTATION_AUDIT_FAILED"
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+
+
+def test_public_errors_do_not_retain_private_failures(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    audit = _audit(tmp_path)
+
+    def private_failure(*_args: object, **_kwargs: object) -> object:
+        raise OSError("C:/private/repo raw trust bytes")
+
+    monkeypatch.setattr(audit, "_load_or_create_key", private_failure)
+    with pytest.raises(TrustMutationAuditError) as audit_error:
+        audit.record("success", context=_context(outcome="success"))
+    assert audit_error.value.__cause__ is None
+    assert audit_error.value.__context__ is None
+
+    recovery = _audit(tmp_path / "recovery")
+    recovery.prepare_mutation(
+        operation="approve", before_bytes=None, after_bytes=AFTER, entry_id=ENTRY_ID, context=_context()
+    )
+    with pytest.raises(TrustMutationAuditError) as recovery_error:
+        recovery.verify_and_recover(read_store_bytes=lambda: private_failure())  # type: ignore[arg-type]
+    assert recovery_error.value.__cause__ is None
+    assert recovery_error.value.__context__ is None
 
 
 def test_records_are_canonical_hmac_chained_and_key_identified(tmp_path: Path) -> None:
@@ -195,7 +256,10 @@ def test_record_rejects_private_values_and_oversize_before_append(tmp_path: Path
 def test_rotation_reserves_first_retains_three_segments_and_chains_across_them(tmp_path: Path) -> None:
     audit = _audit(tmp_path, max_segment_bytes=1100, max_total_bytes=4400)
     for index in range(12):
-        audit.record("request_validated", context=_context(operation_id=str(UUID(int=index + 1, version=4))))
+        audit.record(
+            "request_validated",
+            context=_context(operation_id=str(UUID(int=index + 1, version=4)), outcome="validated"),
+        )
 
     existing = [segment for segment in _segments(audit.path) if segment.exists()]
     assert len(existing) == 4
@@ -204,6 +268,29 @@ def test_rotation_reserves_first_retains_three_segments_and_chains_across_them(t
     records = _records(audit.path)
     assert all(records[index]["previousMac"] == records[index - 1]["recordMac"] for index in range(1, len(records)))
     assert audit.verify_and_recover(read_store_bytes=lambda: None).status == "clean"
+
+
+def test_reserve_is_held_until_rotated_append_is_fsynced(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    audit = _audit(tmp_path, max_segment_bytes=1100, max_total_bytes=4400)
+    audit.record("request_validated", context=_context(outcome="validated"))
+    original = audit._flush_and_fsync
+    observed_append = False
+
+    def observe(handle: object) -> None:
+        nonlocal observed_append
+        if Path(str(getattr(handle, "name", ""))) == audit.path:
+            observed_append = True
+            assert (audit.path.parent / "audit.reserve").exists()
+        original(handle)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(audit, "_flush_and_fsync", observe)
+    audit.record(
+        "request_validated",
+        context=_context(operation_id="423e4567-e89b-42d3-a456-426614174000", outcome="validated"),
+    )
+
+    assert observed_append
+    assert not (audit.path.parent / "audit.reserve").exists()
 
 
 def test_record_over_exact_4096_byte_limit_fails_without_rotation(tmp_path: Path) -> None:
@@ -228,6 +315,77 @@ def test_chain_tampering_and_noncanonical_json_fail_closed(tmp_path: Path) -> No
     with pytest.raises(TrustMutationAuditError) as noncanonical:
         audit.verify_and_recover(read_store_bytes=lambda: None)
     assert noncanonical.value.code == "MCP_TRUST_MUTATION_CORRUPT"
+
+
+def test_authenticated_anchor_detects_active_prefix_truncation(tmp_path: Path) -> None:
+    audit = _audit(tmp_path)
+    for index in range(3):
+        audit.record(
+            "request_validated",
+            context=_context(operation_id=str(UUID(int=index + 1, version=4)), outcome="validated"),
+        )
+    lines = audit.path.read_bytes().splitlines(keepends=True)
+    audit.path.write_bytes(b"".join(lines[1:]))
+
+    with pytest.raises(TrustMutationAuditError) as caught:
+        audit.verify_and_recover(read_store_bytes=lambda: None)
+
+    assert caught.value.code == "MCP_TRUST_MUTATION_CORRUPT"
+
+
+def test_authenticated_anchor_detects_deleted_oldest_retained_segment(tmp_path: Path) -> None:
+    audit = _audit(tmp_path, max_segment_bytes=1100, max_total_bytes=4400)
+    for index in range(8):
+        audit.record(
+            "request_validated",
+            context=_context(operation_id=str(UUID(int=index + 1, version=4)), outcome="validated"),
+        )
+    oldest = audit.path.with_name("audit.jsonl.3")
+    assert oldest.exists()
+    oldest.unlink()
+
+    with pytest.raises(TrustMutationAuditError) as caught:
+        audit.verify_and_recover(read_store_bytes=lambda: None)
+
+    assert caught.value.code == "MCP_TRUST_MUTATION_CORRUPT"
+
+
+@pytest.mark.parametrize("failure_point", ["before-retention", "after-append"])
+def test_pending_anchor_reconciles_crash_safe_retention(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_point: str,
+) -> None:
+    audit = _audit(tmp_path, max_segment_bytes=1100, max_total_bytes=4400)
+    for index in range(4):
+        audit.record(
+            "request_validated",
+            context=_context(operation_id=str(UUID(int=index + 1, version=4)), outcome="validated"),
+        )
+    original_write_state = audit._write_key_state
+    original_rotate = audit._rotate_unlocked
+
+    if failure_point == "before-retention":
+        monkeypatch.setattr(audit, "_rotate_unlocked", lambda: (_ for _ in ()).throw(OSError("private")))
+    else:
+        def fail_final_anchor(state: object) -> None:
+            if getattr(state, "pending", None) is None:
+                raise OSError("private")
+            original_write_state(state)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(audit, "_write_key_state", fail_final_anchor)
+
+    with pytest.raises(TrustMutationAuditError):
+        audit.record(
+            "request_validated",
+            context=_context(operation_id="723e4567-e89b-42d3-a456-426614174000", outcome="validated"),
+        )
+
+    monkeypatch.setattr(audit, "_write_key_state", original_write_state)
+    monkeypatch.setattr(audit, "_rotate_unlocked", original_rotate)
+    restarted = _audit(tmp_path, max_segment_bytes=1100, max_total_bytes=4400)
+    assert restarted.verify_and_recover(read_store_bytes=lambda: None).status == "clean"
+    assert restarted._read_key_state().pending is None
 
 
 def test_unexpected_rotated_segment_fails_closed(tmp_path: Path) -> None:
@@ -272,6 +430,42 @@ def test_prepare_fsyncs_before_store_write_and_commit_fsyncs_after(tmp_path: Pat
     assert prepared.event_id != committed_id
     assert prepared.before_state_digest != prepared.after_state_digest
     assert prepared.before_state_digest.startswith("hmac-sha256:")
+
+
+def test_prepare_rejects_identical_before_and_after_state(tmp_path: Path) -> None:
+    audit = _audit(tmp_path)
+
+    with pytest.raises(TrustMutationAuditError) as caught:
+        audit.prepare_mutation(
+            operation="approve",
+            before_bytes=AFTER,
+            after_bytes=AFTER,
+            entry_id=ENTRY_ID,
+            context=_context(),
+        )
+
+    assert caught.value.code == "MCP_TRUST_MUTATION_AUDIT_FAILED"
+    assert not audit.path.exists()
+
+
+def test_recovery_refuses_equal_before_and_after_digests(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    audit = _audit(tmp_path)
+    digest = f"hmac-sha256:{'b' * 64}"
+    key = audit._load_or_create_key()
+    record = audit._build_record(
+        "mutation_prepared",
+        context=_context(outcome="prepared"),
+        before_state_digest=digest,
+        after_state_digest=digest,
+    )
+    with audit._locked():
+        audit._append_record_unlocked(record, key)
+    monkeypatch.setattr(audit, "_state_digest", lambda _value, _key: digest)
+
+    with pytest.raises(TrustMutationAuditError) as caught:
+        audit.verify_and_recover(read_store_bytes=lambda: AFTER)
+
+    assert caught.value.code == "MCP_TRUST_MUTATION_RECOVERY_REQUIRED"
 
 
 def test_absent_store_digest_is_explicit_and_domain_separated(tmp_path: Path) -> None:
@@ -319,6 +513,31 @@ def test_committed_prepare_is_clean_and_recovery_is_idempotent(tmp_path: Path) -
     before = audit.path.read_bytes()
     assert audit.verify_and_recover(read_store_bytes=lambda: None).status == "clean"
     assert audit.path.read_bytes() == before
+
+
+@pytest.mark.parametrize("forgery", ["entry", "challenge", "digest", "operation"])
+def test_commit_binds_to_complete_actual_unmatched_prepare(tmp_path: Path, forgery: str) -> None:
+    audit = _audit(tmp_path)
+    prepared = audit.prepare_mutation(
+        operation="approve", before_bytes=None, after_bytes=AFTER, entry_id=ENTRY_ID, context=_context()
+    )
+    context = _context(outcome="committed")
+    forged = prepared
+    if forgery == "entry":
+        forged = replace(prepared, entry_id="523e4567-e89b-42d3-a456-426614174000")
+        context = _context(entry_id=forged.entry_id, outcome="committed")
+    elif forgery == "challenge":
+        context = _context(challenge_id="623e4567-e89b-42d3-a456-426614174000", outcome="committed")
+    elif forgery == "digest":
+        forged = replace(prepared, after_state_digest=f"hmac-sha256:{'c' * 64}")
+    else:
+        forged = replace(prepared, operation="revoke")
+        context = _context(tool="trust_revoke", operation="revoke", outcome="committed")
+
+    with pytest.raises(TrustMutationAuditError):
+        audit.commit_mutation(forged, context=context)
+
+    assert _records(audit.path)[-1]["event"] == "mutation_prepared"
 
 
 def test_ambiguous_bytes_and_multiple_unmatched_prepares_require_recovery(tmp_path: Path) -> None:
@@ -416,6 +635,39 @@ def test_public_record_vocabulary_is_closed(tmp_path: Path) -> None:
     with pytest.raises(TrustMutationAuditError):
         audit.record("contains_raw_reason", context=_context())
     assert not audit.path.exists()
+
+
+@pytest.mark.parametrize(
+    ("event", "changes"),
+    [
+        ("success", {"tool": "trust_import", "outcome": "success"}),
+        ("success", {"tool": "trust_approve", "operation": "extend", "outcome": "success"}),
+        ("success", {"scope": "anything", "outcome": "success"}),
+        ("success", {"outcome": "syntactically-valid"}),
+        ("failure", {"outcome": "failure", "error_code": "MCP_TRUST_MUTATION_MADE_UP"}),
+        ("request_validated", {"outcome": "success"}),
+    ],
+)
+def test_semantic_audit_fields_use_exact_allowlists(tmp_path: Path, event: str, changes: dict[str, object]) -> None:
+    audit = _audit(tmp_path)
+
+    with pytest.raises(TrustMutationAuditError):
+        audit.record(event, context=_context(**changes))
+
+    assert not audit.path.exists()
+
+
+def test_ancestor_symlink_is_rejected_without_creating_state(tmp_path: Path) -> None:
+    real_home = tmp_path / "real-home"
+    real_home.mkdir()
+    alias_home = tmp_path / "alias-home"
+    alias_home.symlink_to(real_home, target_is_directory=True)
+    audit = _audit(alias_home)
+
+    with pytest.raises(TrustMutationAuditError):
+        audit.record("success", context=_context(outcome="success"))
+
+    assert not (real_home / "trust-mutation").exists()
 
 
 def test_exact_default_total_never_exceeds_four_mib(tmp_path: Path) -> None:

@@ -20,6 +20,20 @@ def test_lock_helper_creates_sidecar_lock_file(tmp_path: Path) -> None:
         assert cache_path.with_suffix(cache_path.suffix + ".lock").exists()
 
 
+def test_lock_helper_accepts_a_secure_opener_without_changing_default_semantics(tmp_path: Path) -> None:
+    cache_path = tmp_path / "secure.json"
+    opened: list[Path] = []
+
+    def secure_opener(path: Path):
+        opened.append(path)
+        return path.open("a+b")
+
+    with locked_cache_file(cache_path, lock_opener=secure_opener):
+        pass
+
+    assert opened == [cache_path.with_suffix(".json.lock")]
+
+
 def test_lock_timeout_has_a_stable_exception(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def unavailable(_handle: object) -> None:
         raise OSError("hidden lock detail")
