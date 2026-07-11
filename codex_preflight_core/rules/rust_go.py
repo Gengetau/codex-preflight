@@ -22,7 +22,7 @@ _GO_TESTMAIN = re.compile(r"\bfunc\s+TestMain\s*\(", re.MULTILINE)
 _GO_CGO_IMPORT = re.compile(r'^\s*import\s+"C"\s*$', re.MULTILINE)
 _GO_REPLACE_BLOCK = re.compile(r"(?ms)^\s*replace\s*\((.*?)^\s*\)")
 _GO_REPLACE_LINE = re.compile(r"^\s*replace\s+(.+?)\s+=>\s+(.+?)(?:\s+v[^\s]+)?\s*$", re.MULTILINE)
-_GO_REPLACE_BLOCK_ENTRY = re.compile(r"^\s*(.+?)\s+=>\s+(.+?)(?:\s+v[^\s]+)?\s*$", re.MULTILINE)
+_GO_REPLACE_BLOCK_ENTRY = re.compile(r"^(?!\s*//)\s*(.+?)\s+=>\s+(.+?)(?:\s+v[^\s]+)?\s*$", re.MULTILINE)
 
 
 class RustGoEcosystemRule:

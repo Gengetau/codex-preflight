@@ -125,3 +125,19 @@ def test_go_mod_block_form_detects_versioned_remote_replacement(tmp_path: Path) 
     assert report["decision"] == "WARN"
     assert rule_ids(report) == ["GO_MODULE_REPLACE"]
     assert capability_ids(report) == ["GO_MODULE_REPLACE"]
+
+
+def test_go_mod_block_form_ignores_commented_replacement(tmp_path: Path) -> None:
+    (tmp_path / "go.mod").write_text(
+        "module example.com/demo\n\n"
+        "replace (\n"
+        "\t// example.com/disabled => ../disabled\n"
+        ")\n",
+        encoding="utf-8",
+    )
+
+    report = run_preflight(tmp_path, "go test ./...", use_cache=False)
+
+    assert report["decision"] == "ALLOW"
+    assert rule_ids(report) == []
+    assert capability_ids(report) == []
