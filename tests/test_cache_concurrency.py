@@ -1,14 +1,16 @@
 import json
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
 from codex_preflight_core.cache import file_lock
 from codex_preflight_core.cache.file_lock import CacheLockTimeoutError, locked_cache_file
 from codex_preflight_core.cache.scan_cache import ScanCache
-from codex_preflight_core.cache.trust_cache import TrustCache
+from codex_preflight_core.cache.trust_cache import TrustCache, TrustCacheMutationPrepared
 
 HEAD = "a" * 40
 
@@ -170,3 +172,45 @@ def test_concurrent_trust_reads_and_cli_mutations_share_one_lock(tmp_path: Path)
     assert isinstance(stored, list)
     assert all(entry["entryVersion"] == 1 for entry in stored)
     assert all(entry["entryVersion"] == 1 for entry in listed)
+
+
+def test_concurrent_mcp_approvals_keep_one_exact_match_and_valid_json(tmp_path: Path) -> None:
+    cache = TrustCache(tmp_path / "trust_cache.json")
+    prepared_count = 0
+    count_lock = threading.Lock()
+
+    def prepare(plan):
+        nonlocal prepared_count
+        with count_lock:
+            prepared_count += 1
+        return TrustCacheMutationPrepared(plan.planned_event_id, plan.entry_id)
+
+    def approve(index: int) -> str:
+        return cache.approve_mcp(
+            repo_id="same-repo",
+            path=tmp_path,
+            remote_url=None,
+            head_commit=HEAD,
+            critical_fingerprint=f"sha256:{'f' * 64}",
+            command_scope="test",
+            approved_command=f"pytest {index}",
+            expires_at="2030-07-12T00:00:00Z",
+            policy_version="default-v1",
+            ruleset_version="2026.07.02",
+            entry_id=str(uuid4()),
+            approved_at="2026-07-12T00:00:00Z",
+            approval_reason="reviewed",
+            mutation_audit_event_id=str(uuid4()),
+            prepare=prepare,
+            commit=lambda _prepared: str(uuid4()),
+        ).outcome
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        outcomes = list(executor.map(approve, range(40)))
+
+    data = json.loads(cache.path.read_text(encoding="utf-8"))
+    assert outcomes.count("approved") == 1
+    assert outcomes.count("already-approved") == 39
+    assert prepared_count == 1
+    assert len(data) == 1
+    assert data[0]["repoId"] == "same-repo"

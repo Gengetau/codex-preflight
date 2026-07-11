@@ -20,12 +20,17 @@ def read_json(path: Path, default: object) -> object:
 
 
 def write_json_atomic(path: Path, data: object) -> None:
+    encoded = json.dumps(data, indent=2).replace("\n", os.linesep).encode("utf-8")
+    write_bytes_atomic(path, encoded)
+
+
+def write_bytes_atomic(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path: Path | None = None
     try:
         temp_path = path.parent / f"{path.name}.{uuid4().hex}.tmp"
-        with temp_path.open("x", encoding="utf-8") as handle:
-            json.dump(data, handle, indent=2)
+        with temp_path.open("xb") as handle:
+            handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
         if path.exists():

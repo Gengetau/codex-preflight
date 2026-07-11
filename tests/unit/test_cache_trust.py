@@ -5,7 +5,7 @@ from pathlib import Path
 from codex_preflight_core.cache import atomic_json
 from codex_preflight_core.cache.atomic_json import read_json, write_json_atomic
 from codex_preflight_core.cache.scan_cache import ScanCache
-from codex_preflight_core.cache.trust_cache import TrustCache
+from codex_preflight_core.cache.trust_cache import TrustCache, TrustCacheMutationPrepared
 
 HEAD = "a" * 40
 FINGERPRINT = f"sha256:{'b' * 64}"
@@ -116,6 +116,38 @@ def test_trust_cache_scopes_by_policy_and_ruleset(tmp_path: Path) -> None:
 def test_trust_cache_has_identity_based_public_revoke_api() -> None:
     assert not hasattr(TrustCache, "revoke")
     assert hasattr(TrustCache, "revoke_identity")
+
+
+def test_cli_match_and_identity_revoke_accept_mcp_created_entries(tmp_path: Path) -> None:
+    cache = TrustCache(tmp_path / "trust.json")
+    result = cache.approve_mcp(
+        repo_id="repo",
+        path=tmp_path,
+        remote_url=None,
+        head_commit=HEAD,
+        critical_fingerprint=FINGERPRINT,
+        command_scope="dependency_install",
+        approved_command="pnpm install",
+        expires_at="2030-07-12T00:00:00Z",
+        policy_version="default-v1",
+        ruleset_version="2026.07.02",
+        entry_id="123e4567-e89b-42d3-a456-426614174000",
+        approved_at="2026-07-12T00:00:00Z",
+        approval_reason="reviewed",
+        mutation_audit_event_id="123e4567-e89b-42d3-a456-426614174001",
+        prepare=lambda plan: TrustCacheMutationPrepared(plan.planned_event_id, None),
+        commit=lambda _prepared: "123e4567-e89b-42d3-a456-426614174002",
+    )
+
+    assert result.outcome == "approved"
+    assert cache.match(
+        repo_id="repo",
+        head_commit=HEAD,
+        critical_fingerprint=FINGERPRINT,
+        command_scope="dependency_install",
+    ) == result.entry
+    assert cache.revoke_identity("repo") == 1
+    assert cache.list() == []
 
 
 def test_corrupt_json_is_backed_up_and_default_is_returned(tmp_path: Path) -> None:
