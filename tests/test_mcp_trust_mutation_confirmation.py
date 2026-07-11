@@ -9,6 +9,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
+import codex_preflight_mcp.trust_mutation_confirmation as confirmation_module
 from codex_preflight_mcp.trust_mutation_confirmation import (
     TrustMutationConfirmationError,
     TrustMutationConfirmationManager,
@@ -53,6 +54,33 @@ def _encode(value: bytes) -> str:
 
 def _decode(value: str) -> str:
     return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4)).decode("utf-8")
+
+
+@pytest.mark.parametrize(
+    "secret",
+    [b"", b"x" * 31, b"x" * 33, bytearray(b"x" * 32), "x" * 32],
+    ids=["empty", "short", "long", "bytearray", "string"],
+)
+def test_confirmation_requires_an_exact_32_byte_secret(secret: object) -> None:
+    with pytest.raises(ValueError, match="secret must be exactly 32 bytes"):
+        TrustMutationConfirmationManager(secret=secret)  # type: ignore[arg-type]
+
+
+def test_confirmation_generates_a_32_byte_secret_only_when_omitted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[int] = []
+
+    def generate(size: int) -> bytes:
+        calls.append(size)
+        return b"g" * size
+
+    monkeypatch.setattr(confirmation_module.secrets, "token_bytes", generate)
+
+    TrustMutationConfirmationManager()
+    TrustMutationConfirmationManager(secret=SECRET)
+
+    assert calls == [32]
 
 
 def test_issue_returns_immutable_bound_challenge_and_consumes_once() -> None:
@@ -112,6 +140,23 @@ def test_confirmation_rejects_expiry_restart_signature_and_wrong_tool_binding() 
         fresh.authenticate_and_consume(wrong_tool_token)
 
 
+def test_confirmation_preserves_subsecond_expiry_boundaries() -> None:
+    clock = Clock(1_000.999)
+    manager = TrustMutationConfirmationManager(secret=SECRET, clock=clock)
+    before_boundary = manager.issue("approve", _binding(), _display(), proposed_entry_id="before-boundary")
+    at_boundary = manager.issue("approve", _binding(), _display(), proposed_entry_id="at-boundary")
+
+    assert before_boundary.issued_at == 1_000.999
+    assert before_boundary.expires_at == 1_300.999
+
+    clock.value = 1_300.000
+    assert manager.authenticate_and_consume(before_boundary.token).challenge_id == before_boundary.challenge_id
+
+    clock.value = 1_300.999
+    with pytest.raises(TrustMutationConfirmationError, match="CONFIRMATION_EXPIRED"):
+        manager.authenticate_and_consume(at_boundary.token)
+
+
 @pytest.mark.parametrize("token", ["\u00e9.payload", "a" * 1025])
 def test_confirmation_rejects_unicode_and_tokens_over_1024_bytes(token: object) -> None:
     manager = TrustMutationConfirmationManager(secret=SECRET, clock=Clock())
@@ -161,6 +206,21 @@ def test_confirmation_limits_issues_to_32_per_rolling_minute() -> None:
 
     clock.value += 60
     manager.issue("approve", _binding(), _display(), proposed_entry_id="entry-after-window")
+
+
+def test_confirmation_rolling_limit_preserves_subsecond_issue_times() -> None:
+    clock = Clock(1_000.999)
+    manager = TrustMutationConfirmationManager(secret=SECRET, clock=clock)
+
+    for index in range(32):
+        manager.issue("approve", _binding(), _display(), proposed_entry_id=f"entry-{index}")
+
+    clock.value = 1_060.000
+    with pytest.raises(TrustMutationConfirmationError, match="CONFIRMATION_RATE_LIMITED"):
+        manager.issue("approve", _binding(), _display(), proposed_entry_id="too-early")
+
+    clock.value = 1_060.999
+    manager.issue("approve", _binding(), _display(), proposed_entry_id="after-window")
 
 
 def test_confirmation_concurrent_consumption_has_one_winner_and_invalidate_all_revokes_tokens() -> None:

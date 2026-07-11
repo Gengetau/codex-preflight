@@ -43,8 +43,8 @@ class TrustMutationConfirmationError(RuntimeError):
 class TrustMutationChallenge:
     challenge_id: str
     token: str
-    issued_at: int
-    expires_at: int
+    issued_at: float
+    expires_at: float
     binding_digest: str
     display: Mapping[str, object]
     proposed_entry_id: str
@@ -54,8 +54,8 @@ class TrustMutationChallenge:
 class ConsumedMutationChallenge:
     challenge_id: str
     operation: str
-    issued_at: int
-    expires_at: int
+    issued_at: float
+    expires_at: float
     binding_digest: str
     binding: Mapping[str, object]
     display: Mapping[str, object]
@@ -65,8 +65,8 @@ class ConsumedMutationChallenge:
 @dataclass
 class _ChallengeRecord:
     operation: str
-    issued_at: int
-    expires_at: int
+    issued_at: float
+    expires_at: float
     binding_digest: str
     binding: Mapping[str, object]
     display: Mapping[str, object]
@@ -81,10 +81,14 @@ class TrustMutationConfirmationManager:
         secret: bytes | None = None,
         clock: Callable[[], float] = time.time,
     ) -> None:
-        self._secret = secret or secrets.token_bytes(32)
+        if secret is None:
+            secret = secrets.token_bytes(32)
+        elif type(secret) is not bytes or len(secret) != 32:
+            raise ValueError("secret must be exactly 32 bytes")
+        self._secret = secret
         self._clock = clock
         self._key_id = hashlib.sha256(self._secret).hexdigest()[:16]
-        self._issued_at: list[int] = []
+        self._issued_at: list[float] = []
         self._lock = threading.Lock()
         self._records: dict[str, _ChallengeRecord] = {}
 
@@ -127,8 +131,8 @@ class TrustMutationConfirmationManager:
             payload = {
                 "bindingDigest": binding_digest,
                 "challengeId": challenge_id,
-                "expiresAt": expires_at,
-                "issuedAt": now,
+                "expiresAt": _serialize_timestamp(expires_at),
+                "issuedAt": _serialize_timestamp(now),
                 "keyId": self._key_id,
                 "nonce": secrets.token_urlsafe(16),
                 "version": _TOKEN_VERSION,
@@ -175,8 +179,8 @@ class TrustMutationConfirmationManager:
             if record.consumed:
                 raise _invalid()
             if (
-                payload.get("issuedAt") != record.issued_at
-                or payload.get("expiresAt") != record.expires_at
+                payload.get("issuedAt") != _serialize_timestamp(record.issued_at)
+                or payload.get("expiresAt") != _serialize_timestamp(record.expires_at)
                 or payload.get("bindingDigest") != record.binding_digest
             ):
                 raise _invalid()
@@ -198,14 +202,14 @@ class TrustMutationConfirmationManager:
             self._records.clear()
             self._issued_at.clear()
 
-    def _prune_expired(self, now: int) -> None:
+    def _prune_expired(self, now: float) -> None:
         self._records = {
             challenge_id: record
             for challenge_id, record in self._records.items()
             if record.expires_at > now
         }
 
-    def _prune_issue_window(self, now: int) -> None:
+    def _prune_issue_window(self, now: float) -> None:
         self._issued_at = [issued_at for issued_at in self._issued_at if issued_at > now - ISSUE_WINDOW_SECONDS]
 
 
@@ -268,10 +272,11 @@ def _verify(token: object, secret: bytes) -> dict[str, Any]:
         or not isinstance(payload.get("keyId"), str)
         or not isinstance(payload.get("nonce"), str)
         or not payload["nonce"]
-        or not _is_int(payload.get("issuedAt"))
-        or not _is_int(payload.get("expiresAt"))
-        or payload["expiresAt"] - payload["issuedAt"] != CONFIRMATION_EXPIRY_SECONDS
     ):
+        raise _invalid()
+    issued_at = _deserialize_timestamp(payload.get("issuedAt"))
+    expires_at = _deserialize_timestamp(payload.get("expiresAt"))
+    if expires_at != issued_at + CONFIRMATION_EXPIRY_SECONDS:
         raise _invalid()
     return payload
 
@@ -284,14 +289,32 @@ def _decode(value: str) -> str:
     return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4)).decode("utf-8", "strict")
 
 
-def _is_int(value: object) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool)
+def _serialize_timestamp(value: float) -> str:
+    return value.hex()
 
 
-def _timestamp(value: object) -> int:
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+def _deserialize_timestamp(value: object) -> float:
+    if not isinstance(value, str):
         raise _invalid()
-    return int(value)
+    try:
+        timestamp = float.fromhex(value)
+    except ValueError as error:
+        raise _invalid() from error
+    if not math.isfinite(timestamp) or timestamp.hex() != value:
+        raise _invalid()
+    return timestamp
+
+
+def _timestamp(value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise _invalid()
+    try:
+        timestamp = float(value)
+    except OverflowError as error:
+        raise _invalid() from error
+    if not math.isfinite(timestamp):
+        raise _invalid()
+    return timestamp
 
 
 def _invalid() -> TrustMutationConfirmationError:
