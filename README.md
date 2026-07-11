@@ -44,13 +44,16 @@ local indirection, surfaces uncertainty, and gives the user a decision with evid
   flags and mounts, and inline interpreter execution.
 - Static README link-poisoning detection for fake release links, non-release installer/download
   hosts, raw source archive downloads, and security-warning bypass wording.
+- Static Rust and Go ecosystem coverage for Cargo build scripts, Cargo source replacement,
+  Cargo aliases, git-sourced Cargo lock entries, Go generator directives, TestMain hooks, cgo
+  indicators, and Go module replacements.
 - Reachability parsing for common wrappers such as shell `-c`, interpreter flags, `env`,
   package-manager wrappers, PowerShell, `cmd /c`, and Windows-style paths.
 - Cross-file Node.js module reachability for local `require()` and `import` chains.
 - Evidence trust-boundary labels for repository-controlled snippets.
 - Nested monorepo critical file collection.
 - Package lifecycle detection.
-- Shell, Docker, GitHub Actions, MCP, agent instruction, and secret checks.
+- Shell, Docker, GitHub Actions, MCP, agent instruction, Rust, Go, and secret checks.
 - Execution graph for reachable local scripts/files.
 - Capability detection for Node.js, Python, shell, and Docker.
 - Uncertainty policy: unknown is not safe.
@@ -217,8 +220,8 @@ approval, trust revoke, or cache mutation tools. Evidence snippets from reposito
 untrusted data. Server initialization also supplies fixed safety instructions that require
 `ASK_USER` and `BLOCK` decisions to stop automatic execution.
 
-The runtime authority remains exactly two tools: `preflight_check` and `corpus_scan`. The v0.2.9
-runtime compatibility hotfix does not add scanner rules or MCP capabilities.
+The runtime authority remains exactly two tools: `preflight_check` and `corpus_scan`. The v0.3.0
+ecosystem coverage release adds scanner findings only; it does not add MCP capabilities.
 
 See [docs/mcp.md](docs/mcp.md) for MCP safety notes and
 [docs/mcp-client-examples.md](docs/mcp-client-examples.md) for machine-checked integration examples.
@@ -280,6 +283,21 @@ README link-poisoning findings use `README_` rule IDs:
 
 For safe read-only commands these findings warn; for install, build, and script-execution scopes
 they require user review. Evidence snippets remain labeled as repository-controlled untrusted data.
+
+Rust and Go ecosystem findings use warning-oriented rule IDs:
+
+- `RUST_BUILD_SCRIPT`: a `build.rs` file or Cargo package build script is present.
+- `RUST_CARGO_SOURCE_REPLACEMENT`: Cargo source replacement or custom registry configuration is
+  present.
+- `RUST_CARGO_ALIAS`: Cargo aliases can hide additional subcommands behind familiar names.
+- `RUST_CARGO_GIT_SOURCE`: `Cargo.lock` references a git-sourced dependency.
+- `GO_GENERATE_DIRECTIVE`: repository source declares a `//go:generate` command.
+- `GO_TESTMAIN`: Go tests define a `TestMain` hook.
+- `GO_CGO_USAGE`: Go source imports cgo through `import "C"`.
+- `GO_MODULE_REPLACE` and `GO_LOCAL_MODULE_REPLACE`: `go.mod` changes module resolution.
+
+These findings are local static signals. Codex Preflight does not run Cargo, Go, build scripts,
+tests, generators, compilers, package managers, or repository code while detecting them.
 
 ## External Repository Scan
 

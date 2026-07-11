@@ -127,8 +127,8 @@ instruction-capable runtime. These diagnostics do not install packages, edit
 `~/.codex/config.toml` or project configuration, mutate trust or cache state, or start a
 long-running MCP server.
 
-The v0.2.9 MCP tool set remains exactly `preflight_check` and `corpus_scan`; the compatibility
-hotfix does not expand authority. Both tools are read-only and local-path-only. The runtime does
+The v0.3.0 MCP tool set remains exactly `preflight_check` and `corpus_scan`; the ecosystem coverage
+release does not expand authority. Both tools are read-only and local-path-only. The runtime does
 not expose remote repository scanning, command execution, trust approval, trust revoke, or cache
 mutation tools.
 

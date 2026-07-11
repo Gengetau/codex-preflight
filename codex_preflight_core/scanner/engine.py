@@ -9,6 +9,7 @@ from codex_preflight_core.rules.mcp_config import McpConfigRule
 from codex_preflight_core.rules.package_json import PackageJsonRule
 from codex_preflight_core.rules.python_setup import PythonSetupRule
 from codex_preflight_core.rules.readme_link_poisoning import ReadmeLinkPoisoningRule
+from codex_preflight_core.rules.rust_go import RustGoEcosystemRule
 from codex_preflight_core.rules.secrets import SecretRule
 from codex_preflight_core.rules.shell_patterns import ShellPatternRule
 from codex_preflight_core.scanner.finding import Finding
@@ -24,6 +25,7 @@ DEFAULT_RULES: tuple[Rule, ...] = (
     AgentInstructionRule(),
     ReadmeLinkPoisoningRule(),
     DockerRule(),
+    RustGoEcosystemRule(),
 )
 
 

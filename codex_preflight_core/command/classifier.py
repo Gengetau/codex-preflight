@@ -80,8 +80,16 @@ def _classify_single(command: str) -> CommandClassification:
 
     if first in {"pytest"} or first in {"mvn"} and second == "test":
         return CommandClassification(command, CommandScope.TEST, "Test command.")
+    if first == "cargo" and second == "test":
+        return CommandClassification(command, CommandScope.TEST, "Cargo test command.")
+    if first == "go" and second == "test":
+        return CommandClassification(command, CommandScope.TEST, "Go test command.")
     if first in {"npm", "pnpm", "yarn"} and second == "test":
         return CommandClassification(command, CommandScope.TEST, "Package test script command.")
+    if first == "cargo" and second == "build":
+        return CommandClassification(command, CommandScope.BUILD, "Cargo build command.")
+    if first == "go" and second in {"build", "generate"}:
+        return CommandClassification(command, CommandScope.BUILD, "Go build or generate command.")
     if first in {"npm", "pnpm", "yarn"} and second in {"start", "build"}:
         return CommandClassification(command, CommandScope.BUILD, "Package script command.")
     if first in {"npm", "pnpm", "yarn"} and second == "run":

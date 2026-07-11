@@ -28,6 +28,13 @@ Run one case:
 codex-preflight corpus scan --case npm-postinstall-remote-exec
 ```
 
+The corpus includes Rust and Go ecosystem fixtures for v0.3.0:
+
+- `rust-build-script-source-replacement`
+- `go-commented-replace-block`
+- `go-generation-testmain-cgo`
+- `go-replace-block`
+
 The scanner compares the actual decision and rule IDs with the expected values. The command exits
 nonzero if any expectation fails.
 
@@ -36,5 +43,7 @@ Safety rules:
 - Corpus scans only read files.
 - Tests must not run package installs, setup scripts, Docker, shell scripts, MCP servers, or GitHub
   workflows from the fixtures.
+- Tests must not run Cargo, Go, build scripts, generators, compilers, package managers, or test
+  hooks from the fixtures.
 - URLs use inert documentation domains such as `example.invalid`.
 - Secret fixtures use non-working markers and must not contain real credentials.

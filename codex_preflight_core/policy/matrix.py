@@ -159,6 +159,15 @@ POLICY_MATRIX: dict[str, PolicyMatrixEntry] = {
         _warn("GHA_SELF_HOSTED_RUNNER", "GitHub Actions workflow uses a self-hosted runner."),
         _warn("GHA_UNPINNED_ACTION", "GitHub Actions workflow uses an unpinned action."),
         _warn("GHA_WRITE_ALL_PERMISSIONS", "GitHub Actions workflow grants broad write permissions."),
+        _warn("GO_CGO_USAGE", "Go cgo usage can invoke native compiler and linker behavior."),
+        _warn("GO_GENERATE_DIRECTIVE", "go generate executes repository-declared generator commands."),
+        _warn("GO_LOCAL_MODULE_REPLACE", "Go local replacement changes module resolution."),
+        _warn("GO_MODULE_REPLACE", "Go replacement changes module resolution."),
+        _warn("GO_TESTMAIN", "Go TestMain can run setup and teardown code around tests."),
         _warn("REPORT_SIZE_BUDGET_EXCEEDED", "Report details were capped after policy evaluation."),
+        _warn("RUST_BUILD_SCRIPT", "Cargo build scripts execute during build and test workflows."),
+        _warn("RUST_CARGO_ALIAS", "Cargo aliases can hide additional subcommands."),
+        _warn("RUST_CARGO_GIT_SOURCE", "Cargo git sources change dependency provenance."),
+        _warn("RUST_CARGO_SOURCE_REPLACEMENT", "Cargo source replacement changes dependency resolution."),
     )
 }

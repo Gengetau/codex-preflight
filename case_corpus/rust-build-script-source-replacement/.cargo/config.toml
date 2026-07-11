@@ -1,0 +1,8 @@
+[source.crates-io]
+replace-with = "internal"
+
+[source.internal]
+registry = "https://example.com/index"
+
+[alias]
+ci = "test --all"

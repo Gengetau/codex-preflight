@@ -125,7 +125,7 @@ server, install packages, or mutate the environment.
 
 ## Exact tools and inputs
 
-The runtime exposes exactly two tools. The v0.2.9 compatibility hotfix does not expand this
+The runtime exposes exactly two tools. The v0.3.0 ecosystem coverage release does not expand this
 authority boundary.
 
 ### `preflight_check`

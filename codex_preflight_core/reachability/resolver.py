@@ -13,6 +13,7 @@ from codex_preflight_core.command.classifier import CommandClassification, split
 from codex_preflight_core.command.scope import CommandScope
 from codex_preflight_core.reachability.graph import Capability, ExecutionEdge, ExecutionGraph, ExecutionNode
 from codex_preflight_core.repo.collector import FIXTURE_MARKER, SKIP_DIRS
+from codex_preflight_core.rules.rust_go import RustGoEcosystemRule
 from codex_preflight_core.scanner.finding import Severity
 from codex_preflight_core.scanner.safe_reader import MAX_FILE_SIZE, read_text_safely
 
@@ -114,6 +115,48 @@ class ReachabilityResolver:
                     node = self._add_node("makefile", makefile.as_posix(), file=makefile, language="make")
                     self._add_edge(parent, node, "make command reads Makefile")
                     self._scan_file(makefile, node, 0)
+            elif parts and parts[0].lower() == "cargo":
+                self._resolve_cargo(parent)
+            elif parts and parts[0].lower() == "go":
+                self._resolve_go(parent)
+
+    def _resolve_cargo(self, parent: ExecutionNode) -> None:
+        cargo_files = [*self._walk_files({"Cargo.toml", "Cargo.lock", "build.rs"}), *self._walk_files({"config.toml"})]
+        for relative in sorted(set(cargo_files), key=lambda item: item.as_posix()):
+            if relative.name == "config.toml" and relative.as_posix() != ".cargo/config.toml":
+                continue
+            if not self._has_node_budget(relative, relative.as_posix()):
+                return
+            node = self._add_node("file", relative.as_posix(), file=relative, language="rust")
+            self._add_edge(parent, node, "cargo command reads Rust project metadata")
+            self._add_rule_capabilities(relative)
+
+    def _resolve_go(self, parent: ExecutionNode) -> None:
+        go_files = [*self._walk_files({"go.mod", "go.sum"}), *self._walk_suffix(".go")]
+        for relative in sorted(set(go_files), key=lambda item: item.as_posix()):
+            if not self._has_node_budget(relative, relative.as_posix()):
+                return
+            node = self._add_node("file", relative.as_posix(), file=relative, language="go")
+            self._add_edge(parent, node, "go command reads Go project metadata and source")
+            self._add_rule_capabilities(relative)
+
+    def _add_rule_capabilities(self, relative: Path) -> None:
+        text = self._read(relative)
+        if text is None:
+            self.graph.uncertainties.append(uncertainty.parse_uncertain("Could not read ecosystem file.", relative))
+            return
+        for finding in RustGoEcosystemRule().scan(self.root, relative, text):
+            self.graph.capabilities.append(
+                Capability(
+                    rule_id=finding.rule_id,
+                    severity=finding.severity,
+                    file=Path(finding.file),
+                    line=finding.line,
+                    capability=finding.title,
+                    evidence=finding.evidence,
+                    recommendation=finding.recommendation,
+                )
+            )
 
     def _resolve_docker(self, parent: ExecutionNode) -> None:
         lowered = self.command.lower()
@@ -311,6 +354,20 @@ class ReachabilityResolver:
                     found.append((current_path / filename).relative_to(self.root))
         return sorted(found, key=lambda item: item.as_posix())
 
+    def _walk_suffix(self, suffix: str) -> list[Path]:
+        found: list[Path] = []
+        for current, dirs, files in os.walk(self.root):
+            current_path = Path(current)
+            dirs[:] = [
+                directory
+                for directory in dirs
+                if directory not in SKIP_DIRS and not (current_path / directory / FIXTURE_MARKER).exists()
+            ]
+            for filename in files:
+                if filename.endswith(suffix):
+                    found.append((current_path / filename).relative_to(self.root))
+        return sorted(found, key=lambda item: item.as_posix())
+
     def _package_scripts(self, relative: Path, names: set[str]) -> list[tuple[str, str]]:
         text = self._read(relative)
         if text is None:
@@ -453,6 +510,10 @@ def _language_for(relative: Path) -> str | None:
     suffix = relative.suffix.lower()
     if suffix in {".js", ".mjs", ".cjs", ".ts", ".tsx"}:
         return "nodejs"
+    if suffix == ".go":
+        return "go"
+    if relative.name in {"Cargo.toml", "Cargo.lock", "build.rs"} or relative.as_posix() == ".cargo/config.toml":
+        return "rust"
     if suffix == ".py":
         return "python"
     if suffix in shell.SHELL_EXTENSIONS:

@@ -1,0 +1,13 @@
+id: go-generation-testmain-cgo
+title: Go generate, TestMain, cgo, and replace directives
+category: ecosystem-go
+command: go generate ./...
+expectedDecision: WARN
+expectedRules:
+  - GO_GENERATE_DIRECTIVE
+  - GO_CGO_USAGE
+  - GO_LOCAL_MODULE_REPLACE
+  - GO_MODULE_REPLACE
+  - GO_TESTMAIN
+description: Synthetic Go fixture with generator directive, cgo import, TestMain, and module replacements.
+safetyNote: Contains static Go source and module metadata only; Go commands are never executed during corpus scanning.
