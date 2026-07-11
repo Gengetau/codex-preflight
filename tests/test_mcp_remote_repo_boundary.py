@@ -38,9 +38,12 @@ def test_mcp_preflight_rejects_missing_local_cwd(tmp_path: Path) -> None:
         preflight_check(cwd=str(tmp_path / "missing"), command="pytest")
 
 
-def test_mcp_docs_state_remote_repositories_are_not_exposed() -> None:
+def test_local_tool_description_keeps_remote_authority_separate(monkeypatch) -> None:
     from codex_preflight_mcp.server import tool_definitions
 
+    monkeypatch.delenv("CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN", raising=False)
+    tools = tool_definitions()
+    assert [tool["name"] for tool in tools] == ["preflight_check", "corpus_scan"]
     descriptions = "\n".join(str(tool["description"]) for tool in tool_definitions())
 
-    assert "Remote repository scanning is intentionally not exposed" in descriptions
+    assert "opt-in remote authority is isolated in the separate remote_repository_scan tool" in descriptions

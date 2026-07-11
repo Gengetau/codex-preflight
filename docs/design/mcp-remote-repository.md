@@ -2,266 +2,243 @@
 
 ## Status and boundary
 
-Status: **design-only and unavailable** in v0.2.5.
+Status: **implemented and default-off in v0.3.2**.
 
-This document specifies a possible future `remote_repository_scan` tool. It does not register,
-implement, or experimentally hide that tool. The runtime continues to expose exactly
-`preflight_check` and `corpus_scan`. A separate reviewed implementation loop and release are
-required before any remote tool can be registered.
+`remote_repository_scan` is registered only when the server process starts with the exact
+environment value `CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN=1`. The default inventory remains
+`preflight_check` and `corpus_scan`; the enabled inventory adds only
+`remote_repository_scan`. Any other flag value is disabled. Restart the server after changing the
+flag because registration is fixed at process startup.
 
-The future capability would fetch a bounded repository snapshot and run static analysis only. It
-would never execute repository code, package managers, build tools, scripts, hooks, binaries, or a
-planned command, and it would never create a trust approval.
+This is a narrow network authority for a bounded static scan of one public GitHub HTTPS
+repository. It does not execute repository code or a planned command, accept credentials, follow
+redirects, fetch submodules or LFS targets, or create trust. Local `preflight_check` continues to
+reject URL and clone-like `cwd` values and never forwards to this tool.
 
-## Future tool contract
+## Tool contract
 
-The remote capability must be a separate tool. Local `preflight_check` must continue to reject
-remote forms without silently forwarding or falling back to this tool.
-
-Tentative input contract:
+The exact input object uses `additionalProperties: false`:
 
 ```json
 {
-  "remoteUrl": "https://allowed.example/owner/repository.git",
+  "remoteUrl": "https://github.com/OWNER/REPOSITORY",
   "requestedRef": "refs/heads/main",
-  "confirmationToken": "single-use operation-bound token"
+  "confirmationToken": "optional on the first call"
 }
 ```
 
-Required fields:
-
-| Field | Contract |
-| --- | --- |
-| `remoteUrl` | Explicit HTTPS repository URL; never inferred from local input. |
-| `requestedRef` | Explicit branch, tag, or immutable commit request; defaults require a reviewed policy decision. |
-| `confirmationToken` | Expiring one-time token bound to normalized URL, requested ref, operation, and limits. |
-
-The tool has no command parameter. Its only operation is bounded static scan. Unknown fields are
-rejected using the stable v0.2.3 structured error model.
+`remoteUrl` and `requestedRef` are required strings. `confirmationToken` is omitted for the
+challenge call and supplied only on the confirmed retry. There is no command, local path,
+credential, proxy, destination, limit override, output path, trust, or cache-mutation argument.
 
 ## Authority and confirmation
 
-Remote access is an authority expansion and requires an explicit challenge/confirmation exchange.
-A generic `confirm=true` boolean is insufficient.
+The first valid call performs lexical URL/ref validation only. It does not perform DNS, network,
+Git, filesystem snapshot, repository scan, or remote-cache access. It returns
+`MCP_REMOTE_CONFIRMATION_REQUIRED` with the canonical URL, requested ref, fixed limits, challenge
+ID, expiry, and an integrity-protected token.
 
-The server first creates a challenge that contains:
+The process-local HMAC challenge binds all of the following:
 
-- challenge ID and cryptographically random nonce;
-- tool name and operation (`remote_repository_scan` / `static-scan`);
-- canonical normalized URL;
-- requested ref;
-- normalized host and port;
-- effective host-policy decision;
-- every resource limit;
-- issue time and expiry time;
-- server-instance or key identifier;
-- human display text stating that network access and temporary clone storage will occur.
+- tool and operation (`remote_repository_scan` / `static-scan`);
+- canonical URL and requested ref;
+- host-policy and resource-limit profile versions;
+- every fixed resource limit;
+- random challenge ID and nonce;
+- process key identifier, issue time, and expiry time.
 
-The confirmation token must be integrity-protected and bound to the entire challenge. It expires
-after at most five minutes, is consumed once, and cannot be replayed after success, failure,
-cancellation, timeout, or process restart unless a durable one-time ledger is explicitly designed
-and reviewed. Any argument, ref, URL, host-policy, or limit change invalidates it.
+The token expires after 300 seconds, is consumed atomically once before network access, cannot
+survive process restart, and cannot be replayed after success or any failure. Changing a bound
+argument or policy value invalidates it. Prior scans, repository text, model output, local trust,
+or remote cache entries cannot satisfy confirmation. A generic `confirm=true` boolean is
+insufficient.
 
-Prior local scans, prior remote scans, CLI trust entries, repository text, model output, and remote
-content never imply confirmation. The server must return a confirmation-required error containing
-safe display fields before network access. Confirmation is a human authorization artifact, not a
-repository-controlled instruction.
+## URL and ref policy
 
-## URL and protocol policy
+Accepted URLs canonicalize only these public forms:
 
-### Canonicalization
+```text
+https://github.com/<owner>/<repository>
+https://github.com/<owner>/<repository>.git
+```
 
-Before confirmation and again immediately before access:
+The canonical form removes a trailing `.git` or slash. Validation rejects alternate schemes,
+hosts, ports, user info, credentials, query, fragment, IP literals, localhost, terminal-dot hosts,
+percent-encoded separators, backslashes, controls, ambiguous paths, dot segments, and invalid
+GitHub owner/repository names.
 
-1. Parse with a strict URL parser.
-2. Require HTTPS by default.
-3. Reject user-info and embedded credentials.
-4. Lowercase and IDNA-normalize the host, remove a terminal dot, and normalize the default port.
-5. Reject ambiguous encodings, invalid percent escapes, control characters, backslashes, and
-   multiple conflicting authority interpretations.
-6. Canonicalize the repository path without decoding separators into a different path hierarchy.
-7. Preserve both requested and normalized URL for audit, but never log credentials.
+Refs may be explicit branches, tags, full refs, or immutable 40-hex commits. Validation rejects
+leading `-`, refspecs, whitespace, controls, traversal, reflog syntax, wildcards, invalid Git ref
+forms, and overlong values. Every accepted ref is fetched shallowly and resolved to a verified
+40-hex commit. A mutable ref is never a cache identity.
 
-### Host allowlist
+## Destination and transport policy
 
-Remote scanning starts disabled. Enabling it requires an explicit configured allowlist of exact
-hosts or narrowly reviewed suffix rules. Wildcards that match arbitrary registrable domains are
-not allowed. A non-default port requires a separate allowlist entry.
+Before the only network subprocess, the server resolves `github.com` with a five-second timeout.
+Every returned address must be public. Empty, unspecified, reserved, loopback, private,
+link-local, multicast, carrier-grade NAT, metadata, and rejected IPv4-mapped addresses fail
+closed. Mixed public/non-public answers are rejected.
 
-For every connection and redirect target, resolve all addresses and reject:
+The validated addresses are pinned into Git's `http.curloptResolve` setting for
+`github.com:443`, closing the DNS rebinding gap while preserving TLS hostname and certificate
+verification. The fetch uses a server-generated canonical HTTPS URL, argv execution with no
+shell, and `http.followRedirects=false`; redirects followed are always zero.
 
-- unspecified and reserved addresses;
-- localhost and loopback;
-- private and carrier-grade NAT ranges;
-- link-local and multicast;
-- metadata-service ranges and well-known metadata hostnames;
-- IPv4-mapped IPv6 forms that resolve to a rejected IPv4 range;
-- addresses outside the configured public destination policy.
+The operation uses an allowlisted environment and isolated home/config directories. It strips all
+proxy and credential environment variables and disables arbitrary protocols, file/SSH/ext
+helpers, credential helpers, askpass, extra headers, cookies, hooks, templates, recursive
+submodules, LFS smudge, filters, external diff, and user-supplied protocol selection. Raw process
+output is never returned to the client.
 
-DNS resolution must be pinned or revalidated at connect time to prevent DNS rebinding. The actual
-peer address must match an allowed resolution. Proxy configuration must be explicit and subject to
-equivalent destination enforcement.
+## Snapshot isolation
 
-### Schemes, redirects, and clone helpers
+Each confirmed operation creates a new operation-owned temporary root under the server temp
+parent, outside the business checkout and caller paths. Acquisition uses a shallow, non-recursive
+fetch into a bare repository, resolves the commit, enumerates the tree, and reads regular blobs
+with Git object commands. It never creates a worktree or runs checkout filters.
 
-- Reject HTTP, SSH, Git, file, FTP, scp-like, `ext::`, custom protocols, and local paths.
-- Do not invoke a shell or accept a caller-supplied Git helper.
-- Disable external protocol helpers and credential helpers.
-- Permit only a small bounded redirect count.
-- Re-run scheme, credential, host, port, DNS, and address policy for every redirect.
-- Reject cross-host redirects unless both the source-to-target transition and target host are
-  explicitly allowlisted.
-- Never forward authorization or cookies across a redirect boundary.
+Before materialization, paths are validated as both POSIX and Windows names. Absolute paths,
+drive/UNC forms, `..`, controls, backslashes, NTFS ADS, reserved device names, trailing dot/space,
+depth overflow, Unicode normalization collisions, and case-fold collisions are rejected. Only
+regular modes `100644` and `100755` are written as non-executable local files. Symlinks,
+submodules, and LFS pointers are counted and skipped; their targets are never fetched. Other modes
+fail as `MCP_REMOTE_TREE_UNSAFE`.
 
-## Clone isolation and resource limits
+The isolated scan worker calls the existing static scanner with `use_cache=False` and
+`allow_trust=False`. It never runs Git hooks, repository code, package managers, builds, tests,
+generators, wrappers, compilers, containers, binaries, or scripts.
 
-The future implementation must clone into a newly created isolated temporary directory owned by
-the server process. It must not clone into a caller-supplied directory or the server working tree.
+## Fixed resource limits
 
-Minimum controls:
+The confirmation token binds this immutable profile:
 
-| Resource | Required policy |
-| --- | --- |
-| History | Shallow or otherwise bounded fetch; no unbounded history. |
-| Ref | Resolve requested ref to an immutable commit and report it. |
-| Timeout | Bound DNS, connect, transfer, Git operation, scan, and total operation time separately. |
-| Bytes | Enforce compressed transfer, Git object, checkout, and total on-disk byte limits. |
-| Files | Enforce total file-count and directory-depth limits. |
-| File size | Reuse or tighten scanner individual-file size limits. |
-| Concurrency | Bound concurrent remote operations per server and per client. |
-| Output | Reuse v0.2.2 findings and execution-graph report limits. |
+| Limit | Value |
+| --- | ---: |
+| Confirmation expiry | 300 seconds |
+| DNS resolution | 5 seconds |
+| Git network subprocess | 60 seconds |
+| Static scan subprocess | 20 seconds |
+| Total operation | 90 seconds |
+| Git temporary storage | 64 MiB |
+| Materialized regular-file bytes | 32 MiB |
+| Materialized files | 5000 |
+| Path depth | 32 |
+| Single file | 1 MiB |
+| Concurrent remote operations per process | 2 |
+| Concurrent operation per canonical repository | 1 |
+| Redirects followed | 0 |
 
-Git configuration must disable hooks, template hooks, submodule recursion, Git LFS downloads,
-smudge/clean filters, external diff/textconv, credential prompts, optional locks where appropriate,
-and arbitrary protocol helpers. Do not initialize or execute worktree hooks. Submodules and LFS
-pointers may be reported as static metadata or uncertainty, but their content is not fetched by
-default.
-
-Use a detached checkout or object-safe materialization at the pinned resolved commit. Reject
-checkout paths that escape through absolute paths, `..`, symlinks, NTFS alternate data streams,
-device names, case collisions, or platform-specific reserved paths. Continue to use bounded safe
-reads and skip executable behavior.
+Time and storage are checked while subprocesses run and again after completion. Tree count,
+single-file size, and expanded materialized bytes are checked before each object write. A breach
+terminates the process tree and fails the whole operation; partial success is not returned.
 
 ## Cleanup and cancellation
 
-Cleanup runs on success, validation failure, clone failure, scan failure, timeout, client
-disconnect, cancellation, and server shutdown. The operation records whether temporary files were
-fully removed. Failed cleanup is reported without leaking the temporary path and queued for a
-bounded, auditable janitor process.
+The core operation accepts a thread-safe cancellation token. The MCP adapter runs the blocking
+operation in a dedicated thread. Client cancellation or disconnect sets the token, terminates an
+in-flight process tree, waits under a shield for verified cleanup, and then lets the MCP request
+finish cancellation.
 
-Deletion must verify that the resolved target is the operation-owned temporary directory. It must
-not follow repository-controlled symlinks or junctions. Cleanup failure must not convert an unsafe
-or partial scan into success.
+Cleanup runs after success, acquisition/ref/scan/cache/audit failure, timeout, cancellation,
+limit breach, and unexpected exceptions. Before recursive deletion, the implementation verifies
+that the target is the exact operation-owned direct child with the private temp prefix and is not
+a symlink or junction. Cleanup failure keeps the request failed. No temporary path is returned.
 
 ## Cache separation
 
-Remote scan cache entries must be partitioned from local scan and trust caches. Keys include:
+Remote reports use `~/.codex-preflight/remote/scan-cache.json`, separate from local
+`scan-cache.json` and `trust.json`. Reads happen only after confirmation is consumed and the ref is
+resolved to an immutable commit. Keys include source type, SHA-256 canonical URL identity,
+resolved commit, ruleset, policy, report format, resource-limit profile, and host-policy version.
 
-- source type `remote`;
-- normalized URL hash;
-- resolved immutable commit;
-- scanner policy and ruleset versions;
-- resource-limit profile;
-- host-policy version.
+Entries have a one-hour TTL, a 64-entry cap, a 1 MiB report cap, and an 8 MiB file cap. Writes are
+locked, bounded, and protected by a process-key HMAC. Same-process tampering fails closed; entries
+from a prior process key become a safe cache miss after restart. Corruption, locking, read, or write failure returns
+`MCP_REMOTE_CACHE_FAILED`; it never falls back to local cache behavior. Cached report content
+remains untrusted and cannot create or satisfy trust.
 
-Do not key solely on a mutable branch name. Never use a remote scan cache entry as trust approval,
-and never let remote content create, alter, or revoke trust. Cache data retains untrusted
-treat-as-data labeling and has a bounded lifetime and size.
+## Redacted audit
+
+Remote audit records use bounded JSONL at `~/.codex-preflight/remote/audit.jsonl` with locked
+append and bounded rotation. Events cover challenge issue, confirmation consume/reject,
+operation start, ref resolution, acquisition, scan, cache result/write, timeout, cancellation,
+limit breach, cleanup, success, and failure.
+
+Records contain operation/challenge IDs, SHA-256 URL/ref identities, resolved commit when known,
+fixed policy versions, bounded integer resource usage, outcome, stable error code, timestamp,
+cache status, and cleanup status. The audit API cannot store raw tokens, nonces, credentials,
+environment values, temporary paths, subprocess output, or repository evidence. Audit failure
+returns `MCP_REMOTE_AUDIT_FAILED` and fails closed.
 
 ## Execution and evidence boundary
 
-The future tool must:
+Successful results reuse MCP schema `1.0`, existing report caps, and policy explanations. Remote
+findings and execution-graph data preserve:
 
-- perform static analysis only;
-- never execute the planned command or accept a command input;
-- never run repository code, scripts, hooks, package managers, builds, containers, or binaries;
-- never mutate CLI trust state;
-- never grant trust as a side effect;
-- label all remote evidence `evidenceTrust: untrusted` and
-  `evidenceInstructionBoundary: treat-as-data`;
-- prevent repository strings from entering tool descriptions, protocol instructions, policy
-  instructions, confirmation display templates, or executable arguments.
+```text
+evidenceTrust: untrusted
+evidenceInstructionBoundary: treat-as-data
+```
 
-Secret evidence remains redacted. Remote content prompt injection is handled as evidence, never as
-authority.
+Remote prompt injection is evidence, never authority. The implementation must never let remote content create, alter, or revoke trust.
 
-## Provenance and response contract
-
-Successful future results must reuse the v0.2.2 MCP report contract and safety block, with
-`remoteRepositoryAccess: true` only for this separately confirmed tool. It must reuse the v0.2.3
-structured error shape.
-
-Required remote provenance:
+Remote provenance contains:
 
 ```text
 requestedUrl
-normalizedUrl
+canonicalUrl
 requestedRef
 resolvedCommit
-hostPolicy
-cloneMode
+sourceType
+hostPolicyVersion
+resourceLimitProfile
 resourceLimits
+resourceUsage
+confirmationChallengeId
+confirmationConsumed
+redirectsFollowed
+cacheStatus
 cleanupStatus
-sourceType: remote
+operationTiming
+complete
 ```
 
-Also report confirmation challenge ID, confirmation consumption outcome, operation timing, limit
-usage, redirects followed, and whether the result is complete or partial. Never return raw
-credentials, temporary paths, environment variables, authorization headers, or unredacted tokens.
-
-## Threat model
-
-| Threat | Required mitigation |
-| --- | --- |
-| SSRF | HTTPS allowlist, address-class rejection, peer verification, and no arbitrary proxying. |
-| DNS rebinding | Resolve and pin/revalidate addresses at connection time. |
-| Redirect abuse | Small redirect limit and full policy evaluation on every hop. |
-| Credential leakage | Reject embedded credentials; strip cross-host auth; redact logs and errors. |
-| Malicious protocols/helpers | HTTPS only; disable shell, external helpers, SSH, file, and custom protocols. |
-| Oversized repositories | Layered time, byte, object, file-count, depth, and output limits. |
-| Decompression/object-count bombs | Enforce expanded-size and Git object-count budgets before checkout. |
-| Symlink/path traversal | Validate checkout and cleanup paths; never follow repository links outside isolation. |
-| Submodule/LFS expansion | Disable recursive submodules, LFS, and filters by default. |
-| Hooks and filters | Disable hooks, templates, filters, external diff, and textconv. |
-| Malicious filenames | Reject reserved, colliding, control-character, ADS, and escaping names. |
-| Cancellation/cleanup failure | Structured cancellation, finally cleanup, recorded status, bounded janitor. |
-| Cache poisoning | Remote/local partitioning and immutable commit/policy keyed entries. |
-| Confirmation replay | Expiring, one-time, exact-operation-bound challenge and consumption ledger. |
-| Remote prompt injection | Untrusted treat-as-data evidence and fixed server-owned instructions. |
+`safety.remoteRepositoryAccess` and `safety.networkAccess` are true only for a
+confirmed successful remote result. Tokens, nonces, temp paths, process output, and environment
+values are omitted.
 
 ## Error model
 
-Future remote errors use v0.2.3 fields: code, message, remediation, retryable, field, and
-safetyBoundary. Separate stable codes are required for confirmation, scheme, credentials, host,
-address, redirect, ref, clone timeout, resource limit, checkout safety, cancellation, and cleanup
-failure. Internal exceptions and sensitive paths remain hidden.
+Expected failures use the stable MCP structured error shape. Remote codes include disabled,
+URL/host/address/ref validation, confirmation required/invalid/expired/replayed, ref not found,
+redirect/auth rejection, timeout, cancellation, limits, unsafe tree, acquisition, scan, cache,
+audit, and cleanup failures. Internal tracebacks, process output, sensitive values, and temporary
+paths remain hidden.
 
-## Rollout and review gates
+## Threat model
 
-1. Obtain independent security and protocol design review for this document.
-2. Create a separate implementation loop and threat-driven test plan.
-3. Build a prototype with no public tool registration.
-4. Add deterministic URL parsing, DNS/address, redirect, confirmation, Git isolation, resource,
-   cancellation, cleanup, provenance, cache, and prompt-injection tests.
-5. Run the prototype only in a controlled test environment with synthetic repositories.
-6. Obtain explicit human approval before registering any remote tool.
-7. Ship registration in a separate release with a default-off global capability flag and a narrow
-   host allowlist.
-8. Monitor bounded operational metrics without repository or credential leakage.
+| Threat | Enforced mitigation |
+| --- | --- |
+| SSRF and DNS rebinding | Exact GitHub HTTPS policy, public-address classification, and pinned validated addresses. |
+| Redirect abuse | Git redirects disabled; zero redirects followed. |
+| Credential leakage | Credentials rejected, environment/config isolated, prompts/helpers/headers/cookies disabled. |
+| Malicious protocols/helpers | HTTPS-only protocol allowlist and shell-free argv. |
+| Oversized or expanding repositories | Layered time, disk, output, file, byte, and depth limits. |
+| Path traversal and special files | Dual-platform validation, collision checks, regular-file-only writes. |
+| Submodule/LFS expansion | Metadata counted and skipped; targets never fetched. |
+| Cancellation residue | Process-tree termination plus verified finally cleanup. |
+| Cache poisoning | Dedicated namespace and immutable commit/policy key. |
+| Confirmation replay | Expiring process-key-bound one-time ledger. |
+| Remote prompt injection | Fixed server instructions and untrusted treat-as-data labels. |
 
-## Disable, rollback, and incident response
+## Rollout, disable, and rollback
 
-The future server must support a global startup-time disable switch that removes the tool from
-registration, not merely a runtime rejection inside the handler. Host policy can disable an
-individual destination immediately. Rollback removes public registration and clears only the
-separate remote cache after verified path checks; local scan and trust data remain untouched.
+The implementation shipped only after focused security tests, exact-head independent review, and
+protected CI. Normal tests use synthetic fakes and local subprocess fixtures; CI does not contact
+GitHub.
 
-Incident response must revoke confirmation signing keys, invalidate outstanding challenges,
-disable remote registration, stop new operations, cancel bounded in-flight operations, perform
-verified cleanup, and retain non-sensitive audit records.
-
-## Acceptance gate for future implementation
-
-This design does not authorize implementation. Registration remains prohibited until a separate
-loop proves all controls with focused security tests, independent review, and explicit human
-approval. v0.2.5 continues to provide only `preflight_check` and `corpus_scan`.
+Remove `CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN=1` and restart the MCP server to disable or roll back.
+This removes registration rather than leaving a callable denial stub. Outstanding tokens
+cannot survive restart. If incident response requires state removal, clear only the verified
+`~/.codex-preflight/remote` namespace; local scan and trust files are separate and must remain
+untouched.

@@ -15,21 +15,21 @@ TRUST_DESIGN = ROOT / "docs" / "design" / "mcp-trust-management.md"
 def test_remote_repository_design_covers_required_security_contract() -> None:
     text = REMOTE_DESIGN.read_text(encoding="utf-8")
     required = (
-        "design-only and unavailable",
+        "implemented and default-off in v0.3.2",
         "remote_repository_scan",
         "Authority and confirmation",
-        "normalized URL",
+        "canonical URL",
         "requested ref",
         "one-time",
-        "URL and protocol policy",
-        "Host allowlist",
+        "URL and ref policy",
+        "Destination and transport policy",
         "DNS rebinding",
         "redirect",
-        "embedded credentials",
-        "Clone isolation and resource limits",
-        "no unbounded history",
+        "credentials",
+        "Snapshot isolation",
+        "Fixed resource limits",
         "submodule",
-        "Git LFS",
+        "LFS",
         "hooks",
         "Cleanup and cancellation",
         "Cache separation",
@@ -37,21 +37,22 @@ def test_remote_repository_design_covers_required_security_contract() -> None:
         "evidenceTrust: untrusted",
         "evidenceInstructionBoundary: treat-as-data",
         "requestedUrl",
-        "normalizedUrl",
+        "canonicalUrl",
         "resolvedCommit",
         "cleanupStatus",
         "Threat model",
         "SSRF",
         "Remote prompt injection",
-        "Rollout and review gates",
-        "Disable, rollback, and incident response",
+        "Redacted audit",
+        "Rollout, disable, and rollback",
     )
 
     for value in required:
         assert value in text
 
 
-def test_remote_design_does_not_change_runtime_tool_set_or_registration() -> None:
+def test_remote_registration_is_default_off_and_exact_when_enabled(monkeypatch) -> None:
+    monkeypatch.delenv("CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN", raising=False)
     names = {tool["name"] for tool in tool_definitions()}
     runtime_source = "\n".join(
         path.read_text(encoding="utf-8")
@@ -59,8 +60,15 @@ def test_remote_design_does_not_change_runtime_tool_set_or_registration() -> Non
     )
 
     assert names == {"preflight_check", "corpus_scan"}
-    assert "remote_repository_scan" not in runtime_source
+    assert "remote_repository_scan" in runtime_source
     assert not names & {"trust_list", "trust_approve", "trust_revoke"}
+
+    monkeypatch.setenv("CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN", "1")
+    assert {tool["name"] for tool in tool_definitions()} == {
+        "preflight_check",
+        "corpus_scan",
+        "remote_repository_scan",
+    }
 
 
 def test_local_preflight_still_rejects_remote_url() -> None:
@@ -70,13 +78,13 @@ def test_local_preflight_still_rejects_remote_url() -> None:
     assert caught.value.detail.code is McpErrorCode.CWD_URL_NOT_ALLOWED
 
 
-def test_user_documentation_says_remote_design_is_unavailable() -> None:
+def test_user_documentation_says_remote_is_default_off_and_rollbackable() -> None:
     integration = (ROOT / "docs" / "mcp-client-examples.md").read_text(encoding="utf-8")
     design = REMOTE_DESIGN.read_text(encoding="utf-8")
 
-    assert "does not provide remote repository MCP scanning" in integration
-    assert "does not register" in design
-    assert "separate reviewed implementation loop" in design
+    assert "Only exact `1` enables registration" in integration
+    assert "implemented and default-off in v0.3.2" in design
+    assert "Remove `CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN=1`" in design
 
 
 def test_trust_management_design_covers_required_contracts() -> None:
@@ -123,7 +131,8 @@ def test_trust_management_design_covers_required_contracts() -> None:
         assert value in text
 
 
-def test_trust_design_does_not_register_tools_or_enable_mcp_trust() -> None:
+def test_trust_design_does_not_register_tools_or_enable_mcp_trust(monkeypatch) -> None:
+    monkeypatch.delenv("CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN", raising=False)
     names = {tool["name"] for tool in tool_definitions()}
     server_source = (ROOT / "codex_preflight_mcp" / "server.py").read_text(encoding="utf-8")
     integration = (ROOT / "docs" / "mcp-client-examples.md").read_text(encoding="utf-8")
@@ -131,7 +140,12 @@ def test_trust_design_does_not_register_tools_or_enable_mcp_trust() -> None:
     assert names == {"preflight_check", "corpus_scan"}
     assert not names & {"trust_list", "trust_approve", "trust_revoke"}
     assert "allow_trust=False" in server_source
-    assert "does not provide remote repository MCP scanning, trust-list or trust-mutation MCP" in integration
+    assert "No mode exposes trust-list or trust-mutation MCP tools" in integration
+
+    monkeypatch.setenv("CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN", "1")
+    enabled_names = {tool["name"] for tool in tool_definitions()}
+    assert enabled_names == {"preflight_check", "corpus_scan", "remote_repository_scan"}
+    assert not enabled_names & {"trust_list", "trust_approve", "trust_revoke"}
 
 
 def test_remote_scan_design_cannot_create_trust() -> None:

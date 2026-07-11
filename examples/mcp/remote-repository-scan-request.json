@@ -1,0 +1,7 @@
+{
+  "tool": "remote_repository_scan",
+  "arguments": {
+    "remoteUrl": "https://github.com/example/project",
+    "requestedRef": "refs/heads/main"
+  }
+}

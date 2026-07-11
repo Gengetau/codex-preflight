@@ -27,7 +27,8 @@ def tools_by_name() -> dict[str, dict]:
     return {tool["name"]: tool for tool in tool_definitions()}
 
 
-def test_documented_tool_names_and_requests_match_runtime_schemas() -> None:
+def test_documented_tool_names_and_requests_match_runtime_schemas(monkeypatch) -> None:
+    monkeypatch.delenv("CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN", raising=False)
     tools = tools_by_name()
     assert set(tools) == {"preflight_check", "corpus_scan"}
 
@@ -36,10 +37,20 @@ def test_documented_tool_names_and_requests_match_runtime_schemas() -> None:
         assert request["tool"] in tools
         validate(instance=request["arguments"], schema=tools[request["tool"]]["inputSchema"])
 
+    monkeypatch.setenv("CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN", "1")
+    enabled_tools = tools_by_name()
+    assert set(enabled_tools) == {"preflight_check", "corpus_scan", "remote_repository_scan"}
+    remote_request = load_json("remote-repository-scan-request.json")
+    validate(
+        instance=remote_request["arguments"],
+        schema=enabled_tools[remote_request["tool"]]["inputSchema"],
+    )
+
 
 def test_success_examples_match_stable_contracts(tmp_path: Path) -> None:
     preflight = load_json("preflight-check-response.json")
     corpus = load_json("corpus-scan-response.json")
+    remote = load_json("remote-repository-scan-response.json")
     required_preflight = {
         "mcpSchemaVersion",
         "tool",
@@ -70,6 +81,15 @@ def test_success_examples_match_stable_contracts(tmp_path: Path) -> None:
     assert corpus["cases"][0]["passed"] is True
     assert corpus["cases"][0]["negativeControl"] is False
     assert corpus["groups"][0]["category"] == "reachability"
+    assert remote["mcpSchemaVersion"] == "1.0"
+    assert remote["tool"] == "remote_repository_scan"
+    assert remote["safety"]["networkAccess"] is True
+    assert remote["safety"]["remoteRepositoryAccess"] is True
+    assert remote["safety"]["trustMutationAllowed"] is False
+    assert remote["remoteProvenance"]["cleanupStatus"] == "removed"
+    assert remote["remoteProvenance"]["redirectsFollowed"] == 0
+    assert remote["remoteProvenance"]["confirmationConsumed"] is True
+    assert remote["repo"]["path"] == remote["remoteProvenance"]["canonicalUrl"]
 
     actual_preflight = preflight_check(cwd=str(tmp_path), command="python -m pytest")
     actual_preflight["repo"] = preflight["repo"]
@@ -87,6 +107,12 @@ def test_error_example_uses_stable_v023_error_contract() -> None:
     assert detail["field"] == "cwd"
     assert detail["safetyBoundary"]
 
+    remote = load_json("remote-confirmation-required.json")["error"]
+    assert remote["code"] == McpErrorCode.REMOTE_CONFIRMATION_REQUIRED.value
+    assert remote["field"] == "confirmationToken"
+    assert remote["context"]["expiresInSeconds"] == 300
+    assert remote["context"]["trustCreated"] is False
+
 
 def test_python_examples_are_valid_and_call_only_documented_tools() -> None:
     sources = {
@@ -94,16 +120,25 @@ def test_python_examples_are_valid_and_call_only_documented_tools() -> None:
         for path in sorted(EXAMPLES.glob("*_client.py"))
     }
 
-    assert set(sources) == {"corpus_scan_client.py", "preflight_check_client.py"}
+    assert set(sources) == {
+        "corpus_scan_client.py",
+        "preflight_check_client.py",
+        "remote_repository_scan_client.py",
+    }
     for filename, source in sources.items():
         ast.parse(source, filename=filename)
         assert "StdioServerParameters" in source
         assert "codex_preflight_mcp.server" in source
-        assert "remote_repository_scan" not in source
         assert "trust_approve" not in source
         assert "trust_revoke" not in source
     assert re.search(r'call_tool\(\s*"preflight_check"', sources["preflight_check_client.py"])
     assert re.search(r'call_tool\(\s*"corpus_scan"', sources["corpus_scan_client.py"])
+    remote = sources["remote_repository_scan_client.py"]
+    assert re.search(r'call_tool\(\s*"remote_repository_scan"', remote)
+    assert 'CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN": "1"' in remote
+    assert "input(" in remote
+    assert '!= "CONFIRM"' in remote
+    assert "confirmationToken" in remote
 
 
 def test_generic_configuration_has_no_shell_wrapper_or_secrets() -> None:
@@ -128,11 +163,14 @@ def test_integration_docs_cover_install_startup_boundaries_and_examples() -> Non
         "evidenceTrust",
         "treat-as-data",
         "local-path",
+        "MCP_REMOTE_CONFIRMATION_REQUIRED",
+        "CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN",
         "Unavailable capabilities",
     ):
         assert required in text
-    assert "not provide remote repository MCP scanning" in text
-    assert "Only `preflight_check` and `corpus_scan` are available" in text
+    assert "Default inventory" in text
+    assert "Enabled inventory" in text
+    assert "adds only `remote_repository_scan`" in text
 
 
 def test_codex_plugin_docs_cover_supported_paths_and_explicit_prerequisite() -> None:
@@ -160,9 +198,12 @@ def test_codex_plugin_docs_cover_supported_paths_and_explicit_prerequisite() -> 
     ):
         assert required in combined
 
-    assert "remote repository MCP scanning" in combined
+    assert "remote_repository_scan" in combined
     assert "trust-management MCP tools" in combined
-    assert "Only `preflight_check` and `corpus_scan` are available" in combined
+    assert "CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN" in combined
+    assert "one-time" in combined
+    assert "confirmation" in combined
+    assert "default" in combined.lower()
     assert "one-click" not in combined.lower()
 
 

@@ -1,0 +1,35 @@
+{
+  "isError": true,
+  "error": {
+    "code": "MCP_REMOTE_CONFIRMATION_REQUIRED",
+    "message": "Remote static scan requires one-time human confirmation before network access.",
+    "remediation": "Review the canonical repository, ref, and fixed limits, then retry once with confirmationToken.",
+    "retryable": false,
+    "field": "confirmationToken",
+    "safetyBoundary": "No DNS, network, Git, cache, or repository scan occurred while issuing this challenge.",
+    "context": {
+      "challengeId": "example-challenge-id",
+      "confirmationToken": "example.integrity-protected-one-time-token",
+      "canonicalUrl": "https://github.com/example/project",
+      "requestedRef": "refs/heads/main",
+      "expiresInSeconds": 300,
+      "resourceLimits": {
+        "confirmationExpirySeconds": 300,
+        "dnsTimeoutSeconds": 5,
+        "gitTimeoutSeconds": 60,
+        "scanTimeoutSeconds": 20,
+        "totalTimeoutSeconds": 90,
+        "maxGitBytes": 67108864,
+        "maxMaterializedBytes": 33554432,
+        "maxFiles": 5000,
+        "maxPathDepth": 32,
+        "maxSingleFileBytes": 1048576,
+        "maxConcurrentOperations": 2,
+        "maxConcurrentPerRepository": 1,
+        "maxRedirects": 0
+      },
+      "networkAccessRequired": true,
+      "trustCreated": false
+    }
+  }
+}

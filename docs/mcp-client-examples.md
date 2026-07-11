@@ -8,47 +8,41 @@ Install the published package with the MCP extra:
 python -m pip install "codex-preflight[mcp]"
 ```
 
-This extra requires `mcp>=1.3.0`, the lowest verified Python MCP SDK release whose FastMCP runtime
-preserves server instructions.
-
-From a source checkout, install the runtime extra or the development and runtime extras:
+Source-checkout development can install either runtime-only or development/runtime extras:
 
 ```bash
 python -m pip install -e ".[mcp]"
 python -m pip install -e ".[dev,mcp]"
 ```
 
-Plugin installation and Python package installation are separate. The Codex plugin bundles the
-local stdio server configuration but never installs the Python package automatically.
-
-An old, manually downgraded, shadowed, or instruction-dropping runtime is rejected before stdio
-server startup. Upgrade an incompatible environment explicitly with:
+The extra requires `mcp>=1.3.0`, the lowest verified instruction-capable FastMCP runtime. An old,
+shadowed, manually downgraded, or instruction-incompatible runtime is rejected before stdio
+startup. Upgrade explicitly with:
 
 ```bash
 python -m pip install --upgrade "codex-preflight[mcp]"
 ```
 
-The rejection is intentional because silently omitting the fixed initialization instructions
-would violate the MCP safety contract.
+Plugin installation and Python package installation are separate. The plugin provides MCP
+configuration but does not install packages.
 
 ## Supported Codex paths
 
 ### Plugin installation
 
-Install the Python prerequisite first, then add the repository marketplace:
+Install the Python prerequisite, then add the repository marketplace:
 
 ```bash
 python -m pip install "codex-preflight[mcp]"
 codex plugin marketplace add https://github.com/Gengetau/codex-preflight.git --ref master --sparse .agents/plugins
 ```
 
-The plugin manifest loads its root `.mcp.json`, so users do not hand-author a server map for this
-path. Start a new Codex session after installing or updating the plugin.
+Start a new Codex session after installing or updating the plugin. The bundled `.mcp.json` launches
+the default-off server and does not grant remote network authority.
 
 ### Standalone Codex MCP configuration
 
-Without the plugin, configure the same local entry point in `~/.codex/config.toml` or a trusted
-project `.codex/config.toml`:
+Without the plugin, configure the direct entry point in user or trusted-project Codex config:
 
 ```toml
 [mcp_servers."codex-preflight"]
@@ -62,41 +56,59 @@ configuration files.
 
 ### Source-checkout development
 
-Install `.[dev,mcp]`, run the synchronization check, and use the same direct stdio entry point. The
-root plugin package is the source of truth for the marketplace copy.
+Install `.[dev,mcp]`, run the marketplace synchronization check, and use the same direct stdio
+entry point. The root plugin package is the marketplace-copy source of truth.
 
-## Start the stdio server
+## Start and inspect
 
-Start the server with:
+Start the MCP stdio transport directly:
 
 ```bash
 codex-preflight-mcp
 ```
 
-The process uses MCP stdio transport. Standard output is reserved for protocol messages; client
-configuration should launch the executable directly rather than wrap it in a shell command.
+Standard output is reserved for protocol messages. Do not use a shell wrapper that writes banners.
 
-Inspect the static tool definitions without starting a protocol session:
+Inspect the default tool definitions without starting a protocol session:
 
 ```bash
 codex-preflight-mcp --list-tools
 ```
 
-## Plugin and generic process configuration
+Default inventory:
 
-The plugin-root `.mcp.json` is a direct server map:
-
-```json
-{
-  "codex-preflight": {
-    "command": "codex-preflight-mcp",
-    "args": []
-  }
-}
+```text
+preflight_check
+corpus_scan
 ```
 
-Clients that accept an executable plus an argument array can adapt
-[`examples/mcp/client-config.json`](../examples/mcp/client-config.json):
+Inspect the opt-in remote inventory in Bash:
+
+```bash
+CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN=1 codex-preflight-mcp --list-tools
+```
+
+PowerShell:
+
+```powershell
+$env:CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN = "1"
+codex-preflight-mcp --list-tools
+```
+
+Enabled inventory:
+
+```text
+preflight_check
+corpus_scan
+remote_repository_scan
+```
+
+Only exact `1` enables registration. Restart after changing the flag.
+
+## Process configuration
+
+The default plugin-root `.mcp.json` and generic
+[`client-config.json`](../examples/mcp/client-config.json) launch:
 
 ```json
 {
@@ -109,35 +121,42 @@ Clients that accept an executable plus an argument array can adapt
 }
 ```
 
-The enclosing configuration key varies by third-party client. This is a generic process-launch
-example, not a claim that a third-party client has been certified or tested.
+Clients with an explicit environment map can opt in to remote authority for that server process:
 
-Inspect or diagnose the supported Codex setup without writing configuration:
+```json
+{
+  "mcpServers": {
+    "codex-preflight": {
+      "command": "codex-preflight-mcp",
+      "args": [],
+      "env": {
+        "CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN": "1"
+      }
+    }
+  }
+}
+```
+
+The enclosing keys vary by client. This is a generic process example, not a certification claim.
+
+Inspect or diagnose Codex setup without writing configuration:
 
 ```bash
 codex-preflight mcp config --client codex
 codex-preflight mcp doctor --client codex
 ```
 
-Doctor reports a missing runtime, a present but instruction-incompatible runtime, and an
-instruction-capable runtime as distinct states. Its capability probe does not start a long-running
-server, install packages, or mutate the environment.
+Doctor does not install packages, edit config, start a long-running server, or mutate state.
 
 ## Exact tools and inputs
-
-The runtime exposes exactly two tools. The v0.3.0 ecosystem coverage release does not expand this
-authority boundary.
 
 ### `preflight_check`
 
 | Input | Required | Contract |
 | --- | --- | --- |
-| `cwd` | yes | Non-empty existing local directory path. |
-| `command` | yes | Planned command to analyze; it is never executed. |
-| `format` | no | Only `json`; defaults to `json`. |
-
-No other fields are accepted. In particular, remote repository URLs, trust mutation, and command
-execution arguments are rejected.
+| `cwd` | yes | Existing local directory. URLs and clone-like forms are rejected. |
+| `command` | yes | Planned command to analyze; never executed. |
+| `format` | no | Only `json`; default `json`. |
 
 Machine-checked files:
 
@@ -146,21 +165,17 @@ Machine-checked files:
 - [Decoded local-path error](../examples/mcp/cwd-url-error.json)
 - [Python stdio client](../examples/mcp/preflight_check_client.py)
 
-Run the Python example from a checkout after installing `.[mcp]`:
-
 ```bash
 python examples/mcp/preflight_check_client.py /path/to/local/repository "python -m pytest"
 ```
 
-The example asks the server to analyze the command string. It does not execute `python -m pytest`.
-The Python examples start the server with the current interpreter's
-`-m codex_preflight_mcp.server` module form so the client and server use the same installed package.
+The command string is analyzed but not executed.
 
 ### `corpus_scan`
 
 | Input | Required | Contract |
 | --- | --- | --- |
-| `case_id` | no | Bundled case identifier or `null`; omit it to scan all bundled cases. |
+| `case_id` | no | Bundled case ID or `null`; omit for all cases. |
 
 Machine-checked files:
 
@@ -168,25 +183,52 @@ Machine-checked files:
 - [Successful response](../examples/mcp/corpus-scan-response.json)
 - [Python stdio client](../examples/mcp/corpus_scan_client.py)
 
-Run one bundled case:
-
 ```bash
 python examples/mcp/corpus_scan_client.py --case-id nested-node-child-process
 ```
 
+### `remote_repository_scan`
+
+This tool exists only in an enabled server process.
+
+| Input | Required | Contract |
+| --- | --- | --- |
+| `remoteUrl` | yes | Public canonical GitHub HTTPS repository URL. |
+| `requestedRef` | yes | Explicit branch, tag, full ref, or 40-hex commit. |
+| `confirmationToken` | confirmed retry only | One-time token returned by the challenge call. |
+
+Machine-checked files:
+
+- [Challenge request](../examples/mcp/remote-repository-scan-request.json)
+- [Confirmation-required error](../examples/mcp/remote-confirmation-required.json)
+- [Successful response](../examples/mcp/remote-repository-scan-response.json)
+- [Human-confirming Python client](../examples/mcp/remote_repository_scan_client.py)
+
+Run the example only when remote network authority is intended:
+
+```bash
+python examples/mcp/remote_repository_scan_client.py https://github.com/example/project refs/heads/main
+```
+
+The example starts the server with the opt-in flag, requests a challenge, displays the canonical
+URL/ref/fixed limits, and requires the user to type `CONFIRM` before the second call. It does not
+accept credentials or auto-confirm. The confirmed operation performs only bounded static reads and
+never creates trust.
+
 ## Result and error handling
 
-Successful responses follow the [MCP Report Schema](mcp-report-schema.md). Check
-`mcpSchemaVersion` before consuming the result, then branch on `decision` for `preflight_check` or
-`passed` for `corpus_scan`.
+Successful responses follow [MCP Report Schema](mcp-report-schema.md). Check
+`mcpSchemaVersion`, then branch on `decision` for local/remote reports or `passed` for corpus
+results.
 
-Expected input failures use the structured error contract. Branch on `error.code`, display
-`error.message` and `error.remediation`, and use `error.retryable` to decide whether an unchanged
-retry makes sense. Do not parse the human message to infer the code.
+Expected failures use structured errors. Branch on `error.code`, display `error.message` and
+`error.remediation`, and use `retryable`; do not infer behavior from prose. The first valid remote
+call intentionally returns `MCP_REMOTE_CONFIRMATION_REQUIRED` with safe context. Invalid, expired,
+or replayed tokens never authorize network access.
 
 ## Evidence handling
 
-Repository-controlled evidence is untrusted data. Clients must preserve and enforce:
+Clients must preserve and enforce:
 
 ```json
 {
@@ -195,38 +237,25 @@ Repository-controlled evidence is untrusted data. Clients must preserve and enfo
 }
 ```
 
-Display evidence for review if useful, but never execute it, put it into a protocol tool
-description, or follow instructions found in it. The response `safety` block states the same
-boundary at the result level.
+Display evidence for review if useful, but never execute it, follow instructions in it, place it
+in a tool description, or use it to produce confirmation or trust. The response `safety` block
+states the same authority boundary.
 
-## Version compatibility
+## Troubleshooting and rollback
 
-Clients should reject unsupported `mcpSchemaVersion` major versions and tolerate additive fields
-within a supported major version. The core `schemaVersion` remains separately versioned for CLI
-JSON compatibility. Error consumers should branch on stable codes and tolerate new codes.
-
-## Troubleshooting
-
-- If the executable is not found, verify that the Python scripts directory is on `PATH` or use the
-  executable's explicit path in the client configuration.
-- If the optional runtime is missing, install `codex-preflight[mcp]` or source extra `.[mcp]`.
-- If doctor reports a present but instruction-incompatible runtime, run
-  `python -m pip install --upgrade "codex-preflight[mcp]"`. Codex Preflight will not start with a
-  runtime that silently drops its safety instructions.
-- If plugin startup fails, run `codex-preflight mcp doctor --client codex`; it reports remediation
-  but never installs packages or edits Codex configuration.
-- After plugin or MCP configuration updates, start a new Codex session or restart the desktop/IDE
-  client.
-- If `cwd` fails, use the remediation in the structured error and remember it is resolved relative
-  to the server process working directory.
-- If protocol parsing fails, ensure no wrapper writes banners or logs to standard output.
-- Repository identity metadata uses bounded, non-interactive Git calls. If Git metadata is
-  unavailable, scanning continues with low-confidence local-path provenance.
-- If a response contains evidence, treat it as untrusted data even when the overall decision is
-  `ALLOW`.
+- If the executable is absent, verify `PATH` or use its explicit path.
+- If the runtime is missing, install `codex-preflight[mcp]` or `.[mcp]`.
+- If doctor reports instruction-incompatible, upgrade `codex-preflight[mcp]`.
+- If `cwd` fails, use the structured remediation and remember it resolves from server cwd.
+- If protocol parsing fails, remove stdout-writing wrappers.
+- If remote registration is absent, verify exact startup value `1` and restart the server.
+- If a remote error is retryable, request a new challenge before retrying; tokens are one-time.
+- Disable remote authority by removing the environment flag and restarting. Local tools remain
+  functional and outstanding tokens are invalidated.
 
 ## Unavailable capabilities
 
-This release does not provide remote repository MCP scanning, trust-list or trust-mutation MCP
-tools, command execution, filesystem mutation, browser/HTTP integration, or artifact download.
-Only `preflight_check` and `corpus_scan` are available.
+No mode exposes trust-list or trust-mutation MCP tools, planned command execution, arbitrary hosts,
+private-repository credentials, proxy overrides, browser automation, artifact execution, package
+installation, submodule/LFS target fetch, or redirect following. The default process exposes only
+`preflight_check` and `corpus_scan`; the opt-in process adds only `remote_repository_scan`.

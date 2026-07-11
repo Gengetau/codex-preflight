@@ -1,5 +1,28 @@
 # Release History
 
+## v0.3.2
+
+Default-off public GitHub HTTPS remote MCP scan:
+
+- Added `remote_repository_scan` only when the process starts with exact
+  `CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN=1`; the default inventory remains exactly
+  `preflight_check` and `corpus_scan`.
+- Added a process-local HMAC confirmation challenge bound to canonical URL, explicit ref, host
+  policy, every fixed resource limit, random challenge identity, process key, and 300-second
+  expiry, with atomic one-time consumption before network access.
+- Enforced public GitHub HTTPS-only URL/ref policy, public DNS classification, validated-address
+  pinning, zero redirects, stripped credentials/proxies, and hardened shell-free Git settings.
+- Added shallow bare acquisition with no checkout, regular-blob-only materialization, path/mode
+  collision defenses, symlink/submodule/LFS skipping, fixed time/disk/byte/file/depth/concurrency
+  limits, isolated static scanning, process-tree cancellation, and verified cleanup.
+- Added a dedicated immutable-commit/policy-keyed, process-HMAC-protected remote cache plus bounded
+  redacted audit JSONL, both partitioned from local scan and trust state and fail-closed on error.
+- Preserved MCP schema `1.0`, report caps, policy explanation, and untrusted treat-as-data evidence;
+  successful remote results add bounded provenance and never create or consult trust.
+- Added synthetic and local-subprocess coverage for registration, confirmation, SSRF/address
+  policy, Git isolation, DNS pinning, limits, unsafe trees, cancellation, cleanup, cache, audit,
+  deterministic errors, evidence boundaries, and default-off rollback without live CI network use.
+
 ## v0.3.1
 
 Coverage calibration and report explainability:
