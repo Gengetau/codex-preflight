@@ -4,7 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from codex_preflight_core.repo.git import run_git
+from codex_preflight_core.repo.git import GIT_METADATA_TIMEOUT_SECONDS, run_git
 
 
 class RepoIdentityError(OSError):
@@ -94,10 +94,34 @@ def _read_git(
     cancellation_check: Callable[[], bool] | None,
     monotonic: Callable[[], float],
 ) -> str | None:
-    _check_budget(deadline, cancellation_check, monotonic)
-    result = run_git(root, *git_args)
+    timeout = _remaining_git_timeout(deadline, cancellation_check, monotonic)
+    result = run_git(root, *git_args, timeout=timeout)
     _check_budget(deadline, cancellation_check, monotonic)
     return result
+
+
+def _remaining_git_timeout(
+    deadline: float | None,
+    cancellation_check: Callable[[], bool] | None,
+    monotonic: Callable[[], float],
+) -> float:
+    if cancellation_check is not None:
+        try:
+            if cancellation_check():
+                raise RepoIdentityError("cancelled", "The target operation was cancelled.")
+        except RepoIdentityError:
+            raise
+        except Exception as error:
+            raise RepoIdentityError("cancelled", "The target operation was cancelled.") from error
+    if deadline is None:
+        return GIT_METADATA_TIMEOUT_SECONDS
+    try:
+        now = monotonic()
+    except Exception as error:
+        raise RepoIdentityError("timeout", "The target operation reached its timeout.") from error
+    if isinstance(now, bool) or not isinstance(now, (int, float)) or not math.isfinite(now) or now >= deadline:
+        raise RepoIdentityError("timeout", "The target operation reached its timeout.")
+    return min(GIT_METADATA_TIMEOUT_SECONDS, float(deadline - now))
 
 
 def _check_budget(

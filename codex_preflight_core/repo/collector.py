@@ -95,34 +95,55 @@ def collect_critical_files(
     root = root.resolve()
     _check_budget(budget_check)
     collected: set[Path] = set()
-    for current, dirs, files in os.walk(root):
+    pending = [root]
+    while pending:
         _check_budget(budget_check)
-        current_path = Path(current)
-        retained_dirs: list[str] = []
-        for directory in dirs:
-            _check_budget(budget_check)
-            candidate = current_path / directory
-            if directory in SKIP_DIRS:
-                continue
-            if not _is_safe_directory(candidate):
-                if reject_unsafe:
-                    raise CriticalFileCollectionError("A repository directory is unsafe.")
-                continue
-            if not (candidate / FIXTURE_MARKER).exists():
-                retained_dirs.append(directory)
-            _check_budget(budget_check)
-        dirs[:] = retained_dirs
-        for filename in files:
-            _check_budget(budget_check)
-            path = current_path / filename
-            relative = path.relative_to(root).as_posix()
-            if is_critical_path(relative):
-                if not _is_safe_file(path):
+        current_path = pending.pop()
+        try:
+            iterator = os.scandir(current_path)
+        except OSError as error:
+            if reject_unsafe:
+                raise CriticalFileCollectionError("A repository directory is unavailable.") from error
+            continue
+        with iterator:
+            while True:
+                _check_budget(budget_check)
+                try:
+                    entry = next(iterator)
+                except StopIteration:
+                    break
+                except OSError as error:
                     if reject_unsafe:
-                        raise CriticalFileCollectionError("A critical file is unsafe.")
+                        raise CriticalFileCollectionError("A repository entry is unavailable.") from error
+                    break
+                _check_budget(budget_check)
+                path = Path(entry.path)
+                try:
+                    info = entry.stat(follow_symlinks=False)
+                except OSError as error:
+                    if reject_unsafe:
+                        raise CriticalFileCollectionError("A repository entry is unavailable.") from error
                     continue
-                _add_collected(collected, Path(relative), max_files=max_files)
-            _check_budget(budget_check)
+                reparse = entry.is_symlink() or _is_reparse(info)
+                if reject_unsafe and reparse:
+                    raise CriticalFileCollectionError("A repository entry is unsafe.")
+                if stat.S_ISDIR(info.st_mode):
+                    if entry.name in SKIP_DIRS or reparse:
+                        continue
+                    if _has_fixture_marker(path, reject_unsafe=reject_unsafe):
+                        continue
+                    pending.append(path)
+                    _check_budget(budget_check)
+                    continue
+
+                relative = path.relative_to(root).as_posix()
+                if is_critical_path(relative):
+                    if not _is_safe_file(root, path, reject_unsafe=reject_unsafe):
+                        if reject_unsafe:
+                            raise CriticalFileCollectionError("A critical file is unsafe.")
+                        continue
+                    _add_collected(collected, Path(relative), max_files=max_files)
+                _check_budget(budget_check)
     for target in _command_target_files(
         root,
         command,
@@ -135,7 +156,16 @@ def collect_critical_files(
     return sorted(collected, key=lambda item: item.as_posix())
 
 
-def _is_safe_file(path: Path) -> bool:
+def _is_safe_file(root: Path, path: Path, *, reject_unsafe: bool) -> bool:
+    if not reject_unsafe:
+        if not path.is_file():
+            return False
+        if path.is_symlink():
+            try:
+                path.resolve().relative_to(root)
+            except (OSError, ValueError):
+                return False
+        return True
     try:
         info = path.lstat()
     except OSError:
@@ -148,12 +178,19 @@ def _is_safe_file(path: Path) -> bool:
     )
 
 
-def _is_safe_directory(path: Path) -> bool:
+def _has_fixture_marker(path: Path, *, reject_unsafe: bool) -> bool:
+    marker = path / FIXTURE_MARKER
     try:
-        info = path.lstat()
-    except OSError:
+        info = marker.lstat()
+    except FileNotFoundError:
         return False
-    return stat.S_ISDIR(info.st_mode) and not stat.S_ISLNK(info.st_mode) and not _is_reparse(info)
+    except OSError as error:
+        if reject_unsafe:
+            raise CriticalFileCollectionError("A fixture marker is unavailable.") from error
+        return False
+    if reject_unsafe and (stat.S_ISLNK(info.st_mode) or _is_reparse(info)):
+        raise CriticalFileCollectionError("A fixture marker is unsafe.")
+    return True
 
 
 def _command_target_files(
@@ -199,17 +236,17 @@ def _command_target_files_for_segment(
     target = Path(parts[1].strip("\"'"))
     if target.is_absolute():
         return []
-    path = (root / target).absolute()
+    path = (root / target).absolute() if reject_unsafe else (root / target).resolve()
     _check_budget(budget_check)
     try:
         relative = path.relative_to(root)
     except ValueError:
         return []
-    if os.path.lexists(path) and not _is_safe_file(path):
+    if os.path.lexists(path) and not _is_safe_file(root, path, reject_unsafe=reject_unsafe):
         if reject_unsafe:
             raise CriticalFileCollectionError("A command target file is unsafe.")
         return []
-    if _is_safe_file(path):
+    if _is_safe_file(root, path, reject_unsafe=reject_unsafe):
         return [Path(relative.as_posix())]
     return []
 

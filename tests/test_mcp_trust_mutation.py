@@ -250,6 +250,7 @@ def test_approval_first_call_is_only_a_fixed_human_challenge(tmp_path: Path) -> 
         "deadline": 30.0,
         "cancellation_check": None,
         "monotonic": service.monotonic,
+        "strict_safety": True,
     }
     assert [event for event, _context in audit.events] == [
         "request_validated",
@@ -348,6 +349,66 @@ def test_nonlocal_windows_paths_are_rejected_before_filesystem_git_or_network_ac
     assert caught.value.code == "MCP_TRUST_MUTATION_INVALID_ARGUMENT"
     assert caught.value.field == "cwd"
     assert cache.path.name == "trust.json"
+    assert [event for event, _context in audit.events] == ["request_validation_failed"]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows UNC symlink fixture")
+def test_nested_local_symlink_to_unc_is_rejected_before_target_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from codex_preflight_mcp.trust_mutation import TrustMutationError
+
+    service, _cache, _root, _values, audit = _service(tmp_path)
+    local = tmp_path / "local"
+    local.mkdir()
+    link = local / "remote-link"
+    try:
+        link.symlink_to(r"\\192.0.2.1\unreachable-share", target_is_directory=True)
+    except OSError:
+        pytest.skip("directory symlinks are unavailable")
+    requested = link / "repo"
+    path_type = type(requested)
+    real_exists = path_type.exists
+    real_is_dir = path_type.is_dir
+    real_resolve = path_type.resolve
+
+    def forbid_target_access(path: Path, *args: object, **kwargs: object):
+        if path == requested or link in path.parents:
+            raise AssertionError("cwd validation followed the nested UNC reparse target")
+        operation = kwargs.pop("operation")
+        if operation == "exists":
+            return real_exists(path, *args, **kwargs)
+        if operation == "is_dir":
+            return real_is_dir(path, *args, **kwargs)
+        return real_resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(
+        path_type,
+        "exists",
+        lambda path, *args, **kwargs: forbid_target_access(path, *args, operation="exists", **kwargs),
+    )
+    monkeypatch.setattr(
+        path_type,
+        "is_dir",
+        lambda path, *args, **kwargs: forbid_target_access(path, *args, operation="is_dir", **kwargs),
+    )
+    monkeypatch.setattr(
+        path_type,
+        "resolve",
+        lambda path, *args, **kwargs: forbid_target_access(path, *args, operation="resolve", **kwargs),
+    )
+
+    with pytest.raises(TrustMutationError) as caught:
+        service.approve(
+            cwd=str(requested),
+            command="python private_script.py",
+            expires_at=EXPIRES_AT,
+            reason="reviewed",
+        )
+
+    assert caught.value.code == "MCP_TRUST_MUTATION_INVALID_ARGUMENT"
+    assert caught.value.field == "cwd"
     assert [event for event, _context in audit.events] == ["request_validation_failed"]
 
 
@@ -678,6 +739,7 @@ def test_real_audit_records_cannot_interleave_between_prepare_and_commit(tmp_pat
     original_record = service._record
 
     def paused_prepare(**kwargs: object) -> PreparedMutation:
+        assert audit.reservation_path.exists()
         result = original_prepare(**kwargs)  # type: ignore[arg-type]
         prepared.set()
         if not release_prepare.wait(5):
@@ -751,6 +813,7 @@ def test_atomic_store_write_failure_leaves_recoverable_prepared_tail(
     assert "private" not in str(caught.value).lower()
     assert not cache.path.exists()
     assert _audit_events(audit)[-1] == "mutation_prepared"
+    assert audit.reservation_path.exists()
 
     with pytest.raises(TrustMutationError) as unhealthy:
         service.approve(
@@ -764,6 +827,7 @@ def test_atomic_store_write_failure_leaves_recoverable_prepared_tail(
 
     recovery = service.recover_startup()
     assert recovery.status == "recovery_aborted"
+    assert not audit.reservation_path.exists()
     assert _audit_events(audit)[-1] == "recovery_aborted"
 
 

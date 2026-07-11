@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import multiprocessing
 import os
 import stat
 from contextlib import contextmanager
@@ -72,6 +73,79 @@ def _records(path: Path) -> list[dict[str, object]]:
     return records
 
 
+def _cross_process_mutation_worker(
+    home: str,
+    store_path: str,
+    prepared_event: object,
+    release_event: object,
+) -> None:
+    audit = _audit(Path(home))
+    with audit.mutation_transaction() as reservation:
+        prepared = audit.prepare_mutation(
+            operation="approve",
+            before_bytes=None,
+            after_bytes=AFTER,
+            entry_id=ENTRY_ID,
+            context=_context(),
+            reservation=reservation,
+        )
+        prepared_event.set()  # type: ignore[attr-defined]
+        if not release_event.wait(10):  # type: ignore[attr-defined]
+            raise RuntimeError("test release barrier timed out")
+        Path(store_path).write_bytes(AFTER)
+        audit.commit_mutation(prepared, context=_context(outcome="committed"), reservation=reservation)
+
+
+def _cross_process_record_worker(
+    home: str,
+    prepared_event: object,
+    attempted_event: object,
+    finished_event: object,
+) -> None:
+    if not prepared_event.wait(10):  # type: ignore[attr-defined]
+        raise RuntimeError("test prepare barrier timed out")
+    attempted_event.set()  # type: ignore[attr-defined]
+    audit = _audit(Path(home))
+    audit.record(
+        "registration_state",
+        context=_context(
+            operation_id="723e4567-e89b-42d3-a456-426614174000",
+            target_hash=None,
+            entry_id=None,
+            scope=None,
+            policy_version=None,
+            ruleset_version=None,
+            challenge_id=None,
+            outcome="enabled",
+            entry_version=None,
+        ),
+    )
+    finished_event.set()  # type: ignore[attr-defined]
+
+
+def _cross_process_record_result_worker(home: str, result_queue: object) -> None:
+    audit = _audit(Path(home))
+    try:
+        audit.record(
+            "registration_state",
+            context=_context(
+                operation_id="823e4567-e89b-42d3-a456-426614174000",
+                target_hash=None,
+                entry_id=None,
+                scope=None,
+                policy_version=None,
+                ruleset_version=None,
+                challenge_id=None,
+                outcome="enabled",
+                entry_version=None,
+            ),
+        )
+    except TrustMutationAuditError as error:
+        result_queue.put(error.code)  # type: ignore[attr-defined]
+    else:
+        result_queue.put("recorded")  # type: ignore[attr-defined]
+
+
 def test_mutation_paths_use_a_dedicated_application_home_namespace(tmp_path: Path) -> None:
     assert trust_mutation_audit_path(tmp_path) == tmp_path / "trust-mutation" / "audit.jsonl"
     assert trust_mutation_audit_key_path(tmp_path) == tmp_path / "trust-mutation" / "audit.key"
@@ -110,8 +184,20 @@ def test_directory_key_audit_lock_and_rotated_segments_are_owner_only_on_every_p
             ),
         )
 
+    with audit.mutation_transaction():
+        assert audit.reservation_path.read_bytes() == b'{"version":"trust-mutation-reservation/v1"}\n'
+        assert audit_module._paths_are_owner_only([audit.reservation_path])
+
     lock_path = audit.path.with_suffix(f"{audit.path.suffix}.lock")
-    paths = [audit.path.parent, audit.key_path, audit.path, lock_path, audit.path.with_name("audit.jsonl.1")]
+    reservation_lock_path = audit.reservation_path.with_suffix(f"{audit.reservation_path.suffix}.lock")
+    paths = [
+        audit.path.parent,
+        audit.key_path,
+        audit.path,
+        lock_path,
+        reservation_lock_path,
+        audit.path.with_name("audit.jsonl.1"),
+    ]
     assert all(path.exists() for path in paths)
     assert audit_module._paths_are_owner_only(paths)
 
@@ -430,6 +516,81 @@ def test_prepare_fsyncs_before_store_write_and_commit_fsyncs_after(tmp_path: Pat
     assert prepared.event_id != committed_id
     assert prepared.before_state_digest != prepared.after_state_digest
     assert prepared.before_state_digest.startswith("hmac-sha256:")
+
+
+def test_cross_process_reservation_blocks_records_across_prepare_store_and_commit(tmp_path: Path) -> None:
+    audit = _audit(tmp_path)
+    audit.record("request_validated", context=_context(outcome="validated"))
+    context = multiprocessing.get_context("spawn")
+    prepared_event = context.Event()
+    release_event = context.Event()
+    attempted_event = context.Event()
+    finished_event = context.Event()
+    store_path = tmp_path / "trust.json"
+    mutation = context.Process(
+        target=_cross_process_mutation_worker,
+        args=(str(tmp_path), str(store_path), prepared_event, release_event),
+    )
+    ordinary_record = context.Process(
+        target=_cross_process_record_worker,
+        args=(str(tmp_path), prepared_event, attempted_event, finished_event),
+    )
+
+    mutation.start()
+    ordinary_record.start()
+    try:
+        assert prepared_event.wait(5)
+        assert attempted_event.wait(5)
+        assert not finished_event.wait(0.3)
+    finally:
+        release_event.set()
+        mutation.join(10)
+        ordinary_record.join(10)
+
+    assert mutation.exitcode == 0
+    assert ordinary_record.exitcode == 0
+    assert store_path.read_bytes() == AFTER
+    events = [record["event"] for record in _records(audit.path)]
+    prepared_index = events.index("mutation_prepared")
+    committed_index = events.index("mutation_committed")
+    registration_index = events.index("registration_state")
+    assert prepared_index < committed_index < registration_index
+    assert not audit.reservation_path.exists()
+
+
+def test_failed_write_reservation_blocks_other_process_until_recovery(tmp_path: Path) -> None:
+    audit = _audit(tmp_path)
+    audit.record("request_validated", context=_context(outcome="validated"))
+
+    with audit.mutation_transaction() as reservation:
+        prepared = audit.prepare_mutation(
+            operation="approve",
+            before_bytes=None,
+            after_bytes=AFTER,
+            entry_id=ENTRY_ID,
+            context=_context(),
+            reservation=reservation,
+        )
+
+    assert audit.reservation_path.exists()
+    assert _records(audit.path)[-1]["eventId"] == prepared.event_id
+    context = multiprocessing.get_context("spawn")
+    result_queue = context.Queue()
+    ordinary_record = context.Process(
+        target=_cross_process_record_result_worker,
+        args=(str(tmp_path), result_queue),
+    )
+    ordinary_record.start()
+    ordinary_record.join(10)
+
+    assert ordinary_record.exitcode == 0
+    assert result_queue.get(timeout=2) == "MCP_TRUST_MUTATION_RECOVERY_REQUIRED"
+    assert _records(audit.path)[-1]["eventId"] == prepared.event_id
+
+    recovery = audit.verify_and_recover(read_store_bytes=lambda: None)
+    assert recovery.status == "recovery_aborted"
+    assert not audit.reservation_path.exists()
+    assert _records(audit.path)[-1]["event"] == "recovery_aborted"
 
 
 def test_prepare_rejects_identical_before_and_after_state(tmp_path: Path) -> None:

@@ -33,6 +33,7 @@ AUDIT_KEY_BYTES = 32
 
 _AUDIT_VERSION = "trust-mutation-audit/v1"
 _KEY_VERSION = "trust-mutation-audit-key/v1"
+_RESERVATION_BYTES = b'{"version":"trust-mutation-reservation/v1"}\n'
 _AUDIT_MAC_DOMAIN = b"codex-preflight/trust-mutation/audit-record/v1\x00"
 _STATE_MAC_DOMAIN = b"codex-preflight/trust-mutation/trust-state/v1\x00"
 _ANCHOR_MAC_DOMAIN = b"codex-preflight/trust-mutation/chain-anchor/v1\x00"
@@ -186,6 +187,15 @@ class PreparedMutation:
     record_mac: str
 
 
+@dataclass
+class _MutationReservation:
+    owner: object
+    active: bool = True
+    prepare_attempted: bool = False
+    prepared_event_id: str | None = None
+    completed: bool = False
+
+
 @dataclass(frozen=True)
 class _AnchorSnapshot:
     segments: tuple[tuple[str, int, str], ...]
@@ -230,14 +240,22 @@ class TrustMutationAuditLog:
         self.max_rotated_segments = max_rotated_segments
         self.max_total_bytes = max_total_bytes
 
+    @property
+    def reservation_path(self) -> Path:
+        return self.path.with_name("mutation.reserve")
+
     def record(self, event: str, *, context: AuditContext) -> str:
         result: str | None = None
         failure: TrustMutationAuditError | None = None
         try:
-            key = self._load_or_create_key()
-            record = self._build_record(event, context=context)
-            with self._locked():
-                result, _record_mac = self._append_record_unlocked(record, key)
+            with self._reservation_locked():
+                self._require_no_reservation_marker()
+                key = self._load_or_create_key()
+                record = self._build_record(event, context=context)
+                with self._locked():
+                    result, _record_mac = self._append_record_unlocked(record, key)
+        except _RecoveryRequired:
+            failure = _recovery_required()
         except Exception:
             failure = _audit_failed()
         if failure is not None:
@@ -254,28 +272,34 @@ class TrustMutationAuditLog:
         after_bytes: bytes | None,
         entry_id: str,
         context: AuditContext,
+        reservation: object | None = None,
     ) -> PreparedMutation:
         result: PreparedMutation | None = None
         failure: TrustMutationAuditError | None = None
         try:
-            _required_operation(operation)
-            _required_uuid(entry_id)
-            if operation != context.operation or entry_id != context.entry_id:
-                raise ValueError("mutation binding mismatch")
-            key = self._load_or_create_key()
-            before_digest = self._state_digest(before_bytes, key)
-            after_digest = self._state_digest(after_bytes, key)
-            if hmac.compare_digest(before_digest, after_digest):
-                raise ValueError("mutation state is unchanged")
-            record = self._build_record(
-                "mutation_prepared",
-                context=context,
-                before_state_digest=before_digest,
-                after_state_digest=after_digest,
-            )
-            with self._locked():
-                event_id, record_mac = self._append_record_unlocked(record, key)
-            result = PreparedMutation(event_id, operation, entry_id, before_digest, after_digest, record_mac)
+            if reservation is None:
+                with self._reservation_locked():
+                    self._require_no_reservation_marker()
+                    result = self._prepare_mutation(
+                        operation=operation,
+                        before_bytes=before_bytes,
+                        after_bytes=after_bytes,
+                        entry_id=entry_id,
+                        context=context,
+                        reservation=None,
+                    )
+            else:
+                active = self._require_active_reservation(reservation)
+                result = self._prepare_mutation(
+                    operation=operation,
+                    before_bytes=before_bytes,
+                    after_bytes=after_bytes,
+                    entry_id=entry_id,
+                    context=context,
+                    reservation=active,
+                )
+        except _RecoveryRequired:
+            failure = _recovery_required()
         except Exception:
             failure = _audit_failed()
         if failure is not None:
@@ -284,24 +308,25 @@ class TrustMutationAuditLog:
             raise _audit_failed()
         return result
 
-    def commit_mutation(self, prepared: PreparedMutation, *, context: AuditContext) -> str:
+    def commit_mutation(
+        self,
+        prepared: PreparedMutation,
+        *,
+        context: AuditContext,
+        reservation: object | None = None,
+    ) -> str:
         result: str | None = None
         failure: TrustMutationAuditError | None = None
         try:
-            self._validate_prepared(prepared, context)
-            key = self._load_or_create_key()
-            record = self._build_record(
-                "mutation_committed",
-                context=context,
-                before_state_digest=prepared.before_state_digest,
-                after_state_digest=prepared.after_state_digest,
-                prepared_event_id=prepared.event_id,
-            )
-            with self._locked():
-                records, _last_mac = self._verify_chain_unlocked(key)
-                actual = self._require_unmatched_tail(records, prepared.event_id)
-                self._require_complete_prepare_binding(actual, prepared, context)
-                result, _record_mac = self._append_record_unlocked(record, key)
+            if reservation is None:
+                with self._reservation_locked():
+                    self._require_no_reservation_marker()
+                    result = self._commit_mutation(prepared, context=context, reservation=None)
+            else:
+                active = self._require_active_reservation(reservation)
+                result = self._commit_mutation(prepared, context=context, reservation=active)
+        except _RecoveryRequired:
+            failure = _recovery_required()
         except Exception:
             failure = _audit_failed()
         if failure is not None:
@@ -314,9 +339,10 @@ class TrustMutationAuditLog:
         result: RecoveryResult | None = None
         failure: TrustMutationAuditError | None = None
         try:
-            key = self._load_or_create_key()
-            with self._locked():
-                records, _last_mac = self._verify_chain_unlocked(key)
+            with self._reservation_locked():
+                key = self._load_or_create_key()
+                with self._locked():
+                    records, _last_mac = self._verify_chain_unlocked(key)
                 unmatched = self._unmatched_prepares(records)
                 if not unmatched:
                     result = RecoveryResult("clean")
@@ -349,10 +375,16 @@ class TrustMutationAuditLog:
                         prepared_event_id=str(prepared["eventId"]),
                     )
                     try:
-                        event_id, _record_mac = self._append_record_unlocked(recovery, key)
+                        with self._locked():
+                            current_records, _last_mac = self._verify_chain_unlocked(key)
+                            actual = self._require_unmatched_tail(current_records, str(prepared["eventId"]))
+                            if actual != prepared:
+                                raise _RecoveryRequired
+                            event_id, _record_mac = self._append_record_unlocked(recovery, key)
                     except Exception:
                         raise _RecoveryRequired from None
                     result = RecoveryResult(status, event_id, str(prepared["eventId"]))
+                self._clear_reservation_marker()
         except _IntegrityError:
             failure = _corrupt()
         except _RecoveryRequired:
@@ -364,6 +396,155 @@ class TrustMutationAuditLog:
         if result is None:
             raise _recovery_required()
         return result
+
+    @contextmanager
+    def mutation_transaction(self) -> Iterator[object]:
+        lock = self._reservation_locked()
+        entered = False
+        try:
+            lock.__enter__()
+            entered = True
+            self._require_no_reservation_marker()
+            reservation = _MutationReservation(self)
+            self._create_reservation_marker()
+        except _RecoveryRequired:
+            if entered:
+                try:
+                    lock.__exit__(None, None, None)
+                except Exception:
+                    pass
+            raise _recovery_required() from None
+        except Exception:
+            if entered:
+                try:
+                    lock.__exit__(None, None, None)
+                except Exception:
+                    pass
+            raise _audit_failed() from None
+
+        try:
+            yield reservation
+        except BaseException:
+            try:
+                self._finish_reservation(reservation)
+            except Exception:
+                pass
+            finally:
+                reservation.active = False
+                try:
+                    lock.__exit__(None, None, None)
+                except Exception:
+                    pass
+            raise
+        else:
+            try:
+                self._finish_reservation(reservation)
+            except Exception:
+                raise _audit_failed() from None
+            finally:
+                reservation.active = False
+                try:
+                    lock.__exit__(None, None, None)
+                except Exception:
+                    raise _audit_failed() from None
+
+    def _prepare_mutation(
+        self,
+        *,
+        operation: str,
+        before_bytes: bytes | None,
+        after_bytes: bytes | None,
+        entry_id: str,
+        context: AuditContext,
+        reservation: _MutationReservation | None,
+    ) -> PreparedMutation:
+        _required_operation(operation)
+        _required_uuid(entry_id)
+        if operation != context.operation or entry_id != context.entry_id:
+            raise ValueError("mutation binding mismatch")
+        if reservation is not None:
+            reservation.prepare_attempted = True
+        key = self._load_or_create_key()
+        before_digest = self._state_digest(before_bytes, key)
+        after_digest = self._state_digest(after_bytes, key)
+        if hmac.compare_digest(before_digest, after_digest):
+            raise ValueError("mutation state is unchanged")
+        record = self._build_record(
+            "mutation_prepared",
+            context=context,
+            before_state_digest=before_digest,
+            after_state_digest=after_digest,
+        )
+        with self._locked():
+            event_id, record_mac = self._append_record_unlocked(record, key)
+        if reservation is not None:
+            reservation.prepared_event_id = event_id
+        return PreparedMutation(event_id, operation, entry_id, before_digest, after_digest, record_mac)
+
+    def _commit_mutation(
+        self,
+        prepared: PreparedMutation,
+        *,
+        context: AuditContext,
+        reservation: _MutationReservation | None,
+    ) -> str:
+        self._validate_prepared(prepared, context)
+        if reservation is not None and reservation.prepared_event_id != prepared.event_id:
+            raise ValueError("prepared mutation does not belong to reservation")
+        key = self._load_or_create_key()
+        record = self._build_record(
+            "mutation_committed",
+            context=context,
+            before_state_digest=prepared.before_state_digest,
+            after_state_digest=prepared.after_state_digest,
+            prepared_event_id=prepared.event_id,
+        )
+        with self._locked():
+            records, _last_mac = self._verify_chain_unlocked(key)
+            actual = self._require_unmatched_tail(records, prepared.event_id)
+            self._require_complete_prepare_binding(actual, prepared, context)
+            result, _record_mac = self._append_record_unlocked(record, key)
+        if reservation is not None:
+            reservation.completed = True
+        return result
+
+    def _require_active_reservation(self, reservation: object) -> _MutationReservation:
+        if (
+            not isinstance(reservation, _MutationReservation)
+            or reservation.owner is not self
+            or not reservation.active
+            or not _lexists(self.reservation_path)
+        ):
+            raise ValueError("invalid mutation reservation")
+        return reservation
+
+    def _create_reservation_marker(self) -> None:
+        with _secure_open_file(self.reservation_path, "exclusive") as handle:
+            self._write_bytes(handle, _RESERVATION_BYTES)
+            self._flush_and_fsync(handle)
+        self._fsync_directory()
+
+    def _clear_reservation_marker(self) -> None:
+        if _lexists(self.reservation_path):
+            _secure_unlink(self.reservation_path)
+            self._fsync_directory()
+
+    def _finish_reservation(self, reservation: _MutationReservation) -> None:
+        if not reservation.prepare_attempted or reservation.completed:
+            self._clear_reservation_marker()
+
+    def _require_no_reservation_marker(self) -> None:
+        if _lexists(self.reservation_path):
+            raise _RecoveryRequired
+
+    @contextmanager
+    def _reservation_locked(self) -> Iterator[None]:
+        self._ensure_directory()
+        with locked_cache_file(
+            self.reservation_path,
+            lock_opener=lambda lock_path: _secure_open_file(lock_path, "append"),
+        ):
+            yield
 
     @contextmanager
     def _locked(self) -> Iterator[None]:

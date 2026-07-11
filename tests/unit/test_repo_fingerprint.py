@@ -1,12 +1,15 @@
 import os
 import subprocess
 from pathlib import Path
-from typing import BinaryIO
+from types import SimpleNamespace
+from typing import Any, BinaryIO
 
 import pytest
 
+from codex_preflight_core.repo import collector as collector_module
+from codex_preflight_core.repo import git as git_module
 from codex_preflight_core.repo import identity as identity_module
-from codex_preflight_core.repo.collector import collect_critical_files
+from codex_preflight_core.repo.collector import CriticalFileCollectionError, collect_critical_files
 from codex_preflight_core.repo.fingerprint import CriticalFingerprintError, compute_critical_fingerprint
 from codex_preflight_core.repo.identity import resolve_repo_identity
 
@@ -69,6 +72,125 @@ def test_fingerprint_cancellation_is_checked_during_empty_tree_traversal(tmp_pat
     assert checks == 2
 
 
+def test_scandir_checks_cancellation_before_consuming_the_next_large_directory_entry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for index in range(100):
+        (tmp_path / f"ordinary-{index}.txt").write_text("data", encoding="utf-8")
+    real_scandir = collector_module.os.scandir
+    next_calls = [0]
+
+    class GuardedScandir:
+        def __init__(self, path: object) -> None:
+            self.inner = real_scandir(path)
+
+        def __enter__(self):
+            self.inner.__enter__()
+            return self
+
+        def __exit__(self, *args: object):
+            return self.inner.__exit__(*args)
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            next_calls[0] += 1
+            return next(self.inner)
+
+    def budget_check() -> None:
+        if next_calls[0]:
+            raise CriticalFingerprintError("cancelled", "cancelled inside one large directory")
+
+    def guarded_scandir(path: object):
+        if Path(path) == tmp_path:
+            return GuardedScandir(path)
+        return real_scandir(path)
+
+    monkeypatch.setattr(collector_module.os, "scandir", guarded_scandir)
+
+    with pytest.raises(CriticalFingerprintError) as caught:
+        collect_critical_files(tmp_path, budget_check=budget_check, reject_unsafe=True)
+
+    assert caught.value.code == "cancelled"
+    assert next_calls == [1]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows UNC symlink fixture")
+def test_strict_scandir_rejects_junction_like_entry_without_following_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    link = tmp_path / "remote-dir"
+    try:
+        link.symlink_to(r"\\192.0.2.1\unreachable-share", target_is_directory=True)
+    except OSError:
+        pytest.skip("directory symlinks are unavailable")
+    real_scandir = collector_module.os.scandir
+
+    class GuardedEntry:
+        def __init__(self, entry: Any) -> None:
+            self.entry = entry
+            self.name = entry.name
+            self.path = entry.path
+
+        def is_dir(self, *, follow_symlinks: bool = True) -> bool:
+            if Path(self.path) == link and follow_symlinks:
+                raise AssertionError("strict traversal followed the UNC reparse target")
+            return bool(self.entry.is_dir(follow_symlinks=follow_symlinks))
+
+        def stat(self, *, follow_symlinks: bool = True):
+            if Path(self.path) == link and follow_symlinks:
+                raise AssertionError("strict traversal stat followed the UNC reparse target")
+            return self.entry.stat(follow_symlinks=follow_symlinks)
+
+        def is_symlink(self) -> bool:
+            return bool(self.entry.is_symlink())
+
+    class GuardedScandir:
+        def __init__(self, path: object) -> None:
+            self.inner = real_scandir(path)
+
+        def __enter__(self):
+            self.inner.__enter__()
+            return self
+
+        def __exit__(self, *args: object):
+            return self.inner.__exit__(*args)
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            return GuardedEntry(next(self.inner))
+
+    def guarded_scandir(path: object):
+        if Path(path) == tmp_path:
+            return GuardedScandir(path)
+        return real_scandir(path)
+
+    monkeypatch.setattr(collector_module.os, "scandir", guarded_scandir)
+
+    with pytest.raises(CriticalFileCollectionError):
+        collect_critical_files(tmp_path, reject_unsafe=True)
+
+
+def test_ordinary_collection_and_fingerprint_preserve_internal_critical_symlink_compatibility(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "readme-source.txt"
+    critical = tmp_path / "README.md"
+    source.write_text("internal linked documentation", encoding="utf-8")
+    try:
+        critical.symlink_to(source)
+    except OSError:
+        pytest.skip("file symlinks are unavailable")
+
+    assert collect_critical_files(tmp_path) == [Path("README.md")]
+    assert compute_critical_fingerprint(tmp_path).startswith("sha256:")
+
+
 def test_fingerprint_reads_bounded_chunks_and_checks_cancellation_between_reads(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -120,7 +242,7 @@ def test_fingerprint_rejects_hard_linked_critical_files(tmp_path: Path) -> None:
     os.link(source, target)
 
     with pytest.raises(CriticalFingerprintError) as caught:
-        compute_critical_fingerprint(tmp_path)
+        compute_critical_fingerprint(tmp_path, strict_safety=True)
 
     assert caught.value.code == "unavailable"
 
@@ -135,7 +257,7 @@ def test_fingerprint_rejects_critical_file_reparse_points(tmp_path: Path) -> Non
         pytest.skip("file symlinks are unavailable")
 
     with pytest.raises(CriticalFingerprintError) as caught:
-        compute_critical_fingerprint(tmp_path)
+        compute_critical_fingerprint(tmp_path, strict_safety=True)
 
     assert caught.value.code == "unavailable"
 
@@ -156,7 +278,7 @@ def test_fingerprint_rejects_windows_junction_roots(tmp_path: Path) -> None:
         pytest.skip("unable to create a Windows junction fixture")
 
     with pytest.raises(CriticalFingerprintError) as caught:
-        compute_critical_fingerprint(junction_root)
+        compute_critical_fingerprint(junction_root, strict_safety=True)
 
     assert caught.value.code == "unavailable"
 
@@ -170,7 +292,7 @@ def test_repo_identity_checks_budget_after_each_fixed_git_read(
     calls: list[tuple[str, ...]] = []
     expired = False
 
-    def fixed_git_read(_root: Path, *args: str) -> str:
+    def fixed_git_read(_root: Path, *args: str, timeout: float) -> str:
         nonlocal expired
         calls.append(args)
         expired = True
@@ -188,3 +310,36 @@ def test_repo_identity_checks_budget_after_each_fixed_git_read(
 
     assert getattr(caught.value, "code", None) == boundary
     assert calls == [("rev-parse", "--show-toplevel")]
+
+
+def test_repo_identity_passes_remaining_deadline_to_git_reader(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    timeouts: list[float] = []
+
+    def fixed_git_read(_root: Path, *_args: str, timeout: float) -> None:
+        timeouts.append(timeout)
+
+    monkeypatch.setattr(identity_module, "run_git", fixed_git_read)
+
+    identity = resolve_repo_identity(tmp_path, deadline=30.0, monotonic=lambda: 29.75)
+
+    assert identity.identity_confidence == "low"
+    assert timeouts == [pytest.approx(0.25)]
+
+
+def test_run_git_forwards_supplied_remaining_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[float] = []
+
+    def observed_run(*_args: object, timeout: float, **_kwargs: object) -> object:
+        seen.append(timeout)
+        return SimpleNamespace(returncode=0, stdout="ok\n")
+
+    monkeypatch.setattr(git_module.subprocess, "run", observed_run)
+
+    assert git_module.run_git(tmp_path, "status", timeout=0.25) == "ok"
+    assert seen == [0.25]

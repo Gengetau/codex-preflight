@@ -20,6 +20,23 @@ from codex_preflight_core.cache.trust_cache import TrustCache, TrustCacheMutatio
 HEAD = "a" * 40
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows ACE fixture")
+@pytest.mark.parametrize("ace_type", [0x05, 0x09, 0x0B])
+def test_unsupported_allow_ace_with_world_sid_fails_closed(ace_type: int) -> None:
+    world_sid = b"\x01\x01\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00"
+    ace_size = file_lock.ctypes.sizeof(file_lock._ACE_HEADER) + file_lock.ctypes.sizeof(file_lock.wintypes.DWORD)
+    fixture = file_lock.ctypes.create_string_buffer(ace_size + len(world_sid))
+    header = file_lock._ACE_HEADER.from_buffer(fixture)
+    header.AceType = ace_type
+    header.AceSize = len(fixture)
+    file_lock.ctypes.memmove(file_lock.ctypes.addressof(fixture) + ace_size, world_sid, len(world_sid))
+
+    assert not file_lock._windows_ace_is_private(
+        file_lock.ctypes.c_void_p(file_lock.ctypes.addressof(fixture)),
+        {file_lock._windows_current_sid_string()},
+    )
+
+
 def test_lock_helper_creates_sidecar_lock_file(tmp_path: Path) -> None:
     cache_path = tmp_path / "scan_cache.json"
 

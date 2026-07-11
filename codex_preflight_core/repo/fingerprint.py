@@ -31,6 +31,7 @@ def compute_critical_fingerprint(
     deadline: float | None = None,
     cancellation_check: Callable[[], bool] | None = None,
     monotonic: Callable[[], float] = time.monotonic,
+    strict_safety: bool = False,
 ) -> str:
     _validate_limit(max_files)
     _validate_limit(max_file_bytes)
@@ -41,9 +42,12 @@ def compute_critical_fingerprint(
         or not math.isfinite(deadline)
     ):
         raise ValueError("deadline must be a finite monotonic timestamp")
+    if type(strict_safety) is not bool:
+        raise ValueError("strict_safety must be a boolean")
     _check_budget(deadline, cancellation_check, monotonic)
     try:
-        _assert_safe_root(root)
+        if strict_safety:
+            _assert_safe_root(root)
         root = root.resolve()
     except OSError as error:
         raise CriticalFingerprintError("unavailable", "The repository root is unsafe.") from error
@@ -57,7 +61,7 @@ def compute_critical_fingerprint(
             root,
             command=command,
             budget_check=budget_check,
-            reject_unsafe=True,
+            reject_unsafe=strict_safety,
             max_files=max_files,
         )
     except CriticalFileCollectionLimitError as error:
@@ -75,8 +79,9 @@ def compute_critical_fingerprint(
         path = root / relative
         try:
             _check_budget(deadline, cancellation_check, monotonic)
-            named = path.lstat()
-            _validate_regular_file(named)
+            named = path.lstat() if strict_safety else path.stat()
+            if strict_safety:
+                _validate_regular_file(named)
             expected_size = named.st_size
             _check_budget(deadline, cancellation_check, monotonic)
             if expected_size < 0:
@@ -91,6 +96,7 @@ def compute_critical_fingerprint(
                 max_file_bytes=max_file_bytes,
                 max_total_bytes=max_total_bytes,
                 budget_check=budget_check,
+                strict_safety=strict_safety,
             )
         except CriticalFingerprintError:
             raise
@@ -111,17 +117,19 @@ def _hash_bounded_file(
     max_file_bytes: int | None,
     max_total_bytes: int | None,
     budget_check: Callable[[], None],
+    strict_safety: bool,
 ) -> tuple[int, str]:
     size = 0
     digest = sha256()
     budget_check()
     with path.open("rb") as handle:
-        opened = os.fstat(handle.fileno())
-        named = path.lstat()
-        _validate_regular_file(opened)
-        _validate_regular_file(named)
-        if opened.st_dev != named.st_dev or opened.st_ino != named.st_ino:
-            raise OSError("critical file changed while opening")
+        if strict_safety:
+            opened = os.fstat(handle.fileno())
+            named = path.lstat()
+            _validate_regular_file(opened)
+            _validate_regular_file(named)
+            if opened.st_dev != named.st_dev or opened.st_ino != named.st_ino:
+                raise OSError("critical file changed while opening")
         while True:
             budget_check()
             chunk = handle.read(_READ_CHUNK_BYTES)
@@ -140,14 +148,18 @@ def _hash_bounded_file(
 
 def _assert_safe_root(root: Path) -> None:
     absolute = root.absolute()
-    for candidate in [absolute, *absolute.parents]:
-        if not os.path.lexists(candidate):
-            continue
+    parts = absolute.parts
+    if not parts:
+        raise OSError("invalid repository root")
+    candidate = Path(parts[0])
+    for part in parts[1:]:
         info = candidate.lstat()
-        if stat.S_ISLNK(info.st_mode) or _is_reparse(info):
+        if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode) or _is_reparse(info):
             raise OSError("repository root uses a reparse path")
-    if not stat.S_ISDIR(absolute.lstat().st_mode):
-        raise OSError("repository root is not a directory")
+        candidate /= part
+    info = candidate.lstat()
+    if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode) or _is_reparse(info):
+        raise OSError("repository root uses a reparse path")
 
 
 def _validate_regular_file(info: os.stat_result) -> None:

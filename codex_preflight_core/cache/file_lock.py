@@ -168,9 +168,15 @@ def _validate_permissions(path: Path, info: os.stat_result, *, directory: bool) 
 
 def _assert_no_reparse_ancestors(path: Path) -> None:
     absolute = path.absolute()
-    for candidate in [absolute, *absolute.parents]:
+    parts = absolute.parts
+    if not parts:
+        raise UnsafeCacheStorageError("The private cache ancestor is unsafe.")
+    candidate = Path(parts[0])
+    for index, part in enumerate(parts):
+        if index:
+            candidate /= part
         if not os.path.lexists(candidate):
-            continue
+            break
         info = candidate.lstat()
         if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode) or _is_reparse(info):
             raise UnsafeCacheStorageError("The private cache ancestor is unsafe.")
@@ -188,6 +194,27 @@ if os.name == "nt":
     _SE_FILE_OBJECT = 1
     _ACL_SIZE_INFORMATION_CLASS = 2
     _ACCESS_ALLOWED_ACE_TYPE = 0
+    _NON_ACCESS_GRANTING_ACE_TYPES = frozenset(
+        {
+            0x01,  # ACCESS_DENIED_ACE_TYPE
+            0x02,  # SYSTEM_AUDIT_ACE_TYPE
+            0x03,  # SYSTEM_ALARM_ACE_TYPE
+            0x06,  # ACCESS_DENIED_OBJECT_ACE_TYPE
+            0x07,  # SYSTEM_AUDIT_OBJECT_ACE_TYPE
+            0x08,  # SYSTEM_ALARM_OBJECT_ACE_TYPE
+            0x0A,  # ACCESS_DENIED_CALLBACK_ACE_TYPE
+            0x0C,  # ACCESS_DENIED_CALLBACK_OBJECT_ACE_TYPE
+            0x0D,  # SYSTEM_AUDIT_CALLBACK_ACE_TYPE
+            0x0E,  # SYSTEM_ALARM_CALLBACK_ACE_TYPE
+            0x0F,  # SYSTEM_AUDIT_CALLBACK_OBJECT_ACE_TYPE
+            0x10,  # SYSTEM_ALARM_CALLBACK_OBJECT_ACE_TYPE
+            0x11,  # SYSTEM_MANDATORY_LABEL_ACE_TYPE
+            0x12,  # SYSTEM_RESOURCE_ATTRIBUTE_ACE_TYPE
+            0x13,  # SYSTEM_SCOPED_POLICY_ID_ACE_TYPE
+            0x14,  # SYSTEM_PROCESS_TRUST_LABEL_ACE_TYPE
+            0x15,  # SYSTEM_ACCESS_FILTER_ACE_TYPE
+        }
+    )
     _ERROR_ALREADY_EXISTS = 183
     _GENERIC_READ = 0x80000000
     _GENERIC_WRITE = 0x40000000
@@ -273,6 +300,10 @@ if os.name == "nt":
     _ADVAPI32.GetAclInformation.restype = wintypes.BOOL
     _ADVAPI32.GetAce.argtypes = [ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p)]
     _ADVAPI32.GetAce.restype = wintypes.BOOL
+    _ADVAPI32.IsValidSid.argtypes = [ctypes.c_void_p]
+    _ADVAPI32.IsValidSid.restype = wintypes.BOOL
+    _ADVAPI32.GetLengthSid.argtypes = [ctypes.c_void_p]
+    _ADVAPI32.GetLengthSid.restype = wintypes.DWORD
 
 
 def _windows_create_private_directory(path: Path) -> None:
@@ -404,12 +435,31 @@ def _windows_permissions_are_private(path: Path) -> bool:
             ace = ctypes.c_void_p()
             if not _ADVAPI32.GetAce(dacl, index, ctypes.byref(ace)):
                 return False
-            header = ctypes.cast(ace, ctypes.POINTER(_ACE_HEADER)).contents
-            if header.AceType != _ACCESS_ALLOWED_ACE_TYPE:
-                continue
-            sid_address = ace.value + ctypes.sizeof(_ACE_HEADER) + ctypes.sizeof(wintypes.DWORD)
-            if _windows_sid_string(ctypes.c_void_p(sid_address)) not in allowed_sids:
+            if not _windows_ace_is_private(ace, allowed_sids):
                 return False
         return True
     finally:
         _KERNEL32.LocalFree(descriptor)
+
+
+def _windows_ace_is_private(ace: object, allowed_sids: set[str]) -> bool:
+    address = getattr(ace, "value", None)
+    if not isinstance(address, int) or address <= 0:
+        return False
+    header = ctypes.cast(ace, ctypes.POINTER(_ACE_HEADER)).contents
+    if header.AceSize < ctypes.sizeof(_ACE_HEADER):
+        return False
+    if header.AceType != _ACCESS_ALLOWED_ACE_TYPE:
+        return header.AceType in _NON_ACCESS_GRANTING_ACE_TYPES
+
+    sid_offset = ctypes.sizeof(_ACE_HEADER) + ctypes.sizeof(wintypes.DWORD)
+    minimum_sid_bytes = 8
+    if header.AceSize < sid_offset + minimum_sid_bytes:
+        return False
+    sid = ctypes.c_void_p(address + sid_offset)
+    if not _ADVAPI32.IsValidSid(sid):
+        return False
+    sid_length = int(_ADVAPI32.GetLengthSid(sid))
+    if sid_length < minimum_sid_bytes or sid_length > header.AceSize - sid_offset:
+        return False
+    return _windows_sid_string(sid) in allowed_sids

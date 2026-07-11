@@ -179,10 +179,16 @@ class TrustMutationService:
         self._ensure_enabled()
         assert self.cache is not None
         assert self.audit is not None
-        try:
+
+        def read_store_bytes() -> bytes | None:
+            assert self.cache is not None
             with locked_cache_file(self.cache.path, private_storage=True):
+                return self.cache._read_store_bytes_unlocked()
+
+        try:
+            with self._audit_reservation_lock:
                 result = self.audit.verify_and_recover(  # type: ignore[union-attr]
-                    read_store_bytes=self.cache._read_store_bytes_unlocked,
+                    read_store_bytes=read_store_bytes,
                 )
         except CacheLockTimeoutError as error:
             self._healthy = False
@@ -484,6 +490,7 @@ class TrustMutationService:
                 entry_id=entry_id,
                 context=context,
                 expected_event_id=prepared_event_id,
+                reservation=audit_reservation,
             )
             return TrustCacheMutationPrepared(prepared.event_id, prepared)
 
@@ -493,31 +500,32 @@ class TrustMutationService:
                     "MCP_TRUST_MUTATION_AUDIT_FAILED",
                     "The trust mutation audit operation failed closed.",
                 )
-            return self._commit_audit(prepared.state, context=context)
+            return self._commit_audit(prepared.state, context=context, reservation=audit_reservation)
 
         try:
             assert self.cache is not None
             with self._audit_reservation_lock:
-                result = self.cache.approve_mcp(
-                    repo_id=target["repoId"],
-                    path=target["root"],
-                    remote_url=target["remoteUrl"],
-                    head_commit=target["headCommit"],
-                    critical_fingerprint=target["criticalFingerprint"],
-                    command_scope=target["commandScope"],
-                    approved_command=request["command"],
-                    expires_at=request["expiresAt"],
-                    policy_version=target["policyVersion"],
-                    ruleset_version=target["rulesetVersion"],
-                    entry_id=entry_id,
-                    approved_at=_utc_timestamp(consumed.issued_at),
-                    approval_reason=request["reason"],
-                    mutation_audit_event_id=prepared_event_id,
-                    prepare=prepare,
-                    commit=commit,
-                    private_storage=True,
-                    revalidate=revalidate,
-                )
+                with self._audit_transaction() as audit_reservation:
+                    result = self.cache.approve_mcp(
+                        repo_id=target["repoId"],
+                        path=target["root"],
+                        remote_url=target["remoteUrl"],
+                        head_commit=target["headCommit"],
+                        critical_fingerprint=target["criticalFingerprint"],
+                        command_scope=target["commandScope"],
+                        approved_command=request["command"],
+                        expires_at=request["expiresAt"],
+                        policy_version=target["policyVersion"],
+                        ruleset_version=target["rulesetVersion"],
+                        entry_id=entry_id,
+                        approved_at=_utc_timestamp(consumed.issued_at),
+                        approval_reason=request["reason"],
+                        mutation_audit_event_id=prepared_event_id,
+                        prepare=prepare,
+                        commit=commit,
+                        private_storage=True,
+                        revalidate=revalidate,
+                    )
         except TrustCacheMutationCommitError as error:
             self._mark_unhealthy()
             raise self._committed_pending_error(error.result) from None
@@ -618,6 +626,7 @@ class TrustMutationService:
                 entry_id=entry_id,
                 context=context,
                 expected_event_id=None,
+                reservation=audit_reservation,
             )
             return TrustCacheMutationPrepared(prepared.event_id, prepared)
 
@@ -627,19 +636,20 @@ class TrustMutationService:
                     "MCP_TRUST_MUTATION_AUDIT_FAILED",
                     "The trust mutation audit operation failed closed.",
                 )
-            return self._commit_audit(prepared.state, context=context)
+            return self._commit_audit(prepared.state, context=context, reservation=audit_reservation)
 
         try:
             assert self.cache is not None
             with self._audit_reservation_lock:
-                result = self.cache.revoke_entry_id(
-                    entry_id,
-                    expected_version=1,
-                    expected_entry=expected_entry,
-                    prepare=prepare,
-                    commit=commit,
-                    private_storage=True,
-                )
+                with self._audit_transaction() as audit_reservation:
+                    result = self.cache.revoke_entry_id(
+                        entry_id,
+                        expected_version=1,
+                        expected_entry=expected_entry,
+                        prepare=prepare,
+                        commit=commit,
+                        private_storage=True,
+                    )
         except TrustCacheMutationCommitError as error:
             self._mark_unhealthy()
             raise self._committed_pending_error(error.result) from None
@@ -818,8 +828,6 @@ class TrustMutationService:
         try:
             path = Path(text)
             absolute = path.absolute()
-            if not absolute.exists() or not absolute.is_dir():
-                raise ValueError("not a local directory")
             _assert_no_reparse_ancestors(absolute)
             resolved = absolute.resolve(strict=True)
             if not resolved.is_dir():
@@ -860,13 +868,13 @@ class TrustMutationService:
             raise self._error(
                 "MCP_TRUST_MUTATION_IDENTITY_UNRESOLVED",
                 "The local trust target identity could not be resolved safely.",
-            )
+        )
         try:
             root = identity.path.absolute()
-            if not root.exists() or not root.is_dir():
-                raise ValueError("missing root")
             _assert_no_reparse_ancestors(root)
             root = root.resolve(strict=True)
+            if not root.is_dir():
+                raise ValueError("missing root")
             repo_id = identity.repo_id
             remote_url = identity.remote_url
             if not isinstance(repo_id, str) or _utf8_length(repo_id) is None or _CONTROL.search(repo_id):
@@ -893,6 +901,7 @@ class TrustMutationService:
                 deadline=deadline,
                 cancellation_check=self.cancellation_check,
                 monotonic=self.monotonic,
+                strict_safety=True,
             )
         except CriticalFingerprintError as error:
             raise self._fingerprint_error(error) from None
@@ -1078,17 +1087,21 @@ class TrustMutationService:
         entry_id: str,
         context: AuditContext,
         expected_event_id: str | None,
+        reservation: object | None,
     ) -> PreparedMutation:
         assert self.audit is not None
         try:
             with self._reserve_audit_event_id(expected_event_id):
-                prepared = self.audit.prepare_mutation(  # type: ignore[union-attr]
-                    operation=operation,
-                    before_bytes=plan.before_bytes,
-                    after_bytes=plan.after_bytes,
-                    entry_id=entry_id,
-                    context=context,
-                )
+                arguments = {
+                    "operation": operation,
+                    "before_bytes": plan.before_bytes,
+                    "after_bytes": plan.after_bytes,
+                    "entry_id": entry_id,
+                    "context": context,
+                }
+                if reservation is not None:
+                    arguments["reservation"] = reservation
+                prepared = self.audit.prepare_mutation(**arguments)  # type: ignore[union-attr]
         except TrustMutationAuditError:
             raise
         except Exception:
@@ -1105,7 +1118,13 @@ class TrustMutationService:
             )
         return prepared
 
-    def _commit_audit(self, prepared: PreparedMutation, *, context: AuditContext) -> str:
+    def _commit_audit(
+        self,
+        prepared: PreparedMutation,
+        *,
+        context: AuditContext,
+        reservation: object | None,
+    ) -> str:
         assert self.audit is not None
         committed_context = AuditContext(
             tool=context.tool,
@@ -1122,7 +1141,13 @@ class TrustMutationService:
             entry_version=context.entry_version,
         )
         try:
-            return self.audit.commit_mutation(prepared, context=committed_context)  # type: ignore[union-attr]
+            if reservation is None:
+                return self.audit.commit_mutation(prepared, context=committed_context)  # type: ignore[union-attr]
+            return self.audit.commit_mutation(  # type: ignore[union-attr]
+                prepared,
+                context=committed_context,
+                reservation=reservation,
+            )
         except TrustMutationAuditError:
             raise
         except Exception:
@@ -1130,6 +1155,16 @@ class TrustMutationService:
                 "MCP_TRUST_MUTATION_AUDIT_FAILED",
                 "The trust mutation audit operation failed closed.",
             ) from None
+
+    @contextmanager
+    def _audit_transaction(self):
+        assert self.audit is not None
+        transaction = getattr(self.audit, "mutation_transaction", None)
+        if not callable(transaction):
+            yield None
+            return
+        with transaction() as reservation:
+            yield reservation
 
     @contextmanager
     def _reserve_audit_event_id(self, event_id: str | None):
@@ -1703,12 +1738,17 @@ def _is_reparse(info: os.stat_result) -> bool:
 
 def _assert_no_reparse_ancestors(path: Path) -> None:
     absolute = path.absolute()
-    candidates = [absolute, *absolute.parents]
-    for candidate in candidates:
-        if not os.path.lexists(candidate):
-            continue
+    parts = absolute.parts
+    if not parts:
+        raise OSError("invalid local path")
+    candidate = Path(parts[0])
+    info = candidate.lstat()
+    if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode) or _is_reparse(info):
+        raise OSError("unsafe reparse path")
+    for part in parts[1:]:
+        candidate /= part
         info = candidate.lstat()
-        if candidate.is_symlink() or _is_reparse(info):
+        if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode) or _is_reparse(info):
             raise OSError("unsafe reparse path")
 
 
