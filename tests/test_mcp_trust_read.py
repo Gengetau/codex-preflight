@@ -245,6 +245,71 @@ def test_cursor_binds_private_stored_fields(tmp_path: Path, field: str) -> None:
     assert caught.value.code == "MCP_TRUST_LIST_CURSOR_INVALID"
 
 
+def test_mcp_approval_provenance_is_publicly_redacted_but_invalidates_full_state_cursors(
+    tmp_path: Path,
+) -> None:
+    from codex_preflight_core.cache.trust_cache import TrustCacheMutationPrepared
+
+    service, cache = build_service(tmp_path, limit_entries=0)
+    cache.approve_mcp(
+        repo_id="C:/private/mcp-repository",
+        path=tmp_path / "private-path",
+        remote_url="https://example.test/private.git",
+        head_commit=HEAD,
+        critical_fingerprint=f"sha256:{7:064x}",
+        command_scope="script_execution",
+        approved_command="python private_script.py",
+        expires_at="2036-07-22T00:00:00Z",
+        policy_version="default-v1",
+        ruleset_version="2026.07.08",
+        entry_id="123e4567-e89b-42d3-a456-426614174000",
+        approved_at="2026-07-12T00:00:00Z",
+        approval_reason="private human review reason",
+        mutation_audit_event_id="223e4567-e89b-42d3-a456-426614174000",
+        prepare=lambda plan: TrustCacheMutationPrepared(plan.planned_event_id, None),
+        commit=lambda _prepared: "323e4567-e89b-42d3-a456-426614174000",
+    )
+    cache.approve(
+        repo_id="C:/private/second-repository",
+        path=tmp_path / "second-private-path",
+        remote_url=None,
+        head_commit=HEAD,
+        critical_fingerprint=f"sha256:{8:064x}",
+        command_scope="test",
+        approved_command="pytest private_tests",
+        expires_at=datetime(2036, 7, 22, tzinfo=UTC),
+        ruleset_version="2026.07.08",
+    )
+
+    first = service.list(limit=1)
+    mcp_entry = next(
+        entry
+        for entry in service.list(limit=100)["entries"]
+        if entry["entryId"] == "123e4567-e89b-42d3-a456-426614174000"
+    )
+    assert mcp_entry["provenance"] == {
+        "schema": "trust-cache-array-v2",
+        "source": "mcp-trust-approve",
+        "migrationVersion": "v0.3.4-trust-mutation",
+        "migrated": False,
+        "migratedAt": None,
+        "createdAt": "2026-07-12T00:00:00Z",
+    }
+    serialized = json.dumps(first, sort_keys=True)
+    assert "private human review reason" not in serialized
+    assert "mutationAuditEventId" not in serialized
+    assert "private_script.py" not in serialized
+    assert first["pagination"]["nextCursor"]
+
+    stored = json.loads(cache.path.read_text(encoding="utf-8"))
+    stored[0]["provenance"]["approvalReason"] = "different private review reason"
+    cache.path.write_text(json.dumps(stored), encoding="utf-8")
+
+    with pytest.raises(TrustReadError) as caught:
+        service.list(limit=1, cursor=first["pagination"]["nextCursor"])
+    assert caught.value.code == "MCP_TRUST_LIST_CURSOR_INVALID"
+
+
 def test_missing_store_returns_empty_but_audit_failure_fails_closed(tmp_path: Path) -> None:
     service, cache = build_service(tmp_path, limit_entries=0)
 
