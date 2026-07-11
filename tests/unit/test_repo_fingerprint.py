@@ -1,7 +1,13 @@
+import os
+import subprocess
 from pathlib import Path
+from typing import BinaryIO
 
+import pytest
+
+from codex_preflight_core.repo import identity as identity_module
 from codex_preflight_core.repo.collector import collect_critical_files
-from codex_preflight_core.repo.fingerprint import compute_critical_fingerprint
+from codex_preflight_core.repo.fingerprint import CriticalFingerprintError, compute_critical_fingerprint
 from codex_preflight_core.repo.identity import resolve_repo_identity
 
 
@@ -45,3 +51,140 @@ def test_non_git_repo_identity_has_low_confidence(tmp_path: Path) -> None:
     assert identity.path == tmp_path.resolve()
     assert identity.identity_confidence == "low"
     assert identity.head_commit is None
+
+
+def test_fingerprint_cancellation_is_checked_during_empty_tree_traversal(tmp_path: Path) -> None:
+    (tmp_path / "nested" / "empty").mkdir(parents=True)
+    checks = 0
+
+    def cancel_during_walk() -> bool:
+        nonlocal checks
+        checks += 1
+        return checks >= 2
+
+    with pytest.raises(CriticalFingerprintError) as caught:
+        compute_critical_fingerprint(tmp_path, cancellation_check=cancel_during_walk)
+
+    assert caught.value.code == "cancelled"
+    assert checks == 2
+
+
+def test_fingerprint_reads_bounded_chunks_and_checks_cancellation_between_reads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "README.md"
+    target.write_bytes(b"x" * (128 * 1024))
+
+    class GuardedReader:
+        def __init__(self, handle: BinaryIO) -> None:
+            self.handle = handle
+            self.read_calls = 0
+
+        def read(self, size: int = -1) -> bytes:
+            assert 0 < size <= 64 * 1024
+            self.read_calls += 1
+            return self.handle.read(size)
+
+        def fileno(self) -> int:
+            return self.handle.fileno()
+
+        def __enter__(self) -> "GuardedReader":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            self.handle.close()
+
+    path_type = type(target)
+    real_open = path_type.open
+    reader = GuardedReader(real_open(target, "rb"))
+
+    def guarded_open(path: Path, mode: str = "r", *args: object, **kwargs: object):
+        if path == target and mode == "rb":
+            return reader
+        return real_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(path_type, "open", guarded_open)
+
+    with pytest.raises(CriticalFingerprintError) as caught:
+        compute_critical_fingerprint(tmp_path, cancellation_check=lambda: reader.read_calls >= 1)
+
+    assert caught.value.code == "cancelled"
+    assert reader.read_calls == 1
+
+
+def test_fingerprint_rejects_hard_linked_critical_files(tmp_path: Path) -> None:
+    source = tmp_path / "source.txt"
+    target = tmp_path / "README.md"
+    source.write_text("shared critical content", encoding="utf-8")
+    os.link(source, target)
+
+    with pytest.raises(CriticalFingerprintError) as caught:
+        compute_critical_fingerprint(tmp_path)
+
+    assert caught.value.code == "unavailable"
+
+
+def test_fingerprint_rejects_critical_file_reparse_points(tmp_path: Path) -> None:
+    source = tmp_path / "source.txt"
+    target = tmp_path / "README.md"
+    source.write_text("linked critical content", encoding="utf-8")
+    try:
+        target.symlink_to(source)
+    except OSError:
+        pytest.skip("file symlinks are unavailable")
+
+    with pytest.raises(CriticalFingerprintError) as caught:
+        compute_critical_fingerprint(tmp_path)
+
+    assert caught.value.code == "unavailable"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows junction fixture")
+def test_fingerprint_rejects_windows_junction_roots(tmp_path: Path) -> None:
+    real_root = tmp_path / "real"
+    junction_root = tmp_path / "junction"
+    real_root.mkdir()
+    (real_root / "README.md").write_text("junction content", encoding="utf-8")
+    created = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(junction_root), str(real_root)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if created.returncode != 0:
+        pytest.skip("unable to create a Windows junction fixture")
+
+    with pytest.raises(CriticalFingerprintError) as caught:
+        compute_critical_fingerprint(junction_root)
+
+    assert caught.value.code == "unavailable"
+
+
+@pytest.mark.parametrize("boundary", ["timeout", "cancelled"])
+def test_repo_identity_checks_budget_after_each_fixed_git_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    boundary: str,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+    expired = False
+
+    def fixed_git_read(_root: Path, *args: str) -> str:
+        nonlocal expired
+        calls.append(args)
+        expired = True
+        return str(tmp_path)
+
+    monkeypatch.setattr(identity_module, "run_git", fixed_git_read)
+
+    with pytest.raises(OSError) as caught:
+        resolve_repo_identity(
+            tmp_path,
+            deadline=30.0 if boundary == "timeout" else None,
+            monotonic=lambda: 31.0 if expired else 0.0,
+            cancellation_check=(lambda: expired) if boundary == "cancelled" else None,
+        )
+
+    assert getattr(caught.value, "code", None) == boundary
+    assert calls == [("rev-parse", "--show-toplevel")]

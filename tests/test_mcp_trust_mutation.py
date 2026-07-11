@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
 import subprocess
+import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -10,9 +12,14 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from codex_preflight_core.cache import trust_cache as trust_cache_module
 from codex_preflight_core.cache.trust_cache import TrustCache
 from codex_preflight_core.repo.identity import RepoIdentity
-from codex_preflight_mcp.trust_mutation_audit import PreparedMutation, RecoveryResult
+from codex_preflight_mcp.trust_mutation_audit import (
+    PreparedMutation,
+    RecoveryResult,
+    TrustMutationAuditLog,
+)
 from codex_preflight_mcp.trust_mutation_confirmation import TrustMutationConfirmationManager
 from codex_preflight_mcp.trust_state import privacy_hash
 
@@ -105,7 +112,8 @@ def _service(
     confirmation = TrustMutationConfirmationManager(secret=b"c" * 32, clock=clock)
     recording_audit = audit or RecordingAudit()
 
-    def identity_resolver(path: Path) -> RepoIdentity:
+    def identity_resolver(path: Path, **kwargs: object) -> RepoIdentity:
+        values["identity_call"] = (path, kwargs)
         return RepoIdentity(path.resolve(), None, HEAD, None, "high")
 
     def fingerprinter(path: Path, command: str | None = None, **kwargs: object) -> str:
@@ -167,6 +175,22 @@ def _confirm_approval(service: object, root: Path, token: str, **overrides: obje
 def _approved_entry(service: object, root: Path) -> dict[str, object]:
     challenge = _approval_challenge(service, root)
     return _confirm_approval(service, root, str(challenge["confirmationToken"]))["entry"]
+
+
+def _real_audit(tmp_path: Path) -> TrustMutationAuditLog:
+    return TrustMutationAuditLog(
+        tmp_path / "audit" / "audit.jsonl",
+        key_path=tmp_path / "audit" / "audit.key",
+        key_factory=lambda size: b"k" * size,
+        clock=lambda: NOW,
+    )
+
+
+def _audit_events(audit: TrustMutationAuditLog) -> list[str]:
+    return [
+        str(json.loads(line)["event"])
+        for line in audit.path.read_text(encoding="utf-8").splitlines()
+    ]
 
 
 def test_approval_first_call_is_only_a_fixed_human_challenge(tmp_path: Path) -> None:
@@ -279,6 +303,51 @@ def test_approval_validation_rejects_bounds_controls_and_surrogates(
         }
     }
     assert not cache.path.exists()
+    assert [event for event, _context in audit.events] == ["request_validation_failed"]
+
+
+@pytest.mark.parametrize(
+    ("cwd", "drive_type"),
+    [
+        (r"\\server\share\repo", 3),
+        (r"\\?\C:\repo", 3),
+        (r"\\.\C:\repo", 3),
+        (r"\??\C:\repo", 3),
+        (r"Z:\repo", 4),
+    ],
+)
+def test_nonlocal_windows_paths_are_rejected_before_filesystem_git_or_network_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cwd: str,
+    drive_type: int,
+) -> None:
+    from codex_preflight_mcp import trust_mutation as mutation_module
+    from codex_preflight_mcp.trust_mutation import TrustMutationError
+
+    service, cache, _root, _values, audit = _service(tmp_path)
+
+    def forbidden(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("nonlocal cwd reached a filesystem, Git, target, or network dependency")
+
+    monkeypatch.setattr(mutation_module, "_windows_drive_type", lambda _root: drive_type, raising=False)
+    monkeypatch.setattr(mutation_module, "Path", forbidden)
+    monkeypatch.setattr(service, "identity_resolver", forbidden)
+    monkeypatch.setattr(service, "fingerprinter", forbidden)
+    monkeypatch.setattr(subprocess, "run", forbidden)
+    monkeypatch.setattr(socket, "create_connection", forbidden)
+
+    with pytest.raises(TrustMutationError) as caught:
+        service.approve(
+            cwd=cwd,
+            command="python private_script.py",
+            expires_at=EXPIRES_AT,
+            reason="reviewed",
+        )
+
+    assert caught.value.code == "MCP_TRUST_MUTATION_INVALID_ARGUMENT"
+    assert caught.value.field == "cwd"
+    assert cache.path.name == "trust.json"
     assert [event for event, _context in audit.events] == ["request_validation_failed"]
 
 
@@ -396,6 +465,35 @@ def test_confirmed_target_and_store_drift_consume_the_token(tmp_path: Path) -> N
     assert [event for event, _context in audit.events].count("challenge_consumed") == 2
 
 
+def test_duplicate_approval_revalidates_target_under_lock_before_matching(tmp_path: Path) -> None:
+    from codex_preflight_mcp.trust_mutation import TrustMutationError
+
+    service, _cache, root, _state, audit = _service(tmp_path)
+    _approved_entry(service, root)
+    duplicate = _approval_challenge(service, root, reason="review duplicate")
+    calls = 0
+
+    def drift_inside_lock(_path: Path, _command: str | None = None, **_kwargs: object) -> str:
+        nonlocal calls
+        calls += 1
+        return FINGERPRINT if calls == 1 else f"sha256:{'c' * 64}"
+
+    service.fingerprinter = drift_inside_lock
+    prepare_calls = audit.prepare_calls
+
+    with pytest.raises(TrustMutationError) as caught:
+        _confirm_approval(
+            service,
+            root,
+            str(duplicate["confirmationToken"]),
+            reason="review duplicate",
+        )
+
+    assert caught.value.code == "MCP_TRUST_MUTATION_TARGET_DRIFT"
+    assert calls == 2
+    assert audit.prepare_calls == prepare_calls
+
+
 def test_revoke_binds_the_complete_private_entry_and_keeps_the_display_redacted(tmp_path: Path) -> None:
     from codex_preflight_mcp.trust_mutation import TrustMutationError
 
@@ -476,7 +574,10 @@ def test_revoke_rejects_non_exact_or_wrong_entry_version(tmp_path: Path, expecte
     assert caught.value.code == "MCP_TRUST_MUTATION_INVALID_ARGUMENT"
 
 
-def test_committed_audit_pending_invalidates_challenges_and_marks_service_unhealthy(tmp_path: Path) -> None:
+def test_committed_audit_pending_cannot_be_masked_by_invalidation_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from codex_preflight_mcp.trust_mutation import TrustMutationError
 
     audit = RecordingAudit()
@@ -484,13 +585,21 @@ def test_committed_audit_pending_invalidates_challenges_and_marks_service_unheal
     service, cache, root, _values, _audit = _service(tmp_path, audit=audit)
     challenge = _approval_challenge(service, root)
 
+    def fail_invalidation() -> None:
+        raise RuntimeError("C:/private/repository confirmation secret")
+
+    monkeypatch.setattr(service.confirmation, "invalidate_all", fail_invalidation)
+
     with pytest.raises(TrustMutationError) as pending:
         _confirm_approval(service, root, str(challenge["confirmationToken"]))
     assert pending.value.code == "MCP_TRUST_MUTATION_COMMITTED_AUDIT_PENDING"
     assert pending.value.context["committed"] is True
-    assert pending.value.context["operation"] == "approve"
+    assert pending.value.context["operation"] == "approve-or-revoke"
     assert UUID(pending.value.context["entryId"]).version == 4
     assert UUID(pending.value.context["preparedAuditEventId"]).version == 4
+    assert "private" not in str(pending.value).lower()
+    assert pending.value.__cause__ is None
+    assert pending.value.__context__ is None
     assert len(cache.list()) == 1
 
     with pytest.raises(TrustMutationError) as unhealthy:
@@ -501,6 +610,210 @@ def test_committed_audit_pending_invalidates_challenges_and_marks_service_unheal
             reason="new request",
         )
     assert unhealthy.value.code == "MCP_TRUST_MUTATION_RECOVERY_REQUIRED"
+
+
+def test_revoke_committed_audit_pending_uses_fixed_operation_context(tmp_path: Path) -> None:
+    from codex_preflight_mcp.trust_mutation import TrustMutationError
+
+    audit = RecordingAudit()
+    service, _cache, root, _values, _unused = _service(tmp_path, audit=audit)
+    entry = _approved_entry(service, root)
+    with pytest.raises(TrustMutationError) as challenge_error:
+        service.revoke(trust_entry_id=entry["entryId"], expected_version=1, reason="remove exact entry")
+    challenge = challenge_error.value.context["confirmation"]
+    audit.fail_commit = True
+
+    with pytest.raises(TrustMutationError) as pending:
+        service.revoke(
+            trust_entry_id=entry["entryId"],
+            expected_version=1,
+            reason="remove exact entry",
+            confirmation_token=challenge["confirmationToken"],
+        )
+
+    assert pending.value.code == "MCP_TRUST_MUTATION_COMMITTED_AUDIT_PENDING"
+    assert pending.value.context["operation"] == "approve-or-revoke"
+
+
+def test_authentic_token_dependency_failures_are_normalized_without_private_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from codex_preflight_mcp.trust_mutation import TrustMutationError
+
+    service, _cache, root, _values, _audit = _service(tmp_path)
+    challenge = _approval_challenge(service, root)
+    token = str(challenge["confirmationToken"])
+    original_consume = service.confirmation.authenticate_and_consume
+
+    def consume_then_fail(value: object):
+        original_consume(value)
+        raise RuntimeError("C:/private/repository raw token material")
+
+    monkeypatch.setattr(service.confirmation, "authenticate_and_consume", consume_then_fail)
+
+    with pytest.raises(TrustMutationError) as caught:
+        _confirm_approval(service, root, token)
+
+    assert caught.value.code == "MCP_TRUST_MUTATION_INTERNAL_ERROR"
+    assert "private" not in str(caught.value).lower()
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+
+    with pytest.raises(TrustMutationError) as replay:
+        _confirm_approval(service, root, token)
+    assert replay.value.code == "MCP_TRUST_MUTATION_CONFIRMATION_INVALID"
+
+
+def test_real_audit_records_cannot_interleave_between_prepare_and_commit(tmp_path: Path) -> None:
+    audit = _real_audit(tmp_path)
+    service, _cache, root, _values, _unused = _service(tmp_path, audit=audit)  # type: ignore[arg-type]
+    challenge = _approval_challenge(service, root)
+    prepared = threading.Event()
+    release_prepare = threading.Event()
+    registration_attempted = threading.Event()
+    registration_finished = threading.Event()
+    errors: list[BaseException] = []
+    original_prepare = audit.prepare_mutation
+    original_record = service._record
+
+    def paused_prepare(**kwargs: object) -> PreparedMutation:
+        result = original_prepare(**kwargs)  # type: ignore[arg-type]
+        prepared.set()
+        if not release_prepare.wait(5):
+            raise AssertionError("test did not release the prepared mutation")
+        return result
+
+    def observed_record(event: str, context: object) -> str:
+        if event == "registration_state":
+            registration_attempted.set()
+        return original_record(event, context)  # type: ignore[arg-type]
+
+    audit.prepare_mutation = paused_prepare  # type: ignore[method-assign]
+    service._record = observed_record  # type: ignore[method-assign]
+
+    def confirm() -> None:
+        try:
+            _confirm_approval(service, root, str(challenge["confirmationToken"]))
+        except BaseException as error:
+            errors.append(error)
+
+    def register() -> None:
+        try:
+            service.record_registration_state()
+        except BaseException as error:
+            errors.append(error)
+        finally:
+            registration_finished.set()
+
+    mutation_thread = threading.Thread(target=confirm)
+    registration_thread = threading.Thread(target=register)
+    mutation_thread.start()
+    assert prepared.wait(5)
+    registration_thread.start()
+    assert registration_attempted.wait(5)
+    try:
+        assert not registration_finished.wait(0.2)
+    finally:
+        release_prepare.set()
+        mutation_thread.join(5)
+        registration_thread.join(5)
+
+    assert not mutation_thread.is_alive()
+    assert not registration_thread.is_alive()
+    assert errors == []
+    events = _audit_events(audit)
+    prepared_index = events.index("mutation_prepared")
+    committed_index = events.index("mutation_committed")
+    registration_index = events.index("registration_state")
+    assert prepared_index < committed_index < registration_index
+
+
+def test_atomic_store_write_failure_leaves_recoverable_prepared_tail(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from codex_preflight_mcp.trust_mutation import TrustMutationError
+
+    audit = _real_audit(tmp_path)
+    service, cache, root, _values, _unused = _service(tmp_path, audit=audit)  # type: ignore[arg-type]
+    challenge = _approval_challenge(service, root)
+
+    def fail_atomic_write(_path: Path, _data: bytes) -> None:
+        raise OSError("C:/private/repository raw trust bytes")
+
+    monkeypatch.setattr(trust_cache_module, "write_bytes_atomic", fail_atomic_write)
+
+    with pytest.raises(TrustMutationError) as caught:
+        _confirm_approval(service, root, str(challenge["confirmationToken"]))
+
+    assert caught.value.code == "MCP_TRUST_MUTATION_PERSISTENCE_FAILED"
+    assert "private" not in str(caught.value).lower()
+    assert not cache.path.exists()
+    assert _audit_events(audit)[-1] == "mutation_prepared"
+
+    with pytest.raises(TrustMutationError) as unhealthy:
+        service.approve(
+            cwd=str(root),
+            command="python another.py",
+            expires_at=EXPIRES_AT,
+            reason="must recover first",
+        )
+    assert unhealthy.value.code == "MCP_TRUST_MUTATION_RECOVERY_REQUIRED"
+    assert _audit_events(audit)[-1] == "mutation_prepared"
+
+    recovery = service.recover_startup()
+    assert recovery.status == "recovery_aborted"
+    assert _audit_events(audit)[-1] == "recovery_aborted"
+
+
+def test_shared_trust_lock_hard_link_is_rejected_as_unsafe_storage(tmp_path: Path) -> None:
+    from codex_preflight_mcp.trust_mutation import TrustMutationError
+
+    service, cache, root, _values, _audit = _service(tmp_path)
+    _approval_challenge(service, root)
+    lock_path = cache.path.with_suffix(f"{cache.path.suffix}.lock")
+    lock_path.unlink()
+    source = lock_path.with_name("shared.lock")
+    source.write_bytes(b"")
+    os.link(source, lock_path)
+
+    with pytest.raises(TrustMutationError) as caught:
+        service.approve(
+            cwd=str(root),
+            command="python private_script.py",
+            expires_at=EXPIRES_AT,
+            reason="reviewed again",
+        )
+
+    assert caught.value.code == "MCP_TRUST_MUTATION_UNSAFE_STORAGE"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows ACL fixture")
+def test_world_writable_trust_lock_acl_is_rejected_as_unsafe_storage(tmp_path: Path) -> None:
+    from codex_preflight_mcp.trust_mutation import TrustMutationError
+
+    service, cache, root, _values, _audit = _service(tmp_path)
+    _approval_challenge(service, root)
+    lock_path = cache.path.with_suffix(f"{cache.path.suffix}.lock")
+    changed = subprocess.run(
+        ["icacls", str(lock_path), "/grant", "*S-1-1-0:(F)"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if changed.returncode != 0:
+        pytest.skip("unable to create the unsafe Windows ACL fixture")
+
+    with pytest.raises(TrustMutationError) as caught:
+        service.approve(
+            cwd=str(root),
+            command="python private_script.py",
+            expires_at=EXPIRES_AT,
+            reason="reviewed again",
+        )
+
+    assert caught.value.code == "MCP_TRUST_MUTATION_UNSAFE_STORAGE"
 
 
 def test_disabled_service_does_not_touch_cache_or_issue_a_challenge(tmp_path: Path) -> None:

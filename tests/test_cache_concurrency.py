@@ -1,4 +1,5 @@
 import json
+import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
@@ -8,7 +9,11 @@ from uuid import uuid4
 import pytest
 
 from codex_preflight_core.cache import file_lock
-from codex_preflight_core.cache.file_lock import CacheLockTimeoutError, locked_cache_file
+from codex_preflight_core.cache.file_lock import (
+    CacheLockTimeoutError,
+    UnsafeCacheStorageError,
+    locked_cache_file,
+)
 from codex_preflight_core.cache.scan_cache import ScanCache
 from codex_preflight_core.cache.trust_cache import TrustCache, TrustCacheMutationPrepared
 
@@ -45,6 +50,76 @@ def test_lock_timeout_has_a_stable_exception(tmp_path: Path, monkeypatch: pytest
     with pytest.raises(CacheLockTimeoutError):
         with locked_cache_file(tmp_path / "trust.json", timeout=0):
             pass
+
+
+def test_private_shared_lock_rejects_hard_link_before_opener_is_called(tmp_path: Path) -> None:
+    cache_path = tmp_path / "private" / "trust.json"
+    with locked_cache_file(cache_path, private_storage=True):
+        pass
+    lock_path = cache_path.with_suffix(".json.lock")
+    lock_path.unlink()
+    source = lock_path.with_name("shared.lock")
+    source.write_bytes(b"")
+    os.link(source, lock_path)
+    opened = False
+
+    def forbidden_opener(_path: Path):
+        nonlocal opened
+        opened = True
+        raise AssertionError("unsafe shared lock was followed")
+
+    with pytest.raises(UnsafeCacheStorageError):
+        with locked_cache_file(cache_path, private_storage=True, lock_opener=forbidden_opener):
+            pass
+
+    assert opened is False
+
+
+def test_private_cache_path_rejects_hard_link_before_lock_open(tmp_path: Path) -> None:
+    cache_path = tmp_path / "private" / "trust.json"
+    with locked_cache_file(cache_path, private_storage=True):
+        pass
+    source = cache_path.with_name("shared.json")
+    source.write_text("[]", encoding="utf-8")
+    os.link(source, cache_path)
+    opened = False
+
+    def forbidden_opener(_path: Path):
+        nonlocal opened
+        opened = True
+        raise AssertionError("unsafe cache path reached the shared lock opener")
+
+    with pytest.raises(UnsafeCacheStorageError):
+        with locked_cache_file(cache_path, private_storage=True, lock_opener=forbidden_opener):
+            pass
+
+    assert opened is False
+
+
+def test_private_shared_lock_rejects_reparse_before_opener_is_called(tmp_path: Path) -> None:
+    cache_path = tmp_path / "private" / "trust.json"
+    with locked_cache_file(cache_path, private_storage=True):
+        pass
+    lock_path = cache_path.with_suffix(".json.lock")
+    lock_path.unlink()
+    source = lock_path.with_name("linked.lock")
+    source.write_bytes(b"")
+    try:
+        lock_path.symlink_to(source)
+    except OSError:
+        pytest.skip("file symlinks are unavailable")
+    opened = False
+
+    def forbidden_opener(_path: Path):
+        nonlocal opened
+        opened = True
+        raise AssertionError("reparse lock reached the shared lock opener")
+
+    with pytest.raises(UnsafeCacheStorageError):
+        with locked_cache_file(cache_path, private_storage=True, lock_opener=forbidden_opener):
+            pass
+
+    assert opened is False
 
 
 def test_scan_cache_concurrent_stores_keep_valid_json(tmp_path: Path) -> None:

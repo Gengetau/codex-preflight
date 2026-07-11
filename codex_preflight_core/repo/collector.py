@@ -1,5 +1,7 @@
 import os
 import shlex
+import stat
+from collections.abc import Callable
 from pathlib import Path
 
 from codex_preflight_core.command.classifier import split_shell_segments
@@ -55,6 +57,14 @@ COMMAND_TARGET_TOOLS = {"bash", "sh", "python", "node", "powershell", "pwsh"}
 FIXTURE_MARKER = ".codex-preflight-fixtures"
 
 
+class CriticalFileCollectionError(OSError):
+    pass
+
+
+class CriticalFileCollectionLimitError(CriticalFileCollectionError):
+    pass
+
+
 def is_critical_path(relative_path: str) -> bool:
     normalized = relative_path.replace("\\", "/")
     basename = Path(normalized).name
@@ -71,63 +81,149 @@ def _is_bounded_documentation_surface(normalized: str) -> bool:
     return normalized.startswith(DOCUMENTATION_PREFIXES) and normalized.lower().endswith(DOCUMENTATION_SUFFIXES)
 
 
-def collect_critical_files(root: Path, command: str | None = None) -> list[Path]:
+def collect_critical_files(
+    root: Path,
+    command: str | None = None,
+    *,
+    budget_check: Callable[[], None] | None = None,
+    reject_unsafe: bool = False,
+    max_files: int | None = None,
+) -> list[Path]:
+    if max_files is not None and (type(max_files) is not int or max_files < 0):
+        raise ValueError("max_files must be a non-negative integer")
+    _check_budget(budget_check)
     root = root.resolve()
+    _check_budget(budget_check)
     collected: set[Path] = set()
     for current, dirs, files in os.walk(root):
+        _check_budget(budget_check)
         current_path = Path(current)
-        dirs[:] = [
-            directory
-            for directory in dirs
-            if directory not in SKIP_DIRS and not (current_path / directory / FIXTURE_MARKER).exists()
-        ]
-        for filename in files:
-            path = current_path / filename
-            if not _is_safe_file(root, path):
+        retained_dirs: list[str] = []
+        for directory in dirs:
+            _check_budget(budget_check)
+            candidate = current_path / directory
+            if directory in SKIP_DIRS:
                 continue
+            if not _is_safe_directory(candidate):
+                if reject_unsafe:
+                    raise CriticalFileCollectionError("A repository directory is unsafe.")
+                continue
+            if not (candidate / FIXTURE_MARKER).exists():
+                retained_dirs.append(directory)
+            _check_budget(budget_check)
+        dirs[:] = retained_dirs
+        for filename in files:
+            _check_budget(budget_check)
+            path = current_path / filename
             relative = path.relative_to(root).as_posix()
             if is_critical_path(relative):
-                collected.add(Path(relative))
-    for target in _command_target_files(root, command):
-        collected.add(target)
+                if not _is_safe_file(path):
+                    if reject_unsafe:
+                        raise CriticalFileCollectionError("A critical file is unsafe.")
+                    continue
+                _add_collected(collected, Path(relative), max_files=max_files)
+            _check_budget(budget_check)
+    for target in _command_target_files(
+        root,
+        command,
+        budget_check=budget_check,
+        reject_unsafe=reject_unsafe,
+    ):
+        _check_budget(budget_check)
+        _add_collected(collected, target, max_files=max_files)
+    _check_budget(budget_check)
     return sorted(collected, key=lambda item: item.as_posix())
 
 
-def _is_safe_file(root: Path, path: Path) -> bool:
-    if not path.is_file():
+def _is_safe_file(path: Path) -> bool:
+    try:
+        info = path.lstat()
+    except OSError:
         return False
-    if path.is_symlink():
-        try:
-            path.resolve().relative_to(root)
-        except ValueError:
-            return False
-    return True
+    return (
+        stat.S_ISREG(info.st_mode)
+        and not stat.S_ISLNK(info.st_mode)
+        and not _is_reparse(info)
+        and info.st_nlink == 1
+    )
 
 
-def _command_target_files(root: Path, command: str | None) -> list[Path]:
+def _is_safe_directory(path: Path) -> bool:
+    try:
+        info = path.lstat()
+    except OSError:
+        return False
+    return stat.S_ISDIR(info.st_mode) and not stat.S_ISLNK(info.st_mode) and not _is_reparse(info)
+
+
+def _command_target_files(
+    root: Path,
+    command: str | None,
+    *,
+    budget_check: Callable[[], None] | None = None,
+    reject_unsafe: bool = False,
+) -> list[Path]:
+    _check_budget(budget_check)
     if not command:
         return []
     targets: set[Path] = set()
     for segment in split_shell_segments(command):
-        targets.update(_command_target_files_for_segment(root, segment))
+        _check_budget(budget_check)
+        targets.update(
+            _command_target_files_for_segment(
+                root,
+                segment,
+                budget_check=budget_check,
+                reject_unsafe=reject_unsafe,
+            )
+        )
+    _check_budget(budget_check)
     return sorted(targets, key=lambda item: item.as_posix())
 
 
-def _command_target_files_for_segment(root: Path, command: str) -> list[Path]:
+def _command_target_files_for_segment(
+    root: Path,
+    command: str,
+    *,
+    budget_check: Callable[[], None] | None = None,
+    reject_unsafe: bool = False,
+) -> list[Path]:
+    _check_budget(budget_check)
     try:
         parts = shlex.split(command, posix=False)
     except ValueError:
         parts = command.split()
+    _check_budget(budget_check)
     if len(parts) < 2 or parts[0].lower() not in COMMAND_TARGET_TOOLS:
         return []
     target = Path(parts[1].strip("\"'"))
     if target.is_absolute():
         return []
-    path = (root / target).resolve()
+    path = (root / target).absolute()
+    _check_budget(budget_check)
     try:
         relative = path.relative_to(root)
     except ValueError:
         return []
-    if _is_safe_file(root, path):
+    if os.path.lexists(path) and not _is_safe_file(path):
+        if reject_unsafe:
+            raise CriticalFileCollectionError("A command target file is unsafe.")
+        return []
+    if _is_safe_file(path):
         return [Path(relative.as_posix())]
     return []
+
+
+def _check_budget(check: Callable[[], None] | None) -> None:
+    if check is not None:
+        check()
+
+
+def _add_collected(collected: set[Path], path: Path, *, max_files: int | None) -> None:
+    collected.add(path)
+    if max_files is not None and len(collected) > max_files:
+        raise CriticalFileCollectionLimitError("The critical-file limit was exceeded.")
+
+
+def _is_reparse(info: os.stat_result) -> bool:
+    return bool(getattr(info, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))

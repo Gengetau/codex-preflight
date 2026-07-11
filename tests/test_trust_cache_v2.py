@@ -690,6 +690,7 @@ def test_mcp_approval_duplicate_is_a_no_write_no_ttl_extension(tmp_path: Path) -
             entry_id="123e4567-e89b-42d3-a456-426614174003",
             mutation_audit_event_id="123e4567-e89b-42d3-a456-426614174004",
         ),
+        revalidate=lambda _before_bytes: callbacks.append("revalidate"),
         prepare=unexpected_prepare,
         commit=lambda _prepared: (_ for _ in ()).throw(AssertionError("must not commit")),
     )
@@ -700,7 +701,7 @@ def test_mcp_approval_duplicate_is_a_no_write_no_ttl_extension(tmp_path: Path) -
     assert duplicate.entry == initial.entry
     assert duplicate.prepared_event_id is None
     assert duplicate.final_event_id is None
-    assert callbacks == []
+    assert callbacks == ["revalidate"]
     assert path.read_bytes() == before
 
 

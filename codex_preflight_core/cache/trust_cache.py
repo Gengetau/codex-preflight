@@ -13,7 +13,7 @@ from typing import Any, Protocol
 from uuid import UUID, uuid4
 
 from codex_preflight_core.cache.atomic_json import write_bytes_atomic, write_json_atomic
-from codex_preflight_core.cache.file_lock import locked_cache_file
+from codex_preflight_core.cache.file_lock import locked_cache_file, validate_private_cache_storage
 
 TRUST_CACHE_MAX_BYTES = 1024 * 1024
 TRUST_CACHE_MAX_MIGRATION_BACKUPS = 3
@@ -92,6 +92,10 @@ class MutationCommitHook(Protocol):
     def __call__(self, prepared: TrustCacheMutationPrepared) -> str: ...
 
 
+class MutationRevalidateHook(Protocol):
+    def __call__(self, before_bytes: bytes | None) -> None: ...
+
+
 @dataclass(frozen=True)
 class TrustCacheMutationResult:
     outcome: str
@@ -105,6 +109,11 @@ class TrustCacheMutationCommitError(RuntimeError):
     def __init__(self, result: TrustCacheMutationResult) -> None:
         self.result = result
         super().__init__("The trust mutation was committed but its audit commit failed.")
+
+
+class TrustCacheMutationWriteError(RuntimeError):
+    def __init__(self) -> None:
+        super().__init__("The prepared trust mutation could not be written.")
 
 
 class TrustCache:
@@ -192,8 +201,10 @@ class TrustCache:
         mutation_audit_event_id: str,
         prepare: MutationPrepareHook,
         commit: MutationCommitHook,
+        private_storage: bool = False,
+        revalidate: MutationRevalidateHook | None = None,
     ) -> TrustCacheMutationResult:
-        with locked_cache_file(self.path):
+        with locked_cache_file(self.path, private_storage=private_storage):
             snapshot = self._read_snapshot_unlocked()
             entries = snapshot.entries
             before_bytes = snapshot.raw_bytes
@@ -223,6 +234,8 @@ class TrustCache:
                 },
             }
             _validate_entry(entry, migrated=False)
+            if revalidate is not None:
+                revalidate(before_bytes)
             now = self._now()
             existing = _matching_entry(
                 entries,
@@ -250,8 +263,13 @@ class TrustCache:
                 prepared.event_id,
                 None,
             )
-            self._write_encoded_unlocked(after_bytes)
             try:
+                self._write_encoded_unlocked(after_bytes)
+            except Exception:
+                raise TrustCacheMutationWriteError from None
+            try:
+                if private_storage:
+                    validate_private_cache_storage(self.path)
                 final_event_id = _validate_uuid4(commit(prepared))
             except Exception:
                 raise TrustCacheMutationCommitError(result) from None
@@ -293,12 +311,13 @@ class TrustCache:
         expected_entry: dict[str, Any],
         prepare: MutationPrepareHook,
         commit: MutationCommitHook,
+        private_storage: bool = False,
     ) -> TrustCacheMutationResult:
         entry_id = _validate_uuid4(entry_id)
         if type(expected_version) is not int or expected_version != TRUST_CACHE_ENTRY_VERSION:
             raise ValueError("expected_version must be exactly integer 1")
         expected_entry = _validate_expected_entry(expected_entry, entry_id, expected_version)
-        with locked_cache_file(self.path):
+        with locked_cache_file(self.path, private_storage=private_storage):
             snapshot = self._read_snapshot_unlocked()
             entries = snapshot.entries
             before_bytes = snapshot.raw_bytes
@@ -329,8 +348,13 @@ class TrustCache:
                 prepared.event_id,
                 None,
             )
-            self._write_encoded_unlocked(after_bytes)
             try:
+                self._write_encoded_unlocked(after_bytes)
+            except Exception:
+                raise TrustCacheMutationWriteError from None
+            try:
+                if private_storage:
+                    validate_private_cache_storage(self.path)
                 final_event_id = _validate_uuid4(commit(prepared))
             except Exception:
                 raise TrustCacheMutationCommitError(result) from None

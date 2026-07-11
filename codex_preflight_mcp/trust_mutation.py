@@ -16,7 +16,12 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
-from codex_preflight_core.cache.file_lock import CacheLockTimeoutError, locked_cache_file
+from codex_preflight_core.cache.file_lock import (
+    CacheLockTimeoutError,
+    UnsafeCacheStorageError,
+    locked_cache_file,
+    validate_private_cache_storage,
+)
 from codex_preflight_core.cache.paths import (
     trust_cache_path,
     trust_mutation_audit_key_path,
@@ -29,11 +34,12 @@ from codex_preflight_core.cache.trust_cache import (
     TrustCacheMutationPlan,
     TrustCacheMutationPrepared,
     TrustCacheMutationResult,
+    TrustCacheMutationWriteError,
 )
 from codex_preflight_core.command.classifier import classify_command
 from codex_preflight_core.preflight import POLICY_VERSION, RULESET_VERSION
 from codex_preflight_core.repo.fingerprint import CriticalFingerprintError, compute_critical_fingerprint
-from codex_preflight_core.repo.identity import RepoIdentity, resolve_repo_identity
+from codex_preflight_core.repo.identity import RepoIdentity, RepoIdentityError, resolve_repo_identity
 from codex_preflight_mcp.trust_mutation_audit import (
     AuditContext,
     PreparedMutation,
@@ -127,7 +133,7 @@ class TrustMutationService:
         audit: TrustMutationAuditLog | object | None = None,
         confirmation: TrustMutationConfirmationManager | None = None,
         privacy_key: bytes | None = None,
-        identity_resolver: Callable[[Path], RepoIdentity] = resolve_repo_identity,
+        identity_resolver: Callable[..., RepoIdentity] = resolve_repo_identity,
         fingerprinter: Callable[..., str] = compute_critical_fingerprint,
         policy_version: str | Callable[[], str] = POLICY_VERSION,
         ruleset_version: str | Callable[[], str] = RULESET_VERSION,
@@ -174,7 +180,7 @@ class TrustMutationService:
         assert self.cache is not None
         assert self.audit is not None
         try:
-            with locked_cache_file(self.cache.path):
+            with locked_cache_file(self.cache.path, private_storage=True):
                 result = self.audit.verify_and_recover(  # type: ignore[union-attr]
                     read_store_bytes=self.cache._read_store_bytes_unlocked,
                 )
@@ -193,6 +199,7 @@ class TrustMutationService:
                 "MCP_TRUST_MUTATION_RECOVERY_REQUIRED",
                 "Trust mutation recovery requires known-good local state.",
             ) from None
+        self._healthy = True
         return result
 
     def approve(
@@ -208,7 +215,9 @@ class TrustMutationService:
         self._ensure_active()
         if confirmation_token is MISSING:
             self._issue_approval(cwd, command, expires_at, reason, extras)
-        return self._confirm_approval(cwd, command, expires_at, reason, confirmation_token, extras)
+        return self._run_confirmed(
+            lambda: self._confirm_approval(cwd, command, expires_at, reason, confirmation_token, extras)
+        )
 
     def revoke(
         self,
@@ -222,7 +231,36 @@ class TrustMutationService:
         self._ensure_active()
         if confirmation_token is MISSING:
             self._issue_revoke(trust_entry_id, expected_version, reason, extras)
-        return self._confirm_revoke(trust_entry_id, expected_version, reason, confirmation_token, extras)
+        return self._run_confirmed(
+            lambda: self._confirm_revoke(trust_entry_id, expected_version, reason, confirmation_token, extras)
+        )
+
+    def _run_confirmed(self, callback: Callable[[], dict[str, object]]) -> dict[str, object]:
+        result: dict[str, object] | None = None
+        failure: TrustMutationError | None = None
+        try:
+            result = callback()
+        except TrustMutationError as error:
+            failure = error
+        except Exception:
+            failure = self._error(
+                "MCP_TRUST_MUTATION_INTERNAL_ERROR",
+                "The trust mutation could not be completed.",
+                retryable=True,
+            )
+        if failure is not None:
+            failure.__cause__ = None
+            failure.__context__ = None
+            failure.__suppress_context__ = True
+            failure.__traceback__ = None
+            raise failure
+        if result is None:
+            raise self._error(
+                "MCP_TRUST_MUTATION_INTERNAL_ERROR",
+                "The trust mutation could not be completed.",
+                retryable=True,
+            )
+        return result
 
     def _issue_approval(
         self,
@@ -430,13 +468,15 @@ class TrustMutationService:
             outcome="pending",
         )
 
-        def prepare(plan: TrustCacheMutationPlan) -> TrustCacheMutationPrepared:
-            if plan.planned_event_id != prepared_event_id:
-                raise _TargetDrift
+        def revalidate(before_bytes: bytes | None) -> None:
             revalidated = self._derive_approval_target(request, deadline=deadline, include_store=False)
             if self._target_binding(revalidated) != self._target_binding(target):
                 raise _TargetDrift
-            if _store_digest(plan.before_bytes) != target["storeDigest"]:
+            if _store_digest(before_bytes) != target["storeDigest"]:
+                raise _TargetDrift
+
+        def prepare(plan: TrustCacheMutationPlan) -> TrustCacheMutationPrepared:
+            if plan.planned_event_id != prepared_event_id:
                 raise _TargetDrift
             prepared = self._prepare_audit(
                 operation="approve",
@@ -475,10 +515,15 @@ class TrustMutationService:
                     mutation_audit_event_id=prepared_event_id,
                     prepare=prepare,
                     commit=commit,
+                    private_storage=True,
+                    revalidate=revalidate,
                 )
         except TrustCacheMutationCommitError as error:
             self._mark_unhealthy()
-            raise self._committed_pending_error("approve", error.result) from None
+            raise self._committed_pending_error(error.result) from None
+        except TrustCacheMutationWriteError as error:
+            self._mark_unhealthy()
+            raise self._cache_error(error) from None
         except _TargetDrift:
             error = self._error(
                 "MCP_TRUST_MUTATION_TARGET_DRIFT",
@@ -593,10 +638,14 @@ class TrustMutationService:
                     expected_entry=expected_entry,
                     prepare=prepare,
                     commit=commit,
+                    private_storage=True,
                 )
         except TrustCacheMutationCommitError as error:
             self._mark_unhealthy()
-            raise self._committed_pending_error("revoke", error.result) from None
+            raise self._committed_pending_error(error.result) from None
+        except TrustCacheMutationWriteError as error:
+            self._mark_unhealthy()
+            raise self._cache_error(error) from None
         except _TargetDrift:
             error = self._error(
                 "MCP_TRUST_MUTATION_TARGET_DRIFT",
@@ -759,7 +808,12 @@ class TrustMutationService:
 
     def _validate_cwd(self, value: object) -> Path:
         text = _bounded_text(value, maximum=4096, field="cwd", allow_empty=False)
-        if "://" in text or text.startswith("git@") or text.lower().startswith("git clone"):
+        if (
+            "://" in text
+            or text.startswith("git@")
+            or text.lower().startswith("git clone")
+            or _is_nonlocal_windows_path(text)
+        ):
             raise self._invalid_argument("cwd")
         try:
             path = Path(text)
@@ -788,7 +842,14 @@ class TrustMutationService:
         if not isinstance(cwd, Path) or not isinstance(command, str):
             raise self._error("MCP_TRUST_MUTATION_INTERNAL_ERROR", "The trust target is unavailable.")
         try:
-            identity = self.identity_resolver(cwd)
+            identity = self.identity_resolver(
+                cwd,
+                deadline=deadline,
+                cancellation_check=self.cancellation_check,
+                monotonic=self.monotonic,
+            )
+        except RepoIdentityError as error:
+            raise self._identity_error(error) from None
         except Exception:
             raise self._error(
                 "MCP_TRUST_MUTATION_IDENTITY_UNRESOLVED",
@@ -906,7 +967,7 @@ class TrustMutationService:
         self._check_target(deadline)
         assert self.cache is not None
         try:
-            with locked_cache_file(self.cache.path):
+            with locked_cache_file(self.cache.path, private_storage=True):
                 snapshot = self.cache._read_snapshot_unlocked()
                 entries = [_thaw(entry) for entry in snapshot.entries]
                 raw = snapshot.raw_bytes
@@ -1163,7 +1224,7 @@ class TrustMutationService:
             "safety": dict(MUTATION_SAFETY),
         }
 
-    def _committed_pending_error(self, operation: str, result: TrustCacheMutationResult) -> TrustMutationError:
+    def _committed_pending_error(self, result: TrustCacheMutationResult) -> TrustMutationError:
         entry = result.entry
         prepared_event_id = result.prepared_event_id
         if entry is None or prepared_event_id is None:
@@ -1176,7 +1237,7 @@ class TrustMutationService:
             "The trust mutation committed, but its audit completion is pending recovery.",
             context={
                 "committed": True,
-                "operation": operation,
+                "operation": "approve-or-revoke",
                 "entryId": entry["entryId"],
                 "preparedAuditEventId": prepared_event_id,
             },
@@ -1250,7 +1311,8 @@ class TrustMutationService:
     def _record(self, event: str, context: AuditContext) -> str:
         assert self.audit is not None
         try:
-            return self.audit.record(event, context=context)  # type: ignore[union-attr]
+            with self._audit_reservation_lock:
+                return self.audit.record(event, context=context)  # type: ignore[union-attr]
         except TrustMutationAuditError as error:
             raise self._audit_error(error) from None
         except Exception:
@@ -1338,12 +1400,8 @@ class TrustMutationService:
     def _ensure_storage_safe(self) -> None:
         assert self.cache is not None
         try:
-            _assert_no_reparse_ancestors(self.cache.path.parent)
-            if os.path.lexists(self.cache.path):
-                info = self.cache.path.lstat()
-                if self.cache.path.is_symlink() or _is_reparse(info) or info.st_nlink != 1:
-                    raise OSError("unsafe trust store")
-        except (OSError, RuntimeError):
+            validate_private_cache_storage(self.cache.path)
+        except (UnsafeCacheStorageError, OSError, RuntimeError):
             raise self._error(
                 "MCP_TRUST_MUTATION_UNSAFE_STORAGE",
                 "The local trust mutation storage is unsafe.",
@@ -1368,6 +1426,16 @@ class TrustMutationService:
     def _fingerprint_error(self, error: CriticalFingerprintError) -> TrustMutationError:
         if error.code == "limit-exceeded":
             return self._error("MCP_TRUST_MUTATION_LIMIT_EXCEEDED", "The local target exceeds its safety budget.")
+        if error.code == "timeout":
+            return self._error("MCP_TRUST_MUTATION_TIMEOUT", "The target operation timed out.")
+        if error.code == "cancelled":
+            return self._error("MCP_TRUST_MUTATION_CANCELLED", "The target operation was cancelled.")
+        return self._error(
+            "MCP_TRUST_MUTATION_IDENTITY_UNRESOLVED",
+            "The local trust target identity could not be resolved safely.",
+        )
+
+    def _identity_error(self, error: RepoIdentityError) -> TrustMutationError:
         if error.code == "timeout":
             return self._error("MCP_TRUST_MUTATION_TIMEOUT", "The target operation timed out.")
         if error.code == "cancelled":
@@ -1473,7 +1541,10 @@ class TrustMutationService:
     def _mark_unhealthy(self) -> None:
         self._healthy = False
         if self.confirmation is not None:
-            self.confirmation.invalidate_all()
+            try:
+                self.confirmation.invalidate_all()
+            except Exception:
+                pass
 
     def _wall_time(self) -> float:
         try:
@@ -1639,3 +1710,26 @@ def _assert_no_reparse_ancestors(path: Path) -> None:
         info = candidate.lstat()
         if candidate.is_symlink() or _is_reparse(info):
             raise OSError("unsafe reparse path")
+
+
+def _is_nonlocal_windows_path(value: str) -> bool:
+    windows_path = value.replace("/", "\\")
+    if windows_path.startswith("\\\\") or windows_path.startswith("\\??\\"):
+        return True
+    if not re.match(r"^[A-Za-z]:", windows_path):
+        return False
+    try:
+        return _windows_drive_type(f"{windows_path[0]}:\\") == 4
+    except (OSError, ValueError):
+        return True
+
+
+def _windows_drive_type(root: str) -> int:
+    if os.name != "nt":
+        return 0
+    import ctypes
+
+    get_drive_type = ctypes.WinDLL("kernel32", use_last_error=True).GetDriveTypeW
+    get_drive_type.argtypes = [ctypes.c_wchar_p]
+    get_drive_type.restype = ctypes.c_uint
+    return int(get_drive_type(root))

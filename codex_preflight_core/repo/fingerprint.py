@@ -1,9 +1,18 @@
+import math
+import os
+import stat
 import time
 from collections.abc import Callable
 from hashlib import sha256
 from pathlib import Path
 
-from codex_preflight_core.repo.collector import collect_critical_files
+from codex_preflight_core.repo.collector import (
+    CriticalFileCollectionError,
+    CriticalFileCollectionLimitError,
+    collect_critical_files,
+)
+
+_READ_CHUNK_BYTES = 64 * 1024
 
 
 class CriticalFingerprintError(OSError):
@@ -26,11 +35,36 @@ def compute_critical_fingerprint(
     _validate_limit(max_files)
     _validate_limit(max_file_bytes)
     _validate_limit(max_total_bytes)
-    if deadline is not None and (isinstance(deadline, bool) or not isinstance(deadline, (int, float))):
+    if deadline is not None and (
+        isinstance(deadline, bool)
+        or not isinstance(deadline, (int, float))
+        or not math.isfinite(deadline)
+    ):
         raise ValueError("deadline must be a finite monotonic timestamp")
-    root = root.resolve()
     _check_budget(deadline, cancellation_check, monotonic)
-    files = collect_critical_files(root, command=command)
+    try:
+        _assert_safe_root(root)
+        root = root.resolve()
+    except OSError as error:
+        raise CriticalFingerprintError("unavailable", "The repository root is unsafe.") from error
+    _check_budget(deadline, cancellation_check, monotonic)
+
+    def budget_check() -> None:
+        _check_budget(deadline, cancellation_check, monotonic)
+
+    try:
+        files = collect_critical_files(
+            root,
+            command=command,
+            budget_check=budget_check,
+            reject_unsafe=True,
+            max_files=max_files,
+        )
+    except CriticalFileCollectionLimitError as error:
+        raise CriticalFingerprintError("limit-exceeded", "The critical-file limit was exceeded.") from error
+    except CriticalFileCollectionError as error:
+        raise CriticalFingerprintError("unavailable", "A critical file could not be read safely.") from error
+    _check_budget(deadline, cancellation_check, monotonic)
     if max_files is not None and len(files) > max_files:
         raise CriticalFingerprintError("limit-exceeded", "The critical-file limit was exceeded.")
 
@@ -40,28 +74,94 @@ def compute_critical_fingerprint(
         _check_budget(deadline, cancellation_check, monotonic)
         path = root / relative
         try:
-            expected_size = path.stat().st_size
+            _check_budget(deadline, cancellation_check, monotonic)
+            named = path.lstat()
+            _validate_regular_file(named)
+            expected_size = named.st_size
+            _check_budget(deadline, cancellation_check, monotonic)
             if expected_size < 0:
                 raise OSError("negative file size")
             if max_file_bytes is not None and expected_size > max_file_bytes:
                 raise CriticalFingerprintError("limit-exceeded", "The critical-file size limit was exceeded.")
             if max_total_bytes is not None and total_bytes + expected_size > max_total_bytes:
                 raise CriticalFingerprintError("limit-exceeded", "The total critical-file limit was exceeded.")
-            contents = path.read_bytes()
+            size, digest = _hash_bounded_file(
+                path,
+                total_bytes=total_bytes,
+                max_file_bytes=max_file_bytes,
+                max_total_bytes=max_total_bytes,
+                budget_check=budget_check,
+            )
         except CriticalFingerprintError:
             raise
         except OSError as error:
             raise CriticalFingerprintError("unavailable", "A critical file could not be read safely.") from error
-        if max_file_bytes is not None and len(contents) > max_file_bytes:
-            raise CriticalFingerprintError("limit-exceeded", "The critical-file size limit was exceeded.")
-        if max_total_bytes is not None and total_bytes + len(contents) > max_total_bytes:
-            raise CriticalFingerprintError("limit-exceeded", "The total critical-file limit was exceeded.")
-        total_bytes += len(contents)
-        digest = sha256(contents).hexdigest()
+        total_bytes += size
         entries.append(f"{relative.as_posix()}:{digest}")
         _check_budget(deadline, cancellation_check, monotonic)
+    _check_budget(deadline, cancellation_check, monotonic)
     joined = "\n".join(entries).encode("utf-8")
     return f"sha256:{sha256(joined).hexdigest()}"
+
+
+def _hash_bounded_file(
+    path: Path,
+    *,
+    total_bytes: int,
+    max_file_bytes: int | None,
+    max_total_bytes: int | None,
+    budget_check: Callable[[], None],
+) -> tuple[int, str]:
+    size = 0
+    digest = sha256()
+    budget_check()
+    with path.open("rb") as handle:
+        opened = os.fstat(handle.fileno())
+        named = path.lstat()
+        _validate_regular_file(opened)
+        _validate_regular_file(named)
+        if opened.st_dev != named.st_dev or opened.st_ino != named.st_ino:
+            raise OSError("critical file changed while opening")
+        while True:
+            budget_check()
+            chunk = handle.read(_READ_CHUNK_BYTES)
+            budget_check()
+            if not chunk:
+                break
+            size += len(chunk)
+            if max_file_bytes is not None and size > max_file_bytes:
+                raise CriticalFingerprintError("limit-exceeded", "The critical-file size limit was exceeded.")
+            if max_total_bytes is not None and total_bytes + size > max_total_bytes:
+                raise CriticalFingerprintError("limit-exceeded", "The total critical-file limit was exceeded.")
+            digest.update(chunk)
+    budget_check()
+    return size, digest.hexdigest()
+
+
+def _assert_safe_root(root: Path) -> None:
+    absolute = root.absolute()
+    for candidate in [absolute, *absolute.parents]:
+        if not os.path.lexists(candidate):
+            continue
+        info = candidate.lstat()
+        if stat.S_ISLNK(info.st_mode) or _is_reparse(info):
+            raise OSError("repository root uses a reparse path")
+    if not stat.S_ISDIR(absolute.lstat().st_mode):
+        raise OSError("repository root is not a directory")
+
+
+def _validate_regular_file(info: os.stat_result) -> None:
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or stat.S_ISLNK(info.st_mode)
+        or _is_reparse(info)
+        or info.st_nlink != 1
+    ):
+        raise OSError("unsafe critical file")
+
+
+def _is_reparse(info: os.stat_result) -> bool:
+    return bool(getattr(info, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
 
 
 def _validate_limit(value: int | None) -> None:
@@ -86,5 +186,10 @@ def _check_budget(
             now = monotonic()
         except Exception as error:
             raise CriticalFingerprintError("timeout", "The target operation reached its timeout.") from error
-        if now >= deadline:
+        if (
+            isinstance(now, bool)
+            or not isinstance(now, (int, float))
+            or not math.isfinite(now)
+            or now >= deadline
+        ):
             raise CriticalFingerprintError("timeout", "The target operation reached its timeout.")
