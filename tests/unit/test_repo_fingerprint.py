@@ -1,5 +1,6 @@
 import os
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, BinaryIO
@@ -10,6 +11,7 @@ from codex_preflight_core.repo import collector as collector_module
 from codex_preflight_core.repo import fingerprint as fingerprint_module
 from codex_preflight_core.repo import git as git_module
 from codex_preflight_core.repo import identity as identity_module
+from codex_preflight_core.repo import safe_path as safe_path_module
 from codex_preflight_core.repo.collector import CriticalFileCollectionError, collect_critical_files
 from codex_preflight_core.repo.fingerprint import CriticalFingerprintError, compute_critical_fingerprint
 from codex_preflight_core.repo.identity import resolve_repo_identity
@@ -49,7 +51,11 @@ def test_collects_nested_workflows_scripts_and_tools(tmp_path: Path) -> None:
     assert "tools/helper.py" in collected
 
 
-def test_non_git_repo_identity_has_low_confidence(tmp_path: Path) -> None:
+def test_non_git_repo_identity_has_low_confidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(identity_module, "run_git", lambda *_args, **_kwargs: None)
     identity = resolve_repo_identity(tmp_path)
 
     assert identity.path == tmp_path.resolve()
@@ -79,37 +85,19 @@ def test_scandir_checks_cancellation_before_consuming_the_next_large_directory_e
 ) -> None:
     for index in range(100):
         (tmp_path / f"ordinary-{index}.txt").write_text("data", encoding="utf-8")
-    real_scandir = collector_module.os.scandir
+    real_entries = safe_path_module._directory_entries
     next_calls = [0]
 
-    class GuardedScandir:
-        def __init__(self, path: object) -> None:
-            self.inner = real_scandir(path)
-
-        def __enter__(self):
-            self.inner.__enter__()
-            return self
-
-        def __exit__(self, *args: object):
-            return self.inner.__exit__(*args)
-
-        def __iter__(self):
-            return self
-
-        def __next__(self):
+    def guarded_entries(directory: object):
+        for entry in real_entries(directory):
             next_calls[0] += 1
-            return next(self.inner)
+            yield entry
 
     def budget_check() -> None:
         if next_calls[0]:
             raise CriticalFingerprintError("cancelled", "cancelled inside one large directory")
 
-    def guarded_scandir(path: object):
-        if Path(path) == tmp_path:
-            return GuardedScandir(path)
-        return real_scandir(path)
-
-    monkeypatch.setattr(collector_module.os, "scandir", guarded_scandir)
+    monkeypatch.setattr(safe_path_module, "_directory_entries", guarded_entries)
 
     with pytest.raises(CriticalFingerprintError) as caught:
         collect_critical_files(tmp_path, budget_check=budget_check, reject_unsafe=True)
@@ -358,6 +346,7 @@ def test_run_git_sanitizes_inherited_repository_and_config_redirections(
         "GIT_CONFIG_COUNT": "1",
         "GIT_CONFIG_KEY_0": "core.worktree",
         "GIT_CONFIG_VALUE_0": str(tmp_path / "redirected-config-worktree"),
+        "GIT_CEILING_DIRECTORIES": str(tmp_path),
     }
     for name, value in inherited.items():
         monkeypatch.setenv(name, value)
@@ -406,7 +395,7 @@ def test_identity_rejects_core_worktree_unc_before_git_or_target_access(
     monkeypatch.setattr(identity_module, "run_git", forbidden_git)
 
     with pytest.raises(identity_module.RepoIdentityError) as caught:
-        resolve_repo_identity(repo)
+        resolve_repo_identity(repo, strict_safety=True)
 
     assert caught.value.code == "unsafe"
     assert calls == []
@@ -435,7 +424,7 @@ def test_identity_rejects_core_worktree_reparse_before_git_or_target_access(
     monkeypatch.setattr(identity_module, "run_git", forbidden_git)
 
     with pytest.raises(identity_module.RepoIdentityError) as caught:
-        resolve_repo_identity(repo)
+        resolve_repo_identity(repo, strict_safety=True)
 
     assert caught.value.code == "unsafe"
     assert calls == []
@@ -472,7 +461,7 @@ def test_identity_rejects_git_control_directory_reparse_before_git(
     monkeypatch.setattr(identity_module, "run_git", forbidden_git)
 
     with pytest.raises(identity_module.RepoIdentityError) as caught:
-        resolve_repo_identity(repo)
+        resolve_repo_identity(repo, strict_safety=True)
 
     assert caught.value.code == "unsafe"
     assert calls == []
@@ -504,12 +493,395 @@ def test_identity_supports_valid_gitfile_and_common_dir_from_linked_worktree(tmp
         if result.returncode != 0:
             pytest.skip("linked Git worktree fixtures are unavailable")
 
-    identity = resolve_repo_identity(linked)
+    identity = resolve_repo_identity(linked, strict_safety=True)
 
     assert identity.path == linked.absolute()
     assert identity.identity_confidence == "high"
     assert identity.branch == "linked-test"
     assert identity.head_commit is not None and len(identity.head_commit) == 40
+
+
+def test_strict_identity_ignores_inherited_git_ceiling(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = tmp_path / "repo"
+    nested = repo / "nested"
+    nested.mkdir(parents=True)
+    _write_git_config_worktree(repo, repo.as_posix())
+    committed = subprocess.run(
+        [
+            "git",
+            "-c",
+            "core.longpaths=true",
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "base",
+        ],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if committed.returncode != 0:
+        pytest.skip("Git repository fixtures are unavailable")
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(nested))
+
+    identity = resolve_repo_identity(nested, strict_safety=True)
+
+    assert identity.path == repo.absolute()
+    assert identity.identity_confidence == "high"
+
+
+def test_strict_identity_rejects_unrelated_configured_worktree(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    unrelated = tmp_path / "unrelated"
+    repo.mkdir()
+    unrelated.mkdir()
+    _write_git_config_worktree(repo, str(unrelated))
+
+    with pytest.raises(identity_module.RepoIdentityError) as caught:
+        resolve_repo_identity(repo, strict_safety=True)
+
+    assert caught.value.code == "unsafe"
+
+
+@pytest.mark.parametrize("failed_read", ["root", "head"])
+def test_strict_identity_fails_closed_when_mandatory_snapshot_read_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failed_read: str,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_git_config_worktree(repo, repo.as_posix())
+    committed = subprocess.run(
+        [
+            "git",
+            "-c",
+            "core.longpaths=true",
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "base",
+        ],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if committed.returncode != 0:
+        pytest.fail(f"Git commit fixture failed: {committed.stderr}")
+    real_run_git = identity_module.run_git
+    selected_read_seen = False
+
+    def fail_selected(root: Path, *args: str, timeout: float) -> str | None:
+        nonlocal selected_read_seen
+        if failed_read == "root" and args[-2:] == ("rev-parse", "--show-toplevel"):
+            selected_read_seen = True
+            return None
+        if failed_read == "head" and args[-2:] == ("rev-parse", "HEAD"):
+            selected_read_seen = True
+            return None
+        return real_run_git(root, *args, timeout=timeout)
+
+    monkeypatch.setattr(identity_module, "run_git", fail_selected)
+
+    with pytest.raises(identity_module.RepoIdentityError) as caught:
+        resolve_repo_identity(repo, strict_safety=True)
+
+    assert caught.value.code == "unsafe"
+    assert selected_read_seen is True
+
+
+@pytest.mark.parametrize("control_name", ["config", "config.worktree", "commondir"])
+@pytest.mark.parametrize("metadata_read", [0, 1, 2, 3])
+def test_strict_identity_fixed_reads_use_immutable_control_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    control_name: str,
+    metadata_read: int,
+) -> None:
+    main = tmp_path / "main"
+    linked = tmp_path / "linked"
+    commands = [
+        (["git", "init", "--quiet", str(main)], None),
+        (
+            [
+                "git",
+                "-c",
+                "core.longpaths=true",
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.invalid",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "base",
+            ],
+            main,
+        ),
+        (
+            [
+                "git",
+                "-c",
+                "core.longpaths=true",
+                "worktree",
+                "add",
+                "--quiet",
+                "-b",
+                "snapshot-test",
+                str(linked),
+            ],
+            main,
+        ),
+        (["git", "config", "extensions.worktreeConfig", "true"], main),
+    ]
+    for command, cwd in commands:
+        result = subprocess.run(command, cwd=cwd, capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            pytest.fail(f"linked Git worktree fixture failed: {command!r}: {result.stderr}")
+    worktree_git_dir = Path((linked / ".git").read_text(encoding="utf-8").strip()[len("gitdir: ") :])
+    control_paths = {
+        "config": main / ".git" / "config",
+        "config.worktree": worktree_git_dir / "config.worktree",
+        "commondir": worktree_git_dir / "commondir",
+    }
+    control_path = control_paths[control_name]
+    if control_name == "config.worktree":
+        control_path.write_text("[core]\n", encoding="utf-8")
+    original = control_path.read_bytes()
+    real_run_git = identity_module.run_git
+    calls = 0
+
+    def swap_before_selected_read(root: Path, *args: str, timeout: float) -> str | None:
+        nonlocal calls
+        if calls == metadata_read:
+            if control_name == "commondir":
+                control_path.write_text("//192.0.2.1/unreachable-control\n", encoding="utf-8")
+            else:
+                control_path.write_text("[include]\npath = //192.0.2.1/unreachable-control\n", encoding="utf-8")
+        calls += 1
+        return real_run_git(root, *args, timeout=timeout)
+
+    monkeypatch.setattr(identity_module, "run_git", swap_before_selected_read)
+    try:
+        identity = resolve_repo_identity(linked, strict_safety=True)
+    finally:
+        control_path.write_bytes(original)
+
+    assert calls == 4
+    assert identity.path == linked.absolute()
+    assert identity.branch == "snapshot-test"
+
+
+def test_strict_collection_never_uses_full_path_scandir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "nested").mkdir()
+    (tmp_path / "nested" / "README.md").write_text("held traversal\n", encoding="utf-8")
+    real_scandir = collector_module.os.scandir
+
+    def descriptor_only_scandir(path: object):
+        assert isinstance(path, int), f"strict traversal used full-path scandir: {path!r}"
+        return real_scandir(path)
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(collector_module.os, "scandir", descriptor_only_scandir)
+        assert collect_critical_files(tmp_path, reject_unsafe=True) == [Path("nested/README.md")]
+
+
+def _swap_directory_to_link(path: Path, moved: Path, target: str | Path) -> None:
+    path.rename(moved)
+    try:
+        path.symlink_to(target, target_is_directory=True)
+    except OSError:
+        moved.rename(path)
+        pytest.skip("directory symlinks are unavailable")
+
+
+def _restore_swapped_directory(path: Path, moved: Path) -> None:
+    if path.is_symlink():
+        path.unlink()
+    if moved.exists():
+        moved.rename(path)
+
+
+def test_strict_traversal_rejects_root_swap_before_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    outside = tmp_path.parent / f"outside-{os.urandom(4).hex()}"
+    moved = tmp_path.parent / f"original-{os.urandom(4).hex()}"
+    outside.mkdir()
+    (tmp_path / "README.md").write_text("reviewed\n", encoding="utf-8")
+    (outside / "README.md").write_text("outside\n", encoding="utf-8")
+    target: str | Path = r"\\192.0.2.1\unreachable-root" if os.name == "nt" else outside
+    real_open = safe_path_module._open_directory
+    swapped = False
+
+    def swap_before_root_open(path: Path, parent_descriptor: int | None, name: str | None) -> int:
+        nonlocal swapped
+        if path == tmp_path and not swapped:
+            _swap_directory_to_link(tmp_path, moved, target)
+            swapped = True
+        return real_open(path, parent_descriptor, name)
+
+    monkeypatch.setattr(safe_path_module, "_open_directory", swap_before_root_open)
+    try:
+        with pytest.raises(CriticalFileCollectionError):
+            collect_critical_files(tmp_path, reject_unsafe=True)
+        assert swapped is True
+    finally:
+        _restore_swapped_directory(tmp_path, moved)
+        (outside / "README.md").unlink()
+        outside.rmdir()
+
+
+def test_strict_traversal_rejects_pending_directory_swap_before_enumeration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pending = tmp_path / "pending"
+    moved = tmp_path / "original-pending"
+    outside = tmp_path / "node_modules"
+    pending.mkdir()
+    outside.mkdir()
+    (pending / "README.md").write_text("reviewed\n", encoding="utf-8")
+    (outside / "README.md").write_text("outside\n", encoding="utf-8")
+    target: str | Path = r"\\192.0.2.1\unreachable-pending" if os.name == "nt" else outside
+    real_open = safe_path_module._open_directory
+    swapped = False
+
+    def swap_before_pending_open(path: Path, parent_descriptor: int | None, name: str | None) -> int:
+        nonlocal swapped
+        if path == pending and not swapped:
+            _swap_directory_to_link(pending, moved, target)
+            swapped = True
+        return real_open(path, parent_descriptor, name)
+
+    monkeypatch.setattr(safe_path_module, "_open_directory", swap_before_pending_open)
+    try:
+        with pytest.raises(CriticalFileCollectionError):
+            collect_critical_files(tmp_path, reject_unsafe=True)
+        assert swapped is True
+    finally:
+        _restore_swapped_directory(pending, moved)
+
+
+def test_strict_fixture_marker_lookup_is_bound_to_held_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marked = tmp_path / "marked"
+    moved = tmp_path / "original-marked"
+    outside = tmp_path / "node_modules"
+    marked.mkdir()
+    outside.mkdir()
+    (marked / ".codex-preflight-fixtures").write_text("skip\n", encoding="utf-8")
+    (marked / "README.md").write_text("fixture\n", encoding="utf-8")
+    (outside / "README.md").write_text("outside\n", encoding="utf-8")
+    real_entries = safe_path_module._directory_entries
+    attempted = False
+    swapped = False
+
+    def swap_after_directory_is_held(directory: Any):
+        nonlocal attempted, swapped
+        path = directory.path
+        if path == marked and not attempted:
+            attempted = True
+            try:
+                _swap_directory_to_link(marked, moved, outside)
+                swapped = True
+            except PermissionError:
+                pass
+        yield from real_entries(directory)
+
+    monkeypatch.setattr(safe_path_module, "_directory_entries", swap_after_directory_is_held)
+    try:
+        if os.name == "nt":
+            assert collect_critical_files(tmp_path, reject_unsafe=True) == []
+        else:
+            with pytest.raises(CriticalFileCollectionError):
+                collect_critical_files(tmp_path, reject_unsafe=True)
+        assert attempted is True
+    finally:
+        if swapped:
+            _restore_swapped_directory(marked, moved)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX FIFO safety boundary")
+@pytest.mark.parametrize("surface", ["gitfile", "commondir", "config", "command-target"])
+@pytest.mark.parametrize("special_kind", ["fifo", "socket"])
+def test_strict_special_file_probes_are_process_bounded(
+    tmp_path: Path,
+    surface: str,
+    special_kind: str,
+) -> None:
+    script = tmp_path / "probe.py"
+    script.write_text(
+        """
+import os
+import socket
+import sys
+from pathlib import Path
+from codex_preflight_core.repo.fingerprint import compute_critical_fingerprint
+from codex_preflight_core.repo.identity import resolve_repo_identity
+
+root = Path(sys.argv[1])
+surface = sys.argv[2]
+special_kind = sys.argv[3]
+repo = root / 'repo'
+repo.mkdir()
+holder = None
+def make_special(path):
+    global holder
+    if special_kind == 'fifo':
+        os.mkfifo(path)
+    else:
+        holder = socket.socket(socket.AF_UNIX)
+        holder.bind(str(path))
+if surface == 'gitfile':
+    make_special(repo / '.git')
+elif surface == 'commondir':
+    control = root / 'control'
+    control.mkdir()
+    (repo / '.git').write_text(f'gitdir: {control}\\n', encoding='utf-8')
+    make_special(control / 'commondir')
+elif surface == 'config':
+    control = repo / '.git'
+    control.mkdir()
+    make_special(control / 'config')
+elif surface == 'command-target':
+    target = repo / 'runner.py'
+    make_special(target)
+try:
+    if surface == 'command-target':
+        compute_critical_fingerprint(repo, 'python runner.py', strict_safety=True)
+    else:
+        resolve_repo_identity(repo, strict_safety=True)
+except OSError:
+    raise SystemExit(0)
+raise SystemExit(2)
+""".strip(),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [sys.executable, str(script), str(tmp_path), surface, special_kind],
+        cwd=Path.cwd(),
+        capture_output=True,
+        text=True,
+        timeout=3,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_strict_command_target_rejects_intermediate_symlink_under_skipped_directory(tmp_path: Path) -> None:

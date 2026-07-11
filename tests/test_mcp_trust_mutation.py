@@ -254,6 +254,12 @@ def test_approval_first_call_is_only_a_fixed_human_challenge(tmp_path: Path) -> 
         "monotonic": service.monotonic,
         "strict_safety": True,
     }
+    assert values["identity_call"][1] == {
+        "deadline": 30.0,
+        "cancellation_check": None,
+        "monotonic": service.monotonic,
+        "strict_safety": True,
+    }
     assert [event for event, _context in audit.events] == [
         "request_validated",
         "identity_resolved",

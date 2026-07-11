@@ -26,6 +26,13 @@ class _HeldDirectory:
     name: str | None
 
 
+@dataclass(frozen=True)
+class SafeDirectoryEntry:
+    name: str
+    mode: int
+    reparse: bool
+
+
 def local_absolute_path(value: str | Path, *, base: Path | None = None) -> Path:
     text = str(value)
     if not text or "\x00" in text or any(ord(character) < 32 for character in text):
@@ -47,6 +54,17 @@ def hold_directory_nofollow(path: Path) -> Iterator[Path]:
     held = _open_directory_chain(absolute)
     try:
         yield absolute
+        _verify_directory_chain(held)
+    finally:
+        _close_directory_chain(held)
+
+
+@contextmanager
+def iterate_directory_nofollow(path: Path) -> Iterator[Iterator[SafeDirectoryEntry]]:
+    absolute = local_absolute_path(path)
+    held = _open_directory_chain(absolute)
+    try:
+        yield _directory_entries(held[-1])
         _verify_directory_chain(held)
     finally:
         _close_directory_chain(held)
@@ -114,6 +132,7 @@ def _open_directory_chain(path: Path) -> list[_HeldDirectory]:
 
 
 def _open_directory(path: Path, parent_descriptor: int | None, name: str | None) -> int:
+    descriptor: int | None = None
     try:
         if os.name == "nt":
             descriptor = _windows_open(path, directory=True)
@@ -134,6 +153,8 @@ def _open_directory(path: Path, parent_descriptor: int | None, name: str | None)
     except FileNotFoundError:
         raise
     except Exception as error:
+        if descriptor is not None:
+            os.close(descriptor)
         raise SafePathError("The directory path is unsafe.") from error
 
 
@@ -143,7 +164,7 @@ def _open_file(path: Path, parent_descriptor: int) -> int:
             return _windows_open(path, directory=False)
         return os.open(
             path.name,
-            os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+            os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK | os.O_NOFOLLOW,
             dir_fd=parent_descriptor,
         )
     except FileNotFoundError:
@@ -222,8 +243,22 @@ def _is_reparse(info: os.stat_result) -> bool:
     return bool(getattr(info, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
 
 
+def _directory_entries(directory: _HeldDirectory) -> Iterator[SafeDirectoryEntry]:
+    if os.name == "nt":
+        yield from _windows_directory_entries(directory.descriptor)
+        return
+    try:
+        with os.scandir(directory.descriptor) as iterator:
+            for entry in iterator:
+                info = entry.stat(follow_symlinks=False)
+                yield SafeDirectoryEntry(entry.name, info.st_mode, _is_reparse(info))
+    except OSError as error:
+        raise SafePathError("The directory could not be enumerated safely.") from error
+
+
 if os.name == "nt":
     _GENERIC_READ = 0x80000000
+    _FILE_LIST_DIRECTORY = 0x00000001
     _READ_CONTROL = 0x00020000
     _FILE_READ_ATTRIBUTES = 0x0080
     _FILE_SHARE_READ = 0x00000001
@@ -250,10 +285,31 @@ if os.name == "nt":
     _KERNEL32.CloseHandle.restype = wintypes.BOOL
     _KERNEL32.GetDriveTypeW.argtypes = [wintypes.LPCWSTR]
     _KERNEL32.GetDriveTypeW.restype = wintypes.UINT
+    _KERNEL32.GetFileInformationByHandleEx.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+    ]
+    _KERNEL32.GetFileInformationByHandleEx.restype = wintypes.BOOL
+
+    _FILE_ATTRIBUTE_DIRECTORY = 0x00000010
+    _FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400
+    _FILE_ID_BOTH_DIRECTORY_INFO = 10
+    _FILE_ID_BOTH_DIRECTORY_RESTART_INFO = 11
+    _ERROR_NO_MORE_FILES = 18
+    _WINDOWS_DIRECTORY_BUFFER_BYTES = 64 * 1024
+    _WINDOWS_DIRECTORY_ATTRIBUTES_OFFSET = 56
+    _WINDOWS_DIRECTORY_NAME_LENGTH_OFFSET = 60
+    _WINDOWS_DIRECTORY_NAME_OFFSET = 104
 
 
 def _windows_open(path: Path, *, directory: bool) -> int:
-    access = (_FILE_READ_ATTRIBUTES | _READ_CONTROL) if directory else (_GENERIC_READ | _READ_CONTROL)
+    access = (
+        _FILE_LIST_DIRECTORY | _FILE_READ_ATTRIBUTES | _READ_CONTROL
+        if directory
+        else _GENERIC_READ | _READ_CONTROL
+    )
     flags = _FILE_FLAG_OPEN_REPARSE_POINT | (_FILE_FLAG_BACKUP_SEMANTICS if directory else _FILE_ATTRIBUTE_NORMAL)
     handle = _KERNEL32.CreateFileW(
         _windows_path(path),
@@ -274,6 +330,58 @@ def _windows_open(path: Path, *, directory: bool) -> int:
     except Exception:
         _KERNEL32.CloseHandle(handle)
         raise
+
+
+def _windows_directory_entries(descriptor: int) -> Iterator[SafeDirectoryEntry]:
+    handle = wintypes.HANDLE(msvcrt.get_osfhandle(descriptor))
+    first = True
+    while True:
+        buffer = ctypes.create_string_buffer(_WINDOWS_DIRECTORY_BUFFER_BYTES)
+        info_class = (
+            _FILE_ID_BOTH_DIRECTORY_RESTART_INFO
+            if first
+            else _FILE_ID_BOTH_DIRECTORY_INFO
+        )
+        if not _KERNEL32.GetFileInformationByHandleEx(
+            handle,
+            info_class,
+            buffer,
+            len(buffer),
+        ):
+            error = ctypes.get_last_error()
+            if error == _ERROR_NO_MORE_FILES:
+                return
+            raise SafePathError("The directory could not be enumerated safely.") from ctypes.WinError(error)
+        first = False
+        offset = 0
+        while True:
+            next_offset = int.from_bytes(buffer[offset : offset + 4], "little")
+            attributes = int.from_bytes(
+                buffer[
+                    offset + _WINDOWS_DIRECTORY_ATTRIBUTES_OFFSET :
+                    offset + _WINDOWS_DIRECTORY_ATTRIBUTES_OFFSET + 4
+                ],
+                "little",
+            )
+            name_length = int.from_bytes(
+                buffer[
+                    offset + _WINDOWS_DIRECTORY_NAME_LENGTH_OFFSET :
+                    offset + _WINDOWS_DIRECTORY_NAME_LENGTH_OFFSET + 4
+                ],
+                "little",
+            )
+            name_start = offset + _WINDOWS_DIRECTORY_NAME_OFFSET
+            name = bytes(buffer[name_start : name_start + name_length]).decode("utf-16-le", "strict")
+            if name not in {".", ".."}:
+                mode = stat.S_IFDIR if attributes & _FILE_ATTRIBUTE_DIRECTORY else stat.S_IFREG
+                yield SafeDirectoryEntry(
+                    name,
+                    mode,
+                    bool(attributes & _FILE_ATTRIBUTE_REPARSE_POINT),
+                )
+            if next_offset == 0:
+                break
+            offset += next_offset
 
 
 def _windows_path(path: Path) -> str:

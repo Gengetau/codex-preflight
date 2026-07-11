@@ -40,7 +40,7 @@ def _sanitized_git_environment() -> dict[str, str]:
     environment = {
         name: value
         for name, value in os.environ.items()
-        if not name.upper().startswith("GIT_") or name.upper() == "GIT_CEILING_DIRECTORIES"
+        if not name.upper().startswith("GIT_")
     }
     environment.update(
         {

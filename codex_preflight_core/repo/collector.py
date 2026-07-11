@@ -7,6 +7,7 @@ from pathlib import Path
 from codex_preflight_core.command.classifier import split_shell_segments
 from codex_preflight_core.repo.safe_path import (
     SafePathError,
+    iterate_directory_nofollow,
     local_absolute_path,
     verify_regular_file_nofollow,
 )
@@ -96,6 +97,13 @@ def collect_critical_files(
 ) -> list[Path]:
     if max_files is not None and (type(max_files) is not int or max_files < 0):
         raise ValueError("max_files must be a non-negative integer")
+    if reject_unsafe:
+        return _collect_critical_files_strict(
+            root,
+            command,
+            budget_check=budget_check,
+            max_files=max_files,
+        )
     _check_budget(budget_check)
     root = root.resolve()
     _check_budget(budget_check)
@@ -154,6 +162,70 @@ def collect_critical_files(
         command,
         budget_check=budget_check,
         reject_unsafe=reject_unsafe,
+    ):
+        _check_budget(budget_check)
+        _add_collected(collected, target, max_files=max_files)
+    _check_budget(budget_check)
+    return sorted(collected, key=lambda item: item.as_posix())
+
+
+def _collect_critical_files_strict(
+    root: Path,
+    command: str | None,
+    *,
+    budget_check: Callable[[], None] | None,
+    max_files: int | None,
+) -> list[Path]:
+    _check_budget(budget_check)
+    try:
+        root = local_absolute_path(root)
+    except SafePathError as error:
+        raise CriticalFileCollectionError("The repository root is unsafe.") from error
+    collected: set[Path] = set()
+    pending = [Path()]
+    while pending:
+        _check_budget(budget_check)
+        relative_directory = pending.pop()
+        current_path = root / relative_directory
+        local_files: list[Path] = []
+        local_directories: list[Path] = []
+        marker = False
+        try:
+            with iterate_directory_nofollow(current_path) as iterator:
+                for entry in iterator:
+                    _check_budget(budget_check)
+                    if entry.reparse or stat.S_ISLNK(entry.mode):
+                        raise CriticalFileCollectionError("A repository entry is unsafe.")
+                    relative = relative_directory / entry.name
+                    if entry.name == FIXTURE_MARKER and relative_directory != Path():
+                        marker = True
+                        continue
+                    if stat.S_ISDIR(entry.mode):
+                        if entry.name not in SKIP_DIRS:
+                            local_directories.append(relative)
+                        continue
+                    if stat.S_ISREG(entry.mode) and is_critical_path(relative.as_posix()):
+                        try:
+                            verify_regular_file_nofollow(root / relative)
+                        except (OSError, SafePathError) as error:
+                            raise CriticalFileCollectionError("A critical file is unsafe.") from error
+                        local_files.append(relative)
+                    _check_budget(budget_check)
+        except CriticalFileCollectionError:
+            raise
+        except (FileNotFoundError, SafePathError) as error:
+            raise CriticalFileCollectionError("A repository directory is unavailable.") from error
+        if marker:
+            continue
+        for relative in local_files:
+            _add_collected(collected, relative, max_files=max_files)
+        pending.extend(local_directories)
+        _check_budget(budget_check)
+    for target in _command_target_files(
+        root,
+        command,
+        budget_check=budget_check,
+        reject_unsafe=True,
     ):
         _check_budget(budget_check)
         _add_collected(collected, target, max_files=max_files)

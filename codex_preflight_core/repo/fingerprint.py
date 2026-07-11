@@ -11,7 +11,7 @@ from codex_preflight_core.repo.collector import (
     CriticalFileCollectionLimitError,
     collect_critical_files,
 )
-from codex_preflight_core.repo.safe_path import open_regular_file_nofollow
+from codex_preflight_core.repo.safe_path import local_absolute_path, open_regular_file_nofollow
 
 _READ_CHUNK_BYTES = 64 * 1024
 
@@ -49,7 +49,9 @@ def compute_critical_fingerprint(
     try:
         if strict_safety:
             _assert_safe_root(root)
-        root = root.resolve()
+            root = local_absolute_path(root)
+        else:
+            root = root.resolve()
     except OSError as error:
         raise CriticalFingerprintError("unavailable", "The repository root is unsafe.") from error
     _check_budget(deadline, cancellation_check, monotonic)

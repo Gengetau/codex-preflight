@@ -874,6 +874,7 @@ class TrustMutationService:
                 deadline=deadline,
                 cancellation_check=self.cancellation_check,
                 monotonic=self.monotonic,
+                strict_safety=True,
             )
         except RepoIdentityError as error:
             raise self._identity_error(error) from None
