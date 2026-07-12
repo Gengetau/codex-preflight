@@ -6,6 +6,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import BinaryIO
 
+_IS_WINDOWS = os.name == "nt"
+
 if os.name == "nt":
     import ctypes
     import msvcrt
@@ -50,11 +52,13 @@ def replace_file_durably(source: Path, destination: Path) -> None:
 
 
 def set_current_user_owner(path: Path, *, directory: bool = False) -> None:
-    if os.name == "nt":
+    if _IS_WINDOWS:
         _windows_set_current_owner_path(path, directory=directory)
 
 
 def private_cache_directory_is_safe(path: Path) -> bool:
+    if not _IS_WINDOWS:
+        return False
     try:
         _validate_named_path(path, directory=True)
     except (OSError, UnsafeCacheStorageError):
