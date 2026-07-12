@@ -1198,7 +1198,11 @@ def _secure_open_file(path: Path, mode: str) -> _SecureFile:
                 flags |= os.O_RDWR | os.O_CREAT | os.O_EXCL
                 python_mode = "w+b"
             descriptor = os.open(path.name, flags, 0o600, dir_fd=parent_descriptor)
-            handle = os.fdopen(descriptor, python_mode)
+            try:
+                handle = os.fdopen(descriptor, python_mode)
+            except Exception:
+                os.close(descriptor)
+                raise
     wrapped = _SecureFile(path, handle)
     try:
         _enforce_and_verify_owner_only(wrapped, directory=False)
@@ -1628,14 +1632,22 @@ def _windows_open_file(path: Path, mode: str) -> BinaryIO:
     try:
         if created:
             _windows_set_current_owner_handle(handle)
-        descriptor = msvcrt.open_osfhandle(handle, flags)  # type: ignore[name-defined]
+        descriptor = msvcrt.open_osfhandle(handle, flags | os.O_NOINHERIT)  # type: ignore[name-defined]
     except Exception:
         _KERNEL32.CloseHandle(handle)
         raise
-    raw = os.fdopen(descriptor, python_mode)
-    if mode == "append":
-        raw.seek(0, os.SEEK_END)
-    return raw
+    try:
+        raw = os.fdopen(descriptor, python_mode)
+    except Exception:
+        os.close(descriptor)
+        raise
+    try:
+        if mode == "append":
+            raw.seek(0, os.SEEK_END)
+        return raw
+    except Exception:
+        raw.close()
+        raise
 
 
 def _windows_open_directory(path: Path, *, write_owner: bool = False) -> int:
@@ -1654,7 +1666,7 @@ def _windows_open_directory(path: Path, *, write_owner: bool = False) -> int:
     if handle == _INVALID_HANDLE_VALUE:
         raise _windows_error()
     try:
-        return msvcrt.open_osfhandle(handle, os.O_RDONLY)  # type: ignore[name-defined]
+        return msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_NOINHERIT)  # type: ignore[name-defined]
     except Exception:
         _KERNEL32.CloseHandle(handle)
         raise

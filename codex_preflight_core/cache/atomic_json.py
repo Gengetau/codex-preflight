@@ -8,7 +8,9 @@ from uuid import uuid4
 
 from codex_preflight_core.cache.file_lock import (
     open_owner_only_file,
+    private_cache_directory_is_safe,
     replace_file_durably,
+    set_current_user_owner,
     validate_private_cache_storage,
 )
 
@@ -46,6 +48,8 @@ def write_bytes_atomic(path: Path, data: bytes, *, private_storage: bool = False
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
+        if not private_storage and private_cache_directory_is_safe(temp_path.parent):
+            set_current_user_owner(temp_path)
         if private_storage:
             validate_private_cache_storage(temp_path)
         elif path.exists():

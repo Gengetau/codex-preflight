@@ -49,6 +49,19 @@ def replace_file_durably(source: Path, destination: Path) -> None:
         _posix_replace_file_durably(source, destination)
 
 
+def set_current_user_owner(path: Path, *, directory: bool = False) -> None:
+    if os.name == "nt":
+        _windows_set_current_owner_path(path, directory=directory)
+
+
+def private_cache_directory_is_safe(path: Path) -> bool:
+    try:
+        _validate_named_path(path, directory=True)
+    except (OSError, UnsafeCacheStorageError):
+        return False
+    return True
+
+
 def _posix_replace_file_durably(source: Path, destination: Path) -> None:
     os.replace(source, destination)
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
@@ -372,13 +385,20 @@ def _windows_create_private_directory(path: Path) -> None:
             if error == _ERROR_ALREADY_EXISTS:
                 raise FileExistsError(path)
             raise ctypes.WinError(error)
+    _windows_set_current_owner_path(path, directory=True)
+
+
+def _windows_set_current_owner_path(path: Path, *, directory: bool) -> None:
+    flags = _FILE_FLAG_OPEN_REPARSE_POINT
+    if directory:
+        flags |= _FILE_FLAG_BACKUP_SEMANTICS
     handle = _KERNEL32.CreateFileW(
         _windows_path(path),
         _FILE_READ_ATTRIBUTES | _READ_CONTROL | _WRITE_OWNER,
         _FILE_SHARE_READ | _FILE_SHARE_WRITE,
         None,
         _OPEN_EXISTING,
-        _FILE_FLAG_BACKUP_SEMANTICS | _FILE_FLAG_OPEN_REPARSE_POINT,
+        flags,
         None,
     )
     if handle == _INVALID_HANDLE_VALUE:
@@ -407,13 +427,21 @@ def _windows_open_private_lock(path: Path) -> BinaryIO:
     try:
         if create_error != _ERROR_ALREADY_EXISTS:
             _windows_set_current_owner_handle(handle)
-        descriptor = msvcrt.open_osfhandle(handle, os.O_BINARY | os.O_RDWR)
+        descriptor = msvcrt.open_osfhandle(handle, os.O_BINARY | os.O_RDWR | os.O_NOINHERIT)
     except Exception:
         _KERNEL32.CloseHandle(handle)
         raise
-    opened = os.fdopen(descriptor, "a+b")
-    opened.seek(0, os.SEEK_END)
-    return opened
+    try:
+        opened = os.fdopen(descriptor, "a+b")
+    except Exception:
+        os.close(descriptor)
+        raise
+    try:
+        opened.seek(0, os.SEEK_END)
+        return opened
+    except Exception:
+        opened.close()
+        raise
 
 
 def _windows_create_owner_only_file(path: Path) -> BinaryIO:
@@ -434,7 +462,7 @@ def _windows_create_owner_only_file(path: Path) -> BinaryIO:
         raise ctypes.WinError(error)
     try:
         _windows_set_current_owner_handle(handle)
-        descriptor = msvcrt.open_osfhandle(handle, os.O_BINARY | os.O_RDWR)
+        descriptor = msvcrt.open_osfhandle(handle, os.O_BINARY | os.O_RDWR | os.O_NOINHERIT)
     except Exception:
         _KERNEL32.CloseHandle(handle)
         raise

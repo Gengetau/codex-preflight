@@ -66,6 +66,7 @@ def test_private_atomic_trust_write_is_owner_only_before_post_replace_validation
         )
     if not created:
         raise file_lock.ctypes.WinError(file_lock.ctypes.get_last_error())
+    file_lock.set_current_user_owner(path.parent, directory=True)
     file_lock.validate_private_cache_storage(path)
     if existing:
         with file_lock.locked_cache_file(path, private_storage=True):
@@ -124,20 +125,54 @@ def test_windows_private_cache_owner_is_corrected_only_for_new_objects(
     assert len(corrected) == 1
 
     corrected.clear()
-    with file_lock.open_owner_only_file(path):
-        pass
+    with file_lock.open_owner_only_file(path) as handle:
+        native = file_lock.msvcrt.get_osfhandle(handle.fileno())
+        assert os.get_handle_inheritable(native) is False
     assert len(corrected) == 1
 
     corrected.clear()
     lock_path = path.with_suffix(path.suffix + ".lock")
-    with file_lock._open_private_lock(lock_path):
-        pass
+    with file_lock._open_private_lock(lock_path) as handle:
+        native = file_lock.msvcrt.get_osfhandle(handle.fileno())
+        assert os.get_handle_inheritable(native) is False
     assert len(corrected) == 1
 
     corrected.clear()
     with file_lock._open_private_lock(lock_path):
         pass
     assert corrected == []
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows inherited owner regression")
+def test_nonprivate_atomic_write_corrects_owner_without_weakening_private_parent(tmp_path: Path) -> None:
+    path = tmp_path / "private" / "trust.json"
+    file_lock._ensure_private_directory(path.parent)
+
+    atomic_json.write_bytes_atomic(path, b"[]")
+
+    file_lock.validate_private_cache_storage(path)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows descriptor cleanup regression")
+def test_windows_private_lock_fdopen_failure_closes_descriptor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "private" / "trust.json.lock"
+    file_lock._ensure_private_directory(path.parent)
+    captured: list[int] = []
+
+    def fail_fdopen(descriptor: int, _mode: str) -> object:
+        captured.append(descriptor)
+        raise OSError("injected fdopen failure")
+
+    monkeypatch.setattr(file_lock.os, "fdopen", fail_fdopen)
+    with pytest.raises(OSError, match="injected fdopen failure"):
+        file_lock._windows_open_private_lock(path)
+
+    assert len(captured) == 1
+    with pytest.raises(OSError):
+        os.fstat(captured[0])
 
 
 def test_private_trust_durability_barrier_precedes_post_replace_validation_and_commit(

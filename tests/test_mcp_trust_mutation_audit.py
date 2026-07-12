@@ -8,6 +8,7 @@ import stat
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
+from typing import BinaryIO
 from uuid import UUID
 
 import pytest
@@ -192,14 +193,85 @@ def test_windows_audit_owner_is_corrected_only_for_new_objects(
 
     corrected.clear()
     key_path = directory / "audit.key"
-    with audit_module._secure_open_file(key_path, "exclusive"):
-        pass
+    with audit_module._secure_open_file(key_path, "exclusive") as handle:
+        native = audit_module.msvcrt.get_osfhandle(handle.fileno())
+        assert os.get_handle_inheritable(native) is False
     assert len(corrected) == 1
 
     corrected.clear()
     with audit_module._secure_open_file(key_path, "append"):
         pass
     assert corrected == []
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX descriptor cleanup regression")
+def test_posix_audit_fdopen_failure_closes_descriptor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    directory = tmp_path / "trust-mutation"
+    audit_module._ensure_owner_only_directory(directory)
+    captured: list[int] = []
+
+    def fail_fdopen(descriptor: int, _mode: str) -> object:
+        captured.append(descriptor)
+        raise OSError("injected fdopen failure")
+
+    monkeypatch.setattr(audit_module.os, "fdopen", fail_fdopen)
+    with pytest.raises(OSError, match="injected fdopen failure"):
+        audit_module._secure_open_file(directory / "audit.key", "exclusive")
+
+    assert len(captured) == 1
+    with pytest.raises(OSError):
+        os.fstat(captured[0])
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows descriptor cleanup regression")
+def test_windows_audit_fdopen_and_seek_failures_close_descriptors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    directory = tmp_path / "trust-mutation"
+    audit_module._ensure_owner_only_directory(directory)
+    captured: list[int] = []
+
+    with monkeypatch.context() as patch:
+        def fail_fdopen(descriptor: int, _mode: str) -> object:
+            captured.append(descriptor)
+            raise OSError("injected fdopen failure")
+
+        patch.setattr(audit_module.os, "fdopen", fail_fdopen)
+        with pytest.raises(OSError, match="injected fdopen failure"):
+            audit_module._windows_open_file(directory / "audit.key", "exclusive")
+
+    assert len(captured) == 1
+    with pytest.raises(OSError):
+        os.fstat(captured[0])
+
+    real_fdopen = audit_module.os.fdopen
+    opened: list[BinaryIO] = []
+
+    class FailingSeek:
+        def __init__(self, raw: BinaryIO) -> None:
+            self.raw = raw
+
+        def seek(self, *_args: object) -> None:
+            raise OSError("injected seek failure")
+
+        def close(self) -> None:
+            self.raw.close()
+
+    def fail_seek_after_fdopen(descriptor: int, mode: str) -> FailingSeek:
+        raw = real_fdopen(descriptor, mode)
+        opened.append(raw)
+        return FailingSeek(raw)
+
+    monkeypatch.setattr(audit_module.os, "fdopen", fail_seek_after_fdopen)
+    with pytest.raises(OSError, match="injected seek failure"):
+        audit_module._windows_open_file(directory / "audit.jsonl", "append")
+
+    assert len(opened) == 1
+    assert opened[0].closed
 
 
 def test_directory_key_audit_lock_and_rotated_segments_are_owner_only_on_every_platform(tmp_path: Path) -> None:
