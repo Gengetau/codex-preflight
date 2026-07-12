@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
@@ -56,6 +57,134 @@ def test_lock_helper_accepts_a_secure_opener_without_changing_default_semantics(
         pass
 
     assert opened == [cache_path.with_suffix(".json.lock")]
+
+
+def _create_v033_cache_storage(cache_path: Path) -> Path:
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text("[]", encoding="utf-8")
+    lock_path = cache_path.with_suffix(cache_path.suffix + ".lock")
+    with lock_path.open("a+b"):
+        pass
+    return lock_path
+
+
+def _create_windows_v033_app_root(path: Path) -> None:
+    file_lock._windows_create_private_directory(path)
+    changed = subprocess.run(
+        ["icacls", str(path), "/grant", "*S-1-5-11:(OI)(CI)(RX)"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert changed.returncode == 0, changed.stderr
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission regression")
+def test_private_lock_migrates_v033_posix_directory_and_lock(tmp_path: Path) -> None:
+    cache_path = tmp_path / "private" / "trust.json"
+    lock_path = _create_v033_cache_storage(cache_path)
+    cache_path.parent.chmod(0o755)
+    cache_path.chmod(0o600)
+    lock_path.chmod(0o644)
+
+    with locked_cache_file(cache_path, private_storage=True):
+        pass
+
+    assert cache_path.parent.stat().st_mode & 0o777 == 0o700
+    assert cache_path.stat().st_mode & 0o777 == 0o600
+    assert lock_path.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows ACL regression")
+def test_private_lock_migrates_v033_windows_directory_and_lock(tmp_path: Path) -> None:
+    app_root = tmp_path / "v033-app-root"
+    _create_windows_v033_app_root(app_root)
+    cache_path = app_root / "private" / "trust.json"
+    lock_path = _create_v033_cache_storage(cache_path)
+    assert not file_lock._windows_permissions_are_private(cache_path.parent)
+    assert not file_lock._windows_permissions_are_private(lock_path)
+
+    with locked_cache_file(cache_path, private_storage=True):
+        pass
+
+    file_lock.validate_private_cache_storage(cache_path)
+    assert file_lock._windows_permissions_are_private(cache_path.parent)
+    assert file_lock._windows_permissions_are_private(lock_path)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX replacement regression")
+def test_v033_posix_migration_rejects_path_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "legacy.lock"
+    path.write_bytes(b"")
+    path.chmod(0o644)
+    moved = tmp_path / "moved.lock"
+    real_fchmod = file_lock.os.fchmod
+
+    def replace_after_hardening(descriptor: int, mode: int) -> None:
+        real_fchmod(descriptor, mode)
+        path.replace(moved)
+        path.write_bytes(b"")
+        path.chmod(0o644)
+
+    monkeypatch.setattr(file_lock.os, "fchmod", replace_after_hardening)
+
+    with pytest.raises(UnsafeCacheStorageError, match="changed during migration"):
+        file_lock._harden_v033_path(path, directory=False)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows replacement regression")
+def test_v033_windows_migration_rejects_path_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app_root = tmp_path / "v033-replacement-root"
+    _create_windows_v033_app_root(app_root)
+    path = app_root / "legacy.lock"
+    path.write_bytes(b"")
+    moved = app_root / "moved.lock"
+    real_set_dacl = file_lock._windows_set_private_dacl_handle
+
+    def replace_after_hardening(handle: object, *, directory: bool) -> None:
+        real_set_dacl(handle, directory=directory)
+        path.replace(moved)
+        path.write_bytes(b"")
+
+    monkeypatch.setattr(file_lock, "_windows_set_private_dacl_handle", replace_after_hardening)
+
+    with pytest.raises(UnsafeCacheStorageError, match="changed during migration"):
+        file_lock._harden_v033_path(path, directory=False)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX owner regression")
+def test_v033_posix_migration_rejects_non_current_owner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "legacy.lock"
+    path.write_bytes(b"")
+    path.chmod(0o644)
+    monkeypatch.setattr(file_lock.os, "getuid", lambda: path.stat().st_uid + 1)
+
+    with pytest.raises(UnsafeCacheStorageError, match="permissions are unsafe"):
+        file_lock._harden_v033_path(path, directory=False)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows owner regression")
+def test_v033_windows_migration_rejects_non_current_owner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app_root = tmp_path / "v033-owner-root"
+    _create_windows_v033_app_root(app_root)
+    path = app_root / "legacy.lock"
+    path.write_bytes(b"")
+    monkeypatch.setattr(file_lock, "_windows_current_sid_string", lambda: "S-1-5-18")
+
+    with pytest.raises(UnsafeCacheStorageError, match="ACL is unsafe"):
+        file_lock._harden_v033_path(path, directory=False)
 
 
 def test_lock_timeout_has_a_stable_exception(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -85,6 +85,7 @@ def locked_cache_file(
     private_storage: bool = False,
 ) -> Iterator[None]:
     if private_storage:
+        _migrate_v033_private_storage(path)
         _ensure_private_directory(path.parent)
         validate_private_cache_storage(path)
     else:
@@ -158,6 +159,82 @@ def _ensure_private_directory(path: Path) -> None:
             pass
         _validate_named_path(directory, directory=True)
     _validate_named_path(path, directory=True)
+
+
+def _migrate_v033_private_storage(path: Path) -> None:
+    candidates = (
+        (path.parent, True),
+        (path, False),
+        (path.with_suffix(path.suffix + ".lock"), False),
+    )
+    for candidate, directory in candidates:
+        if not os.path.lexists(candidate):
+            continue
+        try:
+            _harden_v033_path(candidate, directory=directory)
+        except UnsafeCacheStorageError:
+            raise
+        except Exception:
+            raise UnsafeCacheStorageError("The legacy private cache storage is unsafe.") from None
+
+
+def _harden_v033_path(path: Path, *, directory: bool) -> None:
+    try:
+        _validate_named_path(path, directory=directory)
+        return
+    except UnsafeCacheStorageError:
+        pass
+    _assert_no_reparse_ancestors(path.parent)
+    if _IS_WINDOWS:
+        _windows_harden_v033_path(path, directory=directory)
+    else:
+        _posix_harden_v033_path(path, directory=directory)
+    _validate_named_path(path, directory=directory)
+
+
+def _posix_harden_v033_path(path: Path, *, directory: bool) -> None:
+    flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
+    if directory:
+        flags |= getattr(os, "O_DIRECTORY", 0)
+    descriptor = os.open(path, flags)
+    try:
+        opened = os.fstat(descriptor)
+        named = path.lstat()
+        _validate_opened_identity(opened, named, directory=directory)
+        required = 0o700 if directory else 0o600
+        legacy = 0o755 if directory else 0o644
+        current_mode = stat.S_IMODE(opened.st_mode)
+        if opened.st_uid != os.getuid() or current_mode not in {required, legacy}:
+            raise UnsafeCacheStorageError("The legacy private cache permissions are unsafe.")
+        if current_mode == legacy:
+            os.fchmod(descriptor, required)
+        hardened = os.fstat(descriptor)
+        renamed = path.lstat()
+        _validate_opened_identity(hardened, renamed, directory=directory)
+        if hardened.st_dev != opened.st_dev or hardened.st_ino != opened.st_ino:
+            raise UnsafeCacheStorageError("The legacy private cache path changed during migration.")
+    finally:
+        os.close(descriptor)
+
+
+def _validate_opened_identity(
+    opened: os.stat_result,
+    named: os.stat_result,
+    *,
+    directory: bool,
+) -> None:
+    expected_type = stat.S_ISDIR if directory else stat.S_ISREG
+    if (
+        not expected_type(opened.st_mode)
+        or not expected_type(named.st_mode)
+        or stat.S_ISLNK(named.st_mode)
+        or _is_reparse(opened)
+        or _is_reparse(named)
+        or opened.st_dev != named.st_dev
+        or opened.st_ino != named.st_ino
+        or (not directory and (opened.st_nlink != 1 or named.st_nlink != 1))
+    ):
+        raise UnsafeCacheStorageError("The legacy private cache path is unsafe.")
 
 
 def _open_private_lock(path: Path) -> BinaryIO:
@@ -245,6 +322,7 @@ if os.name == "nt":
     _TOKEN_USER = 1
     _OWNER_SECURITY_INFORMATION = 0x00000001
     _DACL_SECURITY_INFORMATION = 0x00000004
+    _PROTECTED_DACL_SECURITY_INFORMATION = 0x80000000
     _SE_FILE_OBJECT = 1
     _ACL_SIZE_INFORMATION_CLASS = 2
     _ACCESS_ALLOWED_ACE_TYPE = 0
@@ -273,10 +351,12 @@ if os.name == "nt":
     _GENERIC_READ = 0x80000000
     _GENERIC_WRITE = 0x40000000
     _WRITE_OWNER = 0x00080000
+    _WRITE_DAC = 0x00040000
     _READ_CONTROL = 0x00020000
     _FILE_READ_ATTRIBUTES = 0x0080
     _FILE_SHARE_READ = 0x00000001
     _FILE_SHARE_WRITE = 0x00000002
+    _FILE_SHARE_DELETE = 0x00000004
     _MOVEFILE_REPLACE_EXISTING = 0x00000001
     _MOVEFILE_WRITE_THROUGH = 0x00000008
     _CREATE_NEW = 1
@@ -285,6 +365,10 @@ if os.name == "nt":
     _FILE_ATTRIBUTE_NORMAL = 0x00000080
     _FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
     _FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
+    _FILE_ATTRIBUTE_DIRECTORY = 0x00000010
+    _FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400
+    _SE_DACL_PROTECTED = 0x1000
+    _INHERITED_ACE = 0x10
     _INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
     _SAFE_WINDOWS_SIDS = {"S-1-5-18", "S-1-5-32-544"}
 
@@ -309,6 +393,20 @@ if os.name == "nt":
             ("AceSize", ctypes.c_ushort),
         ]
 
+    class _BY_HANDLE_FILE_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("dwFileAttributes", wintypes.DWORD),
+            ("ftCreationTime", wintypes.FILETIME),
+            ("ftLastAccessTime", wintypes.FILETIME),
+            ("ftLastWriteTime", wintypes.FILETIME),
+            ("dwVolumeSerialNumber", wintypes.DWORD),
+            ("nFileSizeHigh", wintypes.DWORD),
+            ("nFileSizeLow", wintypes.DWORD),
+            ("nNumberOfLinks", wintypes.DWORD),
+            ("nFileIndexHigh", wintypes.DWORD),
+            ("nFileIndexLow", wintypes.DWORD),
+        ]
+
     _KERNEL32 = ctypes.WinDLL("kernel32", use_last_error=True)
     _ADVAPI32 = ctypes.WinDLL("advapi32", use_last_error=True)
     _KERNEL32.GetCurrentProcess.restype = wintypes.HANDLE
@@ -330,6 +428,11 @@ if os.name == "nt":
         wintypes.HANDLE,
     ]
     _KERNEL32.CreateFileW.restype = wintypes.HANDLE
+    _KERNEL32.GetFileInformationByHandle.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(_BY_HANDLE_FILE_INFORMATION),
+    ]
+    _KERNEL32.GetFileInformationByHandle.restype = wintypes.BOOL
     _ADVAPI32.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
     _ADVAPI32.OpenProcessToken.restype = wintypes.BOOL
     _ADVAPI32.GetTokenInformation.argtypes = [
@@ -362,6 +465,30 @@ if os.name == "nt":
         ctypes.POINTER(ctypes.c_void_p),
     ]
     _ADVAPI32.GetNamedSecurityInfoW.restype = wintypes.DWORD
+    _ADVAPI32.GetSecurityInfo.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.DWORD,
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    _ADVAPI32.GetSecurityInfo.restype = wintypes.DWORD
+    _ADVAPI32.GetSecurityDescriptorControl.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_ushort),
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    _ADVAPI32.GetSecurityDescriptorControl.restype = wintypes.BOOL
+    _ADVAPI32.GetSecurityDescriptorDacl.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(wintypes.BOOL),
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(wintypes.BOOL),
+    ]
+    _ADVAPI32.GetSecurityDescriptorDacl.restype = wintypes.BOOL
     _ADVAPI32.GetAclInformation.argtypes = [ctypes.c_void_p, ctypes.c_void_p, wintypes.DWORD, ctypes.c_int]
     _ADVAPI32.GetAclInformation.restype = wintypes.BOOL
     _ADVAPI32.GetAce.argtypes = [ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p)]
@@ -380,6 +507,170 @@ if os.name == "nt":
         ctypes.c_void_p,
     ]
     _ADVAPI32.SetSecurityInfo.restype = wintypes.DWORD
+
+
+def _windows_harden_v033_path(path: Path, *, directory: bool) -> None:
+    before = path.lstat()
+    expected_type = stat.S_ISDIR if directory else stat.S_ISREG
+    if (
+        not expected_type(before.st_mode)
+        or stat.S_ISLNK(before.st_mode)
+        or _is_reparse(before)
+        or (not directory and before.st_nlink != 1)
+    ):
+        raise UnsafeCacheStorageError("The legacy private cache path is unsafe.")
+    flags = _FILE_FLAG_OPEN_REPARSE_POINT
+    if directory:
+        flags |= _FILE_FLAG_BACKUP_SEMANTICS
+    handle = _KERNEL32.CreateFileW(
+        _windows_path(path),
+        _FILE_READ_ATTRIBUTES | _READ_CONTROL | _WRITE_DAC,
+        _FILE_SHARE_READ | _FILE_SHARE_WRITE | _FILE_SHARE_DELETE,
+        None,
+        _OPEN_EXISTING,
+        flags,
+        None,
+    )
+    if handle == _INVALID_HANDLE_VALUE:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        identity = _windows_handle_identity(handle, directory=directory)
+        if identity[1] != before.st_ino:
+            raise UnsafeCacheStorageError("The legacy private cache path changed during migration.")
+        if _windows_v033_security_is_migratable(handle):
+            _windows_set_private_dacl_handle(handle, directory=directory)
+        else:
+            if _windows_named_identity(path, directory=directory) != identity:
+                raise UnsafeCacheStorageError("The legacy private cache path changed during migration.")
+            _validate_named_path(path, directory=directory)
+        if _windows_handle_identity(handle, directory=directory) != identity:
+            raise UnsafeCacheStorageError("The legacy private cache path changed during migration.")
+        if _windows_named_identity(path, directory=directory) != identity:
+            raise UnsafeCacheStorageError("The legacy private cache path changed during migration.")
+        after = path.lstat()
+        if after.st_dev != before.st_dev or after.st_ino != before.st_ino:
+            raise UnsafeCacheStorageError("The legacy private cache path changed during migration.")
+    finally:
+        _KERNEL32.CloseHandle(handle)
+
+
+def _windows_named_identity(path: Path, *, directory: bool) -> tuple[int, int]:
+    flags = _FILE_FLAG_OPEN_REPARSE_POINT
+    if directory:
+        flags |= _FILE_FLAG_BACKUP_SEMANTICS
+    handle = _KERNEL32.CreateFileW(
+        _windows_path(path),
+        _FILE_READ_ATTRIBUTES,
+        _FILE_SHARE_READ | _FILE_SHARE_WRITE | _FILE_SHARE_DELETE,
+        None,
+        _OPEN_EXISTING,
+        flags,
+        None,
+    )
+    if handle == _INVALID_HANDLE_VALUE:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        return _windows_handle_identity(handle, directory=directory)
+    finally:
+        _KERNEL32.CloseHandle(handle)
+
+
+def _windows_handle_identity(handle: object, *, directory: bool) -> tuple[int, int]:
+    information = _BY_HANDLE_FILE_INFORMATION()
+    if not _KERNEL32.GetFileInformationByHandle(handle, ctypes.byref(information)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    is_directory = bool(information.dwFileAttributes & _FILE_ATTRIBUTE_DIRECTORY)
+    if (
+        is_directory != directory
+        or information.dwFileAttributes & _FILE_ATTRIBUTE_REPARSE_POINT
+        or (not directory and information.nNumberOfLinks != 1)
+    ):
+        raise UnsafeCacheStorageError("The legacy private cache handle is unsafe.")
+    file_index = (int(information.nFileIndexHigh) << 32) | int(information.nFileIndexLow)
+    return int(information.dwVolumeSerialNumber), file_index
+
+
+def _windows_v033_security_is_migratable(handle: object) -> bool:
+    owner = ctypes.c_void_p()
+    dacl = ctypes.c_void_p()
+    descriptor = ctypes.c_void_p()
+    result = _ADVAPI32.GetSecurityInfo(
+        handle,
+        _SE_FILE_OBJECT,
+        _OWNER_SECURITY_INFORMATION | _DACL_SECURITY_INFORMATION,
+        ctypes.byref(owner),
+        None,
+        ctypes.byref(dacl),
+        None,
+        ctypes.byref(descriptor),
+    )
+    if result != 0 or not owner.value or not dacl.value or not descriptor.value:
+        if descriptor.value:
+            _KERNEL32.LocalFree(descriptor)
+        return False
+    try:
+        if _windows_sid_string(owner) != _windows_current_sid_string():
+            return False
+        control = ctypes.c_ushort()
+        revision = wintypes.DWORD()
+        if not _ADVAPI32.GetSecurityDescriptorControl(
+            descriptor,
+            ctypes.byref(control),
+            ctypes.byref(revision),
+        ):
+            return False
+        if control.value & _SE_DACL_PROTECTED:
+            return False
+        information = _ACL_SIZE_INFORMATION()
+        if not _ADVAPI32.GetAclInformation(
+            dacl,
+            ctypes.byref(information),
+            ctypes.sizeof(information),
+            _ACL_SIZE_INFORMATION_CLASS,
+        ):
+            return False
+        if information.AceCount == 0:
+            return False
+        for index in range(information.AceCount):
+            ace = ctypes.c_void_p()
+            if not _ADVAPI32.GetAce(dacl, index, ctypes.byref(ace)):
+                return False
+            header = ctypes.cast(ace, ctypes.POINTER(_ACE_HEADER)).contents
+            if not header.AceFlags & _INHERITED_ACE:
+                return False
+        return True
+    finally:
+        _KERNEL32.LocalFree(descriptor)
+
+
+def _windows_set_private_dacl_handle(handle: object, *, directory: bool) -> None:
+    descriptor = _windows_private_descriptor(directory=directory)
+    try:
+        present = wintypes.BOOL()
+        defaulted = wintypes.BOOL()
+        dacl = ctypes.c_void_p()
+        if not _ADVAPI32.GetSecurityDescriptorDacl(
+            descriptor,
+            ctypes.byref(present),
+            ctypes.byref(dacl),
+            ctypes.byref(defaulted),
+        ):
+            raise ctypes.WinError(ctypes.get_last_error())
+        if not present.value or not dacl.value:
+            raise UnsafeCacheStorageError("The private cache descriptor is unsafe.")
+        result = _ADVAPI32.SetSecurityInfo(
+            handle,
+            _SE_FILE_OBJECT,
+            _DACL_SECURITY_INFORMATION | _PROTECTED_DACL_SECURITY_INFORMATION,
+            None,
+            None,
+            dacl,
+            None,
+        )
+        if result != 0:
+            raise OSError(result, "failed to set private cache DACL")
+    finally:
+        _KERNEL32.LocalFree(descriptor)
 
 
 def _windows_create_private_directory(path: Path) -> None:
