@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
 from jsonschema import validate
 from typer.testing import CliRunner
 
@@ -29,6 +30,79 @@ EXAMPLES = ROOT / "examples" / "mcp"
 VERSION = "0.3.4"
 PREPARED_EVENT_ID = "123e4567-e89b-42d3-a456-426614174000"
 FINAL_EVENT_ID = "123e4567-e89b-42d3-a456-426614174001"
+RUNTIME_IDENTITY = {
+    "transport": "stdio",
+    "identityStatus": "unavailable",
+    "clientId": None,
+    "sessionId": None,
+}
+MUTATION_SAFETY = {
+    "plannedCommandExecuted": False,
+    "repositoryCodeExecuted": False,
+    "networkAccessed": False,
+    "remoteConfirmationUsed": False,
+    "trustConsumed": False,
+    "mcpPreflightUsesTrust": False,
+    "rawRepoIdReturned": False,
+    "rawPathReturned": False,
+    "rawRemoteUrlReturned": False,
+    "approvedCommandReturned": False,
+    "reasonReturned": False,
+}
+APPROVAL_SUCCESS_ENTRY = {
+    "entryId": "123e4567-e89b-42d3-a456-426614174000",
+    "entryVersion": 1,
+    "repoIdHash": "hmac-sha256:example-process-local-value",
+    "repoIdRedacted": True,
+    "headCommit": "0123456789abcdef0123456789abcdef01234567",
+    "criticalFingerprint": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "commandScope": "test",
+    "policyVersion": "default-v1",
+    "rulesetVersion": "2026.07.02",
+    "expiresAt": "2030-07-12T00:00:00Z",
+}
+REVOKE_TRUST_ENTRY = {
+    "entryId": "123e4567-e89b-42d3-a456-426614174000",
+    "entryVersion": 1,
+    "repoIdHash": "hmac-sha256:example-process-local-value",
+    "repoIdRedacted": True,
+    "hasRemoteUrl": False,
+    "remoteUrlHash": None,
+    "headCommit": "0123456789abcdef0123456789abcdef01234567",
+    "criticalFingerprint": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "commandScope": "test",
+    "decision": "USER_APPROVED",
+    "approvedAt": "2026-07-12T00:00:00Z",
+    "expiresAt": "2030-07-12T00:00:00Z",
+    "approvedBy": "local-user",
+    "policyVersion": "default-v1",
+    "rulesetVersion": "2026.07.02",
+    "provenance": {
+        "schema": "trust-cache-array-v2",
+        "source": "mcp-trust-approve",
+        "migrationVersion": "v0.3.4-trust-mutation",
+        "migrated": False,
+        "migratedAt": None,
+        "createdAt": "2026-07-12T00:00:00Z",
+    },
+}
+ACTIVE_MUTATION_DOCS = (
+    "docs/mcp.md",
+    "docs/mcp-report-schema.md",
+    "docs/design/mcp-trust-management.md",
+)
+FORBIDDEN_ACTIVE_ASSERTIONS = (
+    "trust mutation remains unavailable",
+    "no runtime mode registers `trust_approve`",
+    "no mode exposes command execution, trust approval, trust revocation",
+    "tentative input",
+    '"expectedversion": 3',
+    "mutation-tool requirements below remain future design",
+    "cli and future mcp operations",
+    "future tools reuse",
+    "prototype approve/revoke mutation with no public registration",
+    "ship mutation in a separate release",
+)
 
 
 def _load_example(name: str) -> dict[str, object]:
@@ -66,41 +140,179 @@ def test_bundled_plugin_configuration_leaves_all_optional_authorities_off() -> N
             assert flag not in serialized
 
 
-def test_trust_mutation_docs_cover_confirmation_authority_privacy_and_recovery() -> None:
-    files = (
-        ROOT / "README.md",
-        ROOT / "docs/mcp.md",
-        ROOT / "docs/mcp-report-schema.md",
-        ROOT / "docs/mcp-client-examples.md",
-        ROOT / "docs/cache-design.md",
-        ROOT / "docs/design/mcp-trust-management.md",
-        ROOT / "docs/threat-model.md",
-        ROOT / "docs/plugin.md",
-        ROOT / "docs/release-history.md",
+@pytest.mark.parametrize(
+    ("relative_path", "required"),
+    [
+        (
+            "docs/mcp.md",
+            (
+                "CODEX_PREFLIGHT_ENABLE_TRUST_MUTATION=1",
+                "trust_approve",
+                "trust_revoke",
+                "mandatory human stop",
+                "MCP_TRUST_MUTATION_COMMITTED_AUDIT_PENDING",
+            ),
+        ),
+        (
+            "docs/mcp-report-schema.md",
+            (
+                "CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN=1",
+                "CODEX_PREFLIGHT_ENABLE_TRUST_READ=1",
+                "CODEX_PREFLIGHT_ENABLE_TRUST_MUTATION=1",
+                "eight exact inventories",
+                "trust-approve/v1",
+                "trust-revoke/v1",
+            ),
+        ),
+        (
+            "docs/design/mcp-trust-management.md",
+            (
+                '"cwd"',
+                '"command"',
+                '"expiresAt"',
+                '"trustEntryId"',
+                '"expectedVersion": 1',
+                "revoke-exact-trust-entry/v1",
+                "MCP preflight does not consume trust",
+            ),
+        ),
+    ],
+)
+def test_each_active_mutation_document_contains_its_release_contract(
+    relative_path: str,
+    required: tuple[str, ...],
+) -> None:
+    text = (ROOT / relative_path).read_text(encoding="utf-8")
+
+    for value in required:
+        assert value in text, f"{relative_path} is missing {value!r}"
+
+
+@pytest.mark.parametrize("relative_path", ACTIVE_MUTATION_DOCS)
+def test_each_active_mutation_document_has_no_stale_release_assertions(relative_path: str) -> None:
+    text = " ".join((ROOT / relative_path).read_text(encoding="utf-8").lower().split())
+
+    for forbidden in FORBIDDEN_ACTIVE_ASSERTIONS:
+        assert forbidden not in text, f"{relative_path} still contains {forbidden!r}"
+
+
+def _confirmation_required(confirmation: dict[str, object]) -> dict[str, object]:
+    return {
+        "isError": True,
+        "error": {
+            "code": "MCP_TRUST_MUTATION_CONFIRMATION_REQUIRED",
+            "message": "Human confirmation is required for this exact trust mutation.",
+            "remediation": (
+                "Present the fixed confirmation display to a human, then retry once with the returned "
+                "confirmationToken only if the human approves it."
+            ),
+            "retryable": False,
+            "field": "confirmationToken",
+            "safetyBoundary": "No trust approval or revocation has occurred.",
+            "context": {
+                "runtimeIdentity": RUNTIME_IDENTITY,
+                "confirmation": confirmation,
+            },
+        },
+    }
+
+
+def test_approval_confirmation_example_matches_the_exact_contract() -> None:
+    expected = _confirmation_required(
+        {
+            "schemaVersion": "trust-mutation-confirmation/v1",
+            "challengeId": "123e4567-e89b-42d3-a456-426614174000",
+            "confirmationToken": "example.opaque.single-use-token",
+            "operation": "approve",
+            "issuedAt": "2026-07-12T00:00:00Z",
+            "expiresAt": "2026-07-12T00:05:00Z",
+            "display": {
+                "template": "approve-exact-local-trust/v1",
+                "repositoryContentTrust": "untrusted",
+                "cwd": "C:\\example\\local-repository",
+                "command": "python -m pytest",
+                "reason": "A human reviewed this exact local test command.",
+                "approvalExpiresAt": "2030-07-12T00:00:00Z",
+                "repoIdHash": "hmac-sha256:example-process-local-value",
+                "headCommit": "0123456789abcdef0123456789abcdef01234567",
+                "criticalFingerprint": (
+                    "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                ),
+                "commandScope": "test",
+                "policyVersion": "default-v1",
+                "rulesetVersion": "2026.07.02",
+                "matchingSemantics": "identity-head-fingerprint-scope-policy-ruleset",
+            },
+        }
     )
-    combined = "\n".join(path.read_text(encoding="utf-8") for path in files)
 
-    for required in (
-        "CODEX_PREFLIGHT_ENABLE_TRUST_MUTATION=1",
-        "default-off",
-        "mandatory human stop",
-        "confirmed retry",
-        "single-use",
-        "300-second",
-        "identityStatus: unavailable",
-        "MCP_TRUST_MUTATION_COMMITTED_AUDIT_PENDING",
-        '"committed": true',
-        "audit recovery",
-        "emergency disable",
-        "MCP preflight does not consume trust",
-        "Remote confirmation cannot create, satisfy, read, or mutate trust",
-        "no MCP recovery, audit-read, or reset tool",
-        "automatic confirmation",
-    ):
-        assert required in combined
+    assert _load_example("trust-approve-confirmation-required.json") == expected
 
 
-def test_trust_mutation_examples_use_exact_schemas_and_require_a_human_stop(
+def test_revoke_confirmation_example_matches_the_exact_contract() -> None:
+    expected = _confirmation_required(
+        {
+            "schemaVersion": "trust-mutation-confirmation/v1",
+            "challengeId": "123e4567-e89b-42d3-a456-426614174001",
+            "confirmationToken": "example.opaque.single-use-token",
+            "operation": "revoke",
+            "issuedAt": "2026-07-12T00:00:00Z",
+            "expiresAt": "2026-07-12T00:05:00Z",
+            "display": {
+                "template": "revoke-exact-trust-entry/v1",
+                "repositoryContentTrust": "untrusted",
+                "trustEntry": REVOKE_TRUST_ENTRY,
+                "expectedVersion": 1,
+                "reason": "A human reviewed this exact local approval removal.",
+            },
+        }
+    )
+
+    assert _load_example("trust-revoke-confirmation-required.json") == expected
+
+
+def test_approval_success_example_matches_the_exact_contract() -> None:
+    assert _load_example("trust-approve-response.json") == {
+        "mcpSchemaVersion": "1.0",
+        "tool": "trust_approve",
+        "schemaVersion": "trust-approve/v1",
+        "sourceType": "trust-cache",
+        "outcome": "approved",
+        "mutationApplied": True,
+        "entry": APPROVAL_SUCCESS_ENTRY,
+        "confirmation": {
+            "challengeId": "123e4567-e89b-42d3-a456-426614174000",
+            "consumed": True,
+        },
+        "runtimeIdentity": RUNTIME_IDENTITY,
+        "auditEventId": "123e4567-e89b-42d3-a456-426614174001",
+        "safety": MUTATION_SAFETY,
+    }
+
+
+def test_revoke_success_example_matches_the_exact_contract() -> None:
+    assert _load_example("trust-revoke-response.json") == {
+        "mcpSchemaVersion": "1.0",
+        "tool": "trust_revoke",
+        "schemaVersion": "trust-revoke/v1",
+        "sourceType": "trust-cache",
+        "outcome": "revoked",
+        "mutationApplied": True,
+        "entry": {
+            "entryId": "123e4567-e89b-42d3-a456-426614174000",
+            "entryVersion": 1,
+        },
+        "confirmation": {
+            "challengeId": "123e4567-e89b-42d3-a456-426614174001",
+            "consumed": True,
+        },
+        "runtimeIdentity": RUNTIME_IDENTITY,
+        "auditEventId": "123e4567-e89b-42d3-a456-426614174002",
+        "safety": MUTATION_SAFETY,
+    }
+
+
+def test_trust_mutation_requests_use_exact_schemas_and_client_requires_a_human_stop(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("CODEX_PREFLIGHT_ENABLE_TRUST_MUTATION", "1")
@@ -115,21 +327,6 @@ def test_trust_mutation_examples_use_exact_schemas_and_require_a_human_stop(
         request = _load_example(filename)
         assert request["tool"] == tool_name
         validate(instance=request["arguments"], schema=schemas[tool_name])
-
-    challenge = _load_example("trust-approve-confirmation-required.json")["error"]
-    assert challenge["code"] == "MCP_TRUST_MUTATION_CONFIRMATION_REQUIRED"
-    assert challenge["field"] == "confirmationToken"
-    context = challenge["context"]
-    assert context["runtimeIdentity"] == {
-        "transport": "stdio",
-        "identityStatus": "unavailable",
-        "clientId": None,
-        "sessionId": None,
-    }
-    confirmation = context["confirmation"]
-    assert confirmation["schemaVersion"] == "trust-mutation-confirmation/v1"
-    assert confirmation["operation"] == "approve"
-    assert confirmation["display"]["matchingSemantics"] == "identity-head-fingerprint-scope-policy-ruleset"
 
     source = (EXAMPLES / "trust_mutation_client.py").read_text(encoding="utf-8")
     ast.parse(source, filename="trust_mutation_client.py")

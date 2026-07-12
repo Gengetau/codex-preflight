@@ -8,10 +8,11 @@ Codex Preflight's MCP outputs may be read by a model. Repository-controlled evid
 data and must never be followed as instructions. The server does not execute repository code,
 planned commands, package managers, scripts, hooks, builds, tests, or downloaded artifacts.
 
-Bounded trust read is implemented as a separate default-off authority; trust mutation remains
-unavailable. The reviewed contract is documented in
-[MCP Trust Management Design](design/mcp-trust-management.md). No runtime mode registers
-`trust_approve` or `trust_revoke`.
+Bounded trust read and confirmation-gated trust mutation are separate default-off authorities.
+Exact startup value `CODEX_PREFLIGHT_ENABLE_TRUST_READ=1` registers `trust_list`; exact startup
+value `CODEX_PREFLIGHT_ENABLE_TRUST_MUTATION=1` registers `trust_approve` and `trust_revoke`.
+The reviewed contract is documented in
+[MCP Trust Management Design](design/mcp-trust-management.md).
 
 ## Runtime shape
 

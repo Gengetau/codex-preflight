@@ -14,7 +14,7 @@ Every successful MCP tool result returns these stable fields:
 | Field | Meaning |
 | --- | --- |
 | `mcpSchemaVersion` | Version of the MCP-facing result contract. |
-| `tool` | Exact tool identity: `preflight_check`, `corpus_scan`, or opt-in `remote_repository_scan`. |
+| `tool` | Exact tool identity: `preflight_check`, `corpus_scan`, or an enabled `remote_repository_scan`, `trust_list`, `trust_approve`, or `trust_revoke`. |
 | `safety` | Stable static-analysis and authority-boundary metadata. |
 
 The `safety` object contains:
@@ -329,26 +329,29 @@ Errors are not successful report objects and therefore do not carry the successf
 
 ## Authority boundary
 
-The default runtime registers exactly two tools:
+Three independent exact-value flags produce eight exact inventories. Only value `1` enables an
+authority; absent flags and every other value leave that authority disabled.
 
-```text
-preflight_check
-corpus_scan
-```
+| Remote scan | Trust read | Trust mutation | Exact ordered inventory |
+| --- | --- | --- | --- |
+| off | off | off | `preflight_check`, `corpus_scan` |
+| on | off | off | `preflight_check`, `corpus_scan`, `remote_repository_scan` |
+| off | on | off | `preflight_check`, `corpus_scan`, `trust_list` |
+| off | off | on | `preflight_check`, `corpus_scan`, `trust_approve`, `trust_revoke` |
+| on | on | off | `preflight_check`, `corpus_scan`, `remote_repository_scan`, `trust_list` |
+| on | off | on | `preflight_check`, `corpus_scan`, `remote_repository_scan`, `trust_approve`, `trust_revoke` |
+| off | on | on | `preflight_check`, `corpus_scan`, `trust_list`, `trust_approve`, `trust_revoke` |
+| on | on | on | `preflight_check`, `corpus_scan`, `remote_repository_scan`, `trust_list`, `trust_approve`, `trust_revoke` |
 
-With exact startup flag `CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN=1`, registration adds only:
+The flags are:
 
-```text
-remote_repository_scan
-```
+- `CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN=1`: adds only `remote_repository_scan`.
+- `CODEX_PREFLIGHT_ENABLE_TRUST_READ=1`: adds only `trust_list`.
+- `CODEX_PREFLIGHT_ENABLE_TRUST_MUTATION=1`: adds only `trust_approve` and `trust_revoke`.
 
-With exact startup flag `CODEX_PREFLIGHT_ENABLE_TRUST_READ=1`, registration adds only:
-
-```text
-trust_list
-```
-
-Both flags add both optional tools. No mode exposes command execution, trust approval, trust
-revocation, arbitrary filesystem mutation, arbitrary network destinations, credentials, or proxy
-control. Removing a flag and restarting removes its tool and invalidates its process-local token or
-cursor; the default remains the two-tool, no-network, no-trust-read inventory.
+Mutation authority remains local, exact-entry, and confirmation-gated. No inventory exposes
+planned-command execution, arbitrary filesystem mutation, arbitrary network destinations,
+credentials, proxy control, trust consumption by MCP preflight, or remote trust mutation. Removing
+a flag and restarting removes its tools and invalidates the corresponding process-local token,
+cursor, or challenge; the default remains the two-tool no-network, no-trust-read, no-trust-mutation
+inventory.
