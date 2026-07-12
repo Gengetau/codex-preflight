@@ -6,7 +6,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-from codex_preflight_core.cache.file_lock import open_owner_only_file, validate_private_cache_storage
+from codex_preflight_core.cache.file_lock import (
+    open_owner_only_file,
+    replace_file_durably,
+    validate_private_cache_storage,
+)
 
 
 def read_json(path: Path, default: object) -> object:
@@ -48,7 +52,10 @@ def write_bytes_atomic(path: Path, data: bytes, *, private_storage: bool = False
             os.chmod(temp_path, stat.S_IMODE(path.stat().st_mode))
         else:
             os.chmod(temp_path, 0o600)
-        os.replace(temp_path, path)
+        if private_storage:
+            replace_file_durably(temp_path, path)
+        else:
+            os.replace(temp_path, path)
     finally:
         if temp_path is not None:
             try:

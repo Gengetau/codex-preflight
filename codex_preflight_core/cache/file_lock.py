@@ -42,6 +42,23 @@ def open_owner_only_file(path: Path) -> BinaryIO:
     return handle
 
 
+def replace_file_durably(source: Path, destination: Path) -> None:
+    if os.name == "nt":
+        _windows_replace_file_durably(source, destination)
+    else:
+        _posix_replace_file_durably(source, destination)
+
+
+def _posix_replace_file_durably(source: Path, destination: Path) -> None:
+    os.replace(source, destination)
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
+    descriptor = os.open(destination.parent, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 @contextmanager
 def locked_cache_file(
     path: Path,
@@ -240,6 +257,8 @@ if os.name == "nt":
     _GENERIC_WRITE = 0x40000000
     _FILE_SHARE_READ = 0x00000001
     _FILE_SHARE_WRITE = 0x00000002
+    _MOVEFILE_REPLACE_EXISTING = 0x00000001
+    _MOVEFILE_WRITE_THROUGH = 0x00000008
     _CREATE_NEW = 1
     _OPEN_ALWAYS = 4
     _FILE_ATTRIBUTE_NORMAL = 0x00000080
@@ -273,6 +292,8 @@ if os.name == "nt":
     _KERNEL32.GetCurrentProcess.restype = wintypes.HANDLE
     _KERNEL32.CloseHandle.argtypes = [wintypes.HANDLE]
     _KERNEL32.CloseHandle.restype = wintypes.BOOL
+    _KERNEL32.MoveFileExW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD]
+    _KERNEL32.MoveFileExW.restype = wintypes.BOOL
     _KERNEL32.LocalFree.argtypes = [ctypes.c_void_p]
     _KERNEL32.LocalFree.restype = ctypes.c_void_p
     _KERNEL32.CreateDirectoryW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(_SECURITY_ATTRIBUTES)]
@@ -385,6 +406,12 @@ def _windows_create_owner_only_file(path: Path) -> BinaryIO:
     except Exception:
         os.close(descriptor)
         raise
+
+
+def _windows_replace_file_durably(source: Path, destination: Path) -> None:
+    flags = _MOVEFILE_REPLACE_EXISTING | _MOVEFILE_WRITE_THROUGH
+    if not _KERNEL32.MoveFileExW(_windows_path(source), _windows_path(destination), flags):
+        raise ctypes.WinError(ctypes.get_last_error())
 
 
 @contextmanager

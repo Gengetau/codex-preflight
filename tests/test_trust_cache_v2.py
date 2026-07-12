@@ -17,6 +17,7 @@ from codex_preflight_core.cache.trust_cache import (
     TrustCacheError,
     TrustCacheMutationCommitError,
     TrustCacheMutationPrepared,
+    TrustCacheMutationWriteError,
 )
 
 HEAD = "a" * 40
@@ -74,7 +75,7 @@ def test_private_atomic_trust_write_is_owner_only_before_post_replace_validation
                 os.fsync(handle.fileno())
         file_lock.validate_private_cache_storage(path)
 
-    real_replace = atomic_json.os.replace
+    real_replace = atomic_json.replace_file_durably
     events: list[str] = []
 
     def replace_after_acl_check(source: Path, destination: Path) -> None:
@@ -84,7 +85,7 @@ def test_private_atomic_trust_write_is_owner_only_before_post_replace_validation
         file_lock.validate_private_cache_storage(destination)
         events.append("target")
 
-    monkeypatch.setattr(atomic_json.os, "replace", replace_after_acl_check)
+    monkeypatch.setattr(atomic_json, "replace_file_durably", replace_after_acl_check)
     real_post_replace_validation = trust_cache.validate_private_cache_storage
 
     def track_post_replace_validation(candidate: Path) -> None:
@@ -103,6 +104,130 @@ def test_private_atomic_trust_write_is_owner_only_before_post_replace_validation
     assert events == ["temp", "target", "post-replace-validation", "commit"]
     assert result.outcome == "approved"
     file_lock.validate_private_cache_storage(path)
+
+
+def test_private_trust_durability_barrier_precedes_post_replace_validation_and_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "private" / "trust.json"
+    events: list[str] = []
+    real_replace = atomic_json.os.replace
+
+    def durable_replace(source: Path, destination: Path) -> None:
+        real_replace(source, destination)
+        events.append("durability-barrier")
+
+    monkeypatch.setattr(atomic_json, "replace_file_durably", durable_replace, raising=False)
+    real_validation = trust_cache.validate_private_cache_storage
+
+    def track_validation(candidate: Path) -> None:
+        real_validation(candidate)
+        events.append("post-replace-validation")
+
+    monkeypatch.setattr(trust_cache, "validate_private_cache_storage", track_validation)
+
+    result = TrustCache(path).approve_mcp(
+        **mcp_approval_kwargs(tmp_path),
+        prepare=lambda plan: TrustCacheMutationPrepared(plan.planned_event_id, None),
+        commit=lambda _prepared: events.append("commit") or MCP_FINAL_EVENT_ID,
+        private_storage=True,
+    )
+
+    assert result.outcome == "approved"
+    assert events == ["durability-barrier", "post-replace-validation", "commit"]
+
+
+def test_private_trust_durability_failure_preserves_recoverable_prepare_without_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "private" / "trust.json"
+    planned_after: list[bytes] = []
+    commits: list[str] = []
+    real_replace = atomic_json.os.replace
+
+    def fail_barrier_after_replace(source: Path, destination: Path) -> None:
+        real_replace(source, destination)
+        raise OSError("injected durability barrier failure")
+
+    def prepare(plan):
+        planned_after.append(plan.after_bytes)
+        return TrustCacheMutationPrepared(plan.planned_event_id, None)
+
+    monkeypatch.setattr(atomic_json, "replace_file_durably", fail_barrier_after_replace, raising=False)
+
+    with pytest.raises(TrustCacheMutationWriteError):
+        TrustCache(path).approve_mcp(
+            **mcp_approval_kwargs(tmp_path),
+            prepare=prepare,
+            commit=lambda _prepared: commits.append("mutation_committed") or MCP_FINAL_EVENT_ID,
+            private_storage=True,
+        )
+
+    assert len(planned_after) == 1
+    assert path.read_bytes() == planned_after[0]
+    assert commits == []
+
+
+def test_posix_durable_replace_fsyncs_parent_after_rename_and_closes_descriptor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "trust.json.tmp"
+    destination = tmp_path / "trust.json"
+    events: list[tuple[object, ...]] = []
+
+    monkeypatch.setattr(file_lock.os, "replace", lambda src, dst: events.append(("replace", src, dst)))
+    monkeypatch.setattr(
+        file_lock.os,
+        "open",
+        lambda path, flags: events.append(("open", path, flags)) or 71,
+    )
+    monkeypatch.setattr(file_lock.os, "fsync", lambda descriptor: events.append(("fsync", descriptor)))
+    monkeypatch.setattr(file_lock.os, "close", lambda descriptor: events.append(("close", descriptor)))
+
+    file_lock._posix_replace_file_durably(source, destination)
+
+    expected_flags = (
+        file_lock.os.O_RDONLY
+        | getattr(file_lock.os, "O_DIRECTORY", 0)
+        | getattr(file_lock.os, "O_CLOEXEC", 0)
+    )
+    assert events == [
+        ("replace", source, destination),
+        ("open", destination.parent, expected_flags),
+        ("fsync", 71),
+        ("close", 71),
+    ]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows MoveFileExW flag regression")
+def test_windows_durable_replace_uses_replace_existing_and_write_through(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "trust.json.tmp"
+    destination = tmp_path / "trust.json"
+    calls: list[tuple[str, str, int]] = []
+
+    class Kernel32:
+        @staticmethod
+        def MoveFileExW(src: str, dst: str, flags: int) -> bool:
+            calls.append((src, dst, flags))
+            return True
+
+    monkeypatch.setattr(file_lock, "_KERNEL32", Kernel32())
+
+    file_lock._windows_replace_file_durably(source, destination)
+
+    assert calls == [
+        (
+            file_lock._windows_path(source),
+            file_lock._windows_path(destination),
+            file_lock._MOVEFILE_REPLACE_EXISTING | file_lock._MOVEFILE_WRITE_THROUGH,
+        )
+    ]
 
 
 def arm_stat_failure_after_atomic_replace(
