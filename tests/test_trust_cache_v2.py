@@ -106,6 +106,40 @@ def test_private_atomic_trust_write_is_owner_only_before_post_replace_validation
     file_lock.validate_private_cache_storage(path)
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows owner correction regression")
+def test_windows_private_cache_owner_is_corrected_only_for_new_objects(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    corrected: list[object] = []
+    real_set_owner = file_lock._windows_set_current_owner_handle
+
+    def track_set_owner(handle: object) -> None:
+        corrected.append(handle)
+        real_set_owner(handle)
+
+    monkeypatch.setattr(file_lock, "_windows_set_current_owner_handle", track_set_owner)
+    path = tmp_path / "private" / "trust.json"
+    file_lock._ensure_private_directory(path.parent)
+    assert len(corrected) == 1
+
+    corrected.clear()
+    with file_lock.open_owner_only_file(path):
+        pass
+    assert len(corrected) == 1
+
+    corrected.clear()
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    with file_lock._open_private_lock(lock_path):
+        pass
+    assert len(corrected) == 1
+
+    corrected.clear()
+    with file_lock._open_private_lock(lock_path):
+        pass
+    assert corrected == []
+
+
 def test_private_trust_durability_barrier_precedes_post_replace_validation_and_commit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -178,16 +212,17 @@ def test_posix_durable_replace_fsyncs_parent_after_rename_and_closes_descriptor(
     destination = tmp_path / "trust.json"
     events: list[tuple[object, ...]] = []
 
-    monkeypatch.setattr(file_lock.os, "replace", lambda src, dst: events.append(("replace", src, dst)))
-    monkeypatch.setattr(
-        file_lock.os,
-        "open",
-        lambda path, flags: events.append(("open", path, flags)) or 71,
-    )
-    monkeypatch.setattr(file_lock.os, "fsync", lambda descriptor: events.append(("fsync", descriptor)))
-    monkeypatch.setattr(file_lock.os, "close", lambda descriptor: events.append(("close", descriptor)))
+    with monkeypatch.context() as patch:
+        patch.setattr(file_lock.os, "replace", lambda src, dst: events.append(("replace", src, dst)))
+        patch.setattr(
+            file_lock.os,
+            "open",
+            lambda path, flags: events.append(("open", path, flags)) or 71,
+        )
+        patch.setattr(file_lock.os, "fsync", lambda descriptor: events.append(("fsync", descriptor)))
+        patch.setattr(file_lock.os, "close", lambda descriptor: events.append(("close", descriptor)))
 
-    file_lock._posix_replace_file_durably(source, destination)
+        file_lock._posix_replace_file_durably(source, destination)
 
     expected_flags = (
         file_lock.os.O_RDONLY

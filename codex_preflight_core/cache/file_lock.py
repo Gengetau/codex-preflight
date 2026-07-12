@@ -255,13 +255,18 @@ if os.name == "nt":
     _ERROR_ALREADY_EXISTS = 183
     _GENERIC_READ = 0x80000000
     _GENERIC_WRITE = 0x40000000
+    _WRITE_OWNER = 0x00080000
+    _READ_CONTROL = 0x00020000
+    _FILE_READ_ATTRIBUTES = 0x0080
     _FILE_SHARE_READ = 0x00000001
     _FILE_SHARE_WRITE = 0x00000002
     _MOVEFILE_REPLACE_EXISTING = 0x00000001
     _MOVEFILE_WRITE_THROUGH = 0x00000008
     _CREATE_NEW = 1
+    _OPEN_EXISTING = 3
     _OPEN_ALWAYS = 4
     _FILE_ATTRIBUTE_NORMAL = 0x00000080
+    _FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
     _FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
     _INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
     _SAFE_WINDOWS_SIDS = {"S-1-5-18", "S-1-5-32-544"}
@@ -320,6 +325,8 @@ if os.name == "nt":
     _ADVAPI32.GetTokenInformation.restype = wintypes.BOOL
     _ADVAPI32.ConvertSidToStringSidW.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.LPWSTR)]
     _ADVAPI32.ConvertSidToStringSidW.restype = wintypes.BOOL
+    _ADVAPI32.ConvertStringSidToSidW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_void_p)]
+    _ADVAPI32.ConvertStringSidToSidW.restype = wintypes.BOOL
     _ADVAPI32.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = [
         wintypes.LPCWSTR,
         wintypes.DWORD,
@@ -346,6 +353,16 @@ if os.name == "nt":
     _ADVAPI32.IsValidSid.restype = wintypes.BOOL
     _ADVAPI32.GetLengthSid.argtypes = [ctypes.c_void_p]
     _ADVAPI32.GetLengthSid.restype = wintypes.DWORD
+    _ADVAPI32.SetSecurityInfo.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+    ]
+    _ADVAPI32.SetSecurityInfo.restype = wintypes.DWORD
 
 
 def _windows_create_private_directory(path: Path) -> None:
@@ -355,22 +372,41 @@ def _windows_create_private_directory(path: Path) -> None:
             if error == _ERROR_ALREADY_EXISTS:
                 raise FileExistsError(path)
             raise ctypes.WinError(error)
+    handle = _KERNEL32.CreateFileW(
+        _windows_path(path),
+        _FILE_READ_ATTRIBUTES | _READ_CONTROL | _WRITE_OWNER,
+        _FILE_SHARE_READ | _FILE_SHARE_WRITE,
+        None,
+        _OPEN_EXISTING,
+        _FILE_FLAG_BACKUP_SEMANTICS | _FILE_FLAG_OPEN_REPARSE_POINT,
+        None,
+    )
+    if handle == _INVALID_HANDLE_VALUE:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        _windows_set_current_owner_handle(handle)
+    finally:
+        _KERNEL32.CloseHandle(handle)
 
 
 def _windows_open_private_lock(path: Path) -> BinaryIO:
     with _windows_private_security_attributes(directory=False) as attributes:
+        ctypes.set_last_error(0)
         handle = _KERNEL32.CreateFileW(
             _windows_path(path),
-            _GENERIC_READ | _GENERIC_WRITE,
+            _GENERIC_READ | _GENERIC_WRITE | _WRITE_OWNER,
             _FILE_SHARE_READ | _FILE_SHARE_WRITE,
             ctypes.byref(attributes),
             _OPEN_ALWAYS,
             _FILE_ATTRIBUTE_NORMAL | _FILE_FLAG_OPEN_REPARSE_POINT,
             None,
         )
+        create_error = ctypes.get_last_error()
     if handle == _INVALID_HANDLE_VALUE:
         raise ctypes.WinError(ctypes.get_last_error())
     try:
+        if create_error != _ERROR_ALREADY_EXISTS:
+            _windows_set_current_owner_handle(handle)
         descriptor = msvcrt.open_osfhandle(handle, os.O_BINARY | os.O_RDWR)
     except Exception:
         _KERNEL32.CloseHandle(handle)
@@ -384,7 +420,7 @@ def _windows_create_owner_only_file(path: Path) -> BinaryIO:
     with _windows_private_security_attributes(directory=False) as attributes:
         handle = _KERNEL32.CreateFileW(
             _windows_path(path),
-            _GENERIC_READ | _GENERIC_WRITE,
+            _GENERIC_READ | _GENERIC_WRITE | _WRITE_OWNER,
             _FILE_SHARE_READ | _FILE_SHARE_WRITE,
             ctypes.byref(attributes),
             _CREATE_NEW,
@@ -397,6 +433,7 @@ def _windows_create_owner_only_file(path: Path) -> BinaryIO:
             raise FileExistsError(path)
         raise ctypes.WinError(error)
     try:
+        _windows_set_current_owner_handle(handle)
         descriptor = msvcrt.open_osfhandle(handle, os.O_BINARY | os.O_RDWR)
     except Exception:
         _KERNEL32.CloseHandle(handle)
@@ -464,6 +501,26 @@ def _windows_current_sid_string() -> str:
         return _windows_sid_string(sid)
     finally:
         _KERNEL32.CloseHandle(token)
+
+
+def _windows_set_current_owner_handle(handle: object) -> None:
+    current_sid = ctypes.c_void_p()
+    if not _ADVAPI32.ConvertStringSidToSidW(_windows_current_sid_string(), ctypes.byref(current_sid)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        result = _ADVAPI32.SetSecurityInfo(
+            handle,
+            _SE_FILE_OBJECT,
+            _OWNER_SECURITY_INFORMATION,
+            current_sid,
+            None,
+            None,
+            None,
+        )
+        if result != 0:
+            raise OSError(result, "failed to set private cache owner")
+    finally:
+        _KERNEL32.LocalFree(current_sid)
 
 
 def _windows_sid_string(sid: object) -> str:

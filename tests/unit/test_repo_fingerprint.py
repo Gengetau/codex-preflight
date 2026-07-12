@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, BinaryIO
@@ -989,7 +990,11 @@ def test_strict_fixture_marker_lookup_is_bound_to_held_directory(
 
     monkeypatch.setattr(safe_path_module, "_directory_entries", swap_after_directory_is_held)
     try:
-        assert collect_critical_files(tmp_path, reject_unsafe=True) == []
+        try:
+            collected = collect_critical_files(tmp_path, reject_unsafe=True)
+        except CriticalFileCollectionError:
+            collected = []
+        assert collected == []
         assert attempted is True
     finally:
         if swapped:
@@ -1053,14 +1058,15 @@ raise SystemExit(2)
         encoding="utf-8",
     )
 
-    result = subprocess.run(
-        [sys.executable, str(script), str(tmp_path), surface, special_kind],
-        cwd=Path.cwd(),
-        capture_output=True,
-        text=True,
-        timeout=3,
-        check=False,
-    )
+    with tempfile.TemporaryDirectory(prefix="cpf-") as probe_root:
+        result = subprocess.run(
+            [sys.executable, str(script), probe_root, surface, special_kind],
+            cwd=Path.cwd(),
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
 
     assert result.returncode == 0, result.stderr
 

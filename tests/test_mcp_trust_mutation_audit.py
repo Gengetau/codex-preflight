@@ -173,6 +173,35 @@ def test_key_is_created_atomically_once_with_owner_only_permissions(tmp_path: Pa
         assert stat.S_IMODE(key_path.stat().st_mode) == 0o600
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows owner correction regression")
+def test_windows_audit_owner_is_corrected_only_for_new_objects(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    corrected: list[object] = []
+    real_set_owner = audit_module._windows_set_current_owner_handle
+
+    def track_set_owner(handle: object) -> None:
+        corrected.append(handle)
+        real_set_owner(handle)
+
+    monkeypatch.setattr(audit_module, "_windows_set_current_owner_handle", track_set_owner)
+    directory = tmp_path / "trust-mutation"
+    audit_module._ensure_owner_only_directory(directory)
+    assert len(corrected) == 1
+
+    corrected.clear()
+    key_path = directory / "audit.key"
+    with audit_module._secure_open_file(key_path, "exclusive"):
+        pass
+    assert len(corrected) == 1
+
+    corrected.clear()
+    with audit_module._secure_open_file(key_path, "append"):
+        pass
+    assert corrected == []
+
+
 def test_directory_key_audit_lock_and_rotated_segments_are_owner_only_on_every_platform(tmp_path: Path) -> None:
     audit = _audit(tmp_path, max_segment_bytes=1100, max_total_bytes=4400)
     for index in range(5):

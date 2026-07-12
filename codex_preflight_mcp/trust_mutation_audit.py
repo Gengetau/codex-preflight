@@ -744,7 +744,12 @@ class TrustMutationAuditLog:
                     raise _IntegrityError("invalid audit record") from error
                 if not isinstance(record, dict) or set(record) != _RECORD_FIELDS or _canonical_line(record) != line:
                     raise _IntegrityError("noncanonical audit record")
-                self._validate_stored_record(record, key)
+                try:
+                    self._validate_stored_record(record, key)
+                except _IntegrityError:
+                    raise
+                except (KeyError, TypeError, ValueError) as error:
+                    raise _IntegrityError("invalid audit record") from error
                 if previous_mac is not None and record["previousMac"] != previous_mac:
                     raise _IntegrityError("broken audit chain")
                 expected_mac = self._record_mac(record, key)
@@ -1405,6 +1410,7 @@ if os.name == "nt":
     _TOKEN_USER = 1
     _GENERIC_READ = 0x80000000
     _GENERIC_WRITE = 0x40000000
+    _WRITE_OWNER = 0x00080000
     _READ_CONTROL = 0x00020000
     _FILE_READ_ATTRIBUTES = 0x0080
     _FILE_SHARE_READ = 0x00000001
@@ -1424,6 +1430,7 @@ if os.name == "nt":
     _SE_DACL_PROTECTED = 0x1000
     _MOVEFILE_REPLACE_EXISTING = 0x1
     _MOVEFILE_WRITE_THROUGH = 0x8
+    _ERROR_ALREADY_EXISTS = 183
 
     class _SECURITY_ATTRIBUTES(ctypes.Structure):
         _fields_ = [
@@ -1500,6 +1507,16 @@ if os.name == "nt":
         ctypes.POINTER(ctypes.c_void_p),
     ]
     _ADVAPI32.GetSecurityInfo.restype = wintypes.DWORD
+    _ADVAPI32.SetSecurityInfo.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+    ]
+    _ADVAPI32.SetSecurityInfo.restype = wintypes.DWORD
     _ADVAPI32.EqualSid.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
     _ADVAPI32.EqualSid.restype = wintypes.BOOL
     _ADVAPI32.GetAclInformation.argtypes = [
@@ -1587,10 +1604,11 @@ def _windows_open_file(path: Path, mode: str) -> BinaryIO:
     flags = os.O_BINARY | os.O_RDONLY
     python_mode = "rb"
     if mode != "read":
-        desired |= _GENERIC_WRITE
+        desired |= _GENERIC_WRITE | _WRITE_OWNER
         flags = os.O_BINARY | os.O_RDWR
         python_mode = "a+b" if mode == "append" else "w+b"
     with _windows_security_attributes() as attributes:
+        ctypes.set_last_error(0)
         handle = _KERNEL32.CreateFileW(
             _windows_path(path),
             desired,
@@ -1600,12 +1618,16 @@ def _windows_open_file(path: Path, mode: str) -> BinaryIO:
             _FILE_ATTRIBUTE_NORMAL | _FILE_FLAG_OPEN_REPARSE_POINT,
             None,
         )
+        create_error = ctypes.get_last_error()
     if handle == _INVALID_HANDLE_VALUE:
         error = _windows_error()
         if getattr(error, "winerror", None) in {80, 183}:
             raise FileExistsError(path)
         raise error
+    created = mode == "exclusive" or (mode == "append" and create_error != _ERROR_ALREADY_EXISTS)
     try:
+        if created:
+            _windows_set_current_owner_handle(handle)
         descriptor = msvcrt.open_osfhandle(handle, flags)  # type: ignore[name-defined]
     except Exception:
         _KERNEL32.CloseHandle(handle)
@@ -1616,10 +1638,13 @@ def _windows_open_file(path: Path, mode: str) -> BinaryIO:
     return raw
 
 
-def _windows_open_directory(path: Path) -> int:
+def _windows_open_directory(path: Path, *, write_owner: bool = False) -> int:
+    desired = _FILE_READ_ATTRIBUTES | _READ_CONTROL
+    if write_owner:
+        desired |= _WRITE_OWNER
     handle = _KERNEL32.CreateFileW(
         _windows_path(path),
-        _FILE_READ_ATTRIBUTES | _READ_CONTROL,
+        desired,
         _FILE_SHARE_READ | _FILE_SHARE_WRITE,
         None,
         _OPEN_EXISTING,
@@ -1639,6 +1664,38 @@ def _windows_create_directory(path: Path) -> None:
     with _windows_security_attributes() as attributes:
         if not _KERNEL32.CreateDirectoryW(_windows_path(path), ctypes.byref(attributes)):  # type: ignore[name-defined,arg-type]
             raise _windows_error()
+    descriptor = _windows_open_directory(path, write_owner=True)
+    try:
+        _windows_set_current_owner_descriptor(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _windows_set_current_owner_descriptor(descriptor: int) -> None:
+    handle = wintypes.HANDLE(msvcrt.get_osfhandle(descriptor))  # type: ignore[name-defined]
+    _windows_set_current_owner_handle(handle)
+
+
+def _windows_set_current_owner_handle(handle: object) -> None:
+    current_sid = ctypes.c_void_p()  # type: ignore[name-defined]
+    if not _ADVAPI32.ConvertStringSidToSidW(  # type: ignore[name-defined]
+        _windows_current_sid_string(), ctypes.byref(current_sid)
+    ):
+        raise _windows_error()
+    try:
+        result = _ADVAPI32.SetSecurityInfo(  # type: ignore[name-defined]
+            handle,
+            _SE_FILE_OBJECT,
+            _OWNER_SECURITY_INFORMATION,
+            current_sid,
+            None,
+            None,
+            None,
+        )
+        if result != 0:
+            raise OSError(result, "failed to set audit owner")
+    finally:
+        _KERNEL32.LocalFree(current_sid)
 
 
 def _windows_verify_owner_only(descriptor: int) -> None:
