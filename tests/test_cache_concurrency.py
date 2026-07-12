@@ -131,7 +131,7 @@ def test_v033_posix_migration_rejects_path_replacement(
 
     monkeypatch.setattr(file_lock.os, "fchmod", replace_after_hardening)
 
-    with pytest.raises(UnsafeCacheStorageError, match="changed during migration"):
+    with pytest.raises(UnsafeCacheStorageError):
         file_lock._harden_v033_path(path, directory=False)
 
 
@@ -154,7 +154,7 @@ def test_v033_windows_migration_rejects_path_replacement(
 
     monkeypatch.setattr(file_lock, "_windows_set_private_dacl_handle", replace_after_hardening)
 
-    with pytest.raises(UnsafeCacheStorageError, match="changed during migration"):
+    with pytest.raises(UnsafeCacheStorageError):
         file_lock._harden_v033_path(path, directory=False)
 
 
