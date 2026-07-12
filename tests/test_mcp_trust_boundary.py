@@ -28,6 +28,21 @@ def test_mcp_preflight_does_not_use_trust_cache(tmp_path: Path, monkeypatch) -> 
     assert report["decision"] in {"ALLOW", "WARN"}
 
 
+def test_mcp_preflight_remains_trust_blind_when_mutation_is_enabled(tmp_path: Path, monkeypatch) -> None:
+    from codex_preflight_core.cache.trust_cache import TrustCache
+    from codex_preflight_mcp.server import preflight_check
+
+    def fail_if_used(*args, **kwargs):
+        raise AssertionError("MCP preflight_check must not use trust approvals")
+
+    monkeypatch.setenv("CODEX_PREFLIGHT_ENABLE_TRUST_MUTATION", "1")
+    monkeypatch.setattr(TrustCache, "match", fail_if_used)
+
+    report = preflight_check(cwd=str(tmp_path), command="pytest")
+
+    assert report["decision"] in {"ALLOW", "WARN"}
+
+
 def test_mcp_preflight_does_not_store_scan_cache(tmp_path: Path, monkeypatch) -> None:
     from codex_preflight_core.cache.scan_cache import ScanCache
     from codex_preflight_mcp.server import preflight_check
@@ -96,3 +111,45 @@ def test_remote_confirmation_and_scan_cannot_access_or_satisfy_trust(
 
     assert result["cache"]["usedTrustCache"] is False
     assert result["safety"]["trustMutationAllowed"] is False
+
+
+def test_remote_confirmation_token_cannot_authorize_trust_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from codex_preflight_mcp import server
+    from codex_preflight_mcp.errors import McpToolError
+    from codex_preflight_mcp.remote_confirmation import RemoteConfirmationManager
+    from codex_preflight_mcp.trust_mutation import TrustMutationService
+    from codex_preflight_mcp.trust_mutation_confirmation import TrustMutationConfirmationManager
+
+    monkeypatch.setenv("CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN", "1")
+    monkeypatch.setenv("CODEX_PREFLIGHT_ENABLE_TRUST_MUTATION", "1")
+    monkeypatch.delenv("CODEX_PREFLIGHT_ENABLE_TRUST_READ", raising=False)
+    monkeypatch.setenv("CODEX_PREFLIGHT_HOME", str(tmp_path))
+    monkeypatch.setattr(server, "_REMOTE_CONFIRMATIONS", RemoteConfirmationManager(secret=b"x" * 32))
+    mutation_service = TrustMutationService(
+        cache=object(),
+        audit=object(),
+        confirmation=TrustMutationConfirmationManager(secret=b"m" * 32),
+        privacy_key=b"p" * 32,
+    )
+    monkeypatch.setattr(server, "default_trust_mutation_service", lambda: mutation_service)
+
+    with pytest.raises(McpToolError) as remote_challenge:
+        server.remote_repository_scan(
+            remoteUrl="https://github.com/example/project",
+            requestedRef="refs/heads/main",
+        )
+    remote_token = remote_challenge.value.to_dict()["error"]["context"]["confirmationToken"]
+
+    with pytest.raises(McpToolError) as mutation_attempt:
+        server.trust_approve(
+            cwd=str(tmp_path),
+            command="pytest",
+            expiresAt="2026-08-01T00:00:00Z",
+            reason="A remote token is not a trust authorization.",
+            confirmationToken=remote_token,
+        )
+
+    assert mutation_attempt.value.detail.code.value == "MCP_TRUST_MUTATION_CONFIRMATION_INVALID"

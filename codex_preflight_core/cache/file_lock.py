@@ -22,6 +22,26 @@ class UnsafeCacheStorageError(OSError):
     pass
 
 
+def open_owner_only_file(path: Path) -> BinaryIO:
+    if os.name == "nt":
+        handle = _windows_create_owner_only_file(path)
+    else:
+        flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW
+        descriptor = os.open(path, flags, 0o600)
+        try:
+            os.fchmod(descriptor, 0o600)
+            handle = os.fdopen(descriptor, "w+b")
+        except Exception:
+            os.close(descriptor)
+            raise
+    try:
+        _validate_open_file(path, handle)
+    except Exception:
+        handle.close()
+        raise
+    return handle
+
+
 @contextmanager
 def locked_cache_file(
     path: Path,
@@ -220,6 +240,7 @@ if os.name == "nt":
     _GENERIC_WRITE = 0x40000000
     _FILE_SHARE_READ = 0x00000001
     _FILE_SHARE_WRITE = 0x00000002
+    _CREATE_NEW = 1
     _OPEN_ALWAYS = 4
     _FILE_ATTRIBUTE_NORMAL = 0x00000080
     _FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
@@ -336,6 +357,34 @@ def _windows_open_private_lock(path: Path) -> BinaryIO:
     opened = os.fdopen(descriptor, "a+b")
     opened.seek(0, os.SEEK_END)
     return opened
+
+
+def _windows_create_owner_only_file(path: Path) -> BinaryIO:
+    with _windows_private_security_attributes(directory=False) as attributes:
+        handle = _KERNEL32.CreateFileW(
+            _windows_path(path),
+            _GENERIC_READ | _GENERIC_WRITE,
+            _FILE_SHARE_READ | _FILE_SHARE_WRITE,
+            ctypes.byref(attributes),
+            _CREATE_NEW,
+            _FILE_ATTRIBUTE_NORMAL | _FILE_FLAG_OPEN_REPARSE_POINT,
+            None,
+        )
+    if handle == _INVALID_HANDLE_VALUE:
+        error = ctypes.get_last_error()
+        if error == _ERROR_ALREADY_EXISTS:
+            raise FileExistsError(path)
+        raise ctypes.WinError(error)
+    try:
+        descriptor = msvcrt.open_osfhandle(handle, os.O_BINARY | os.O_RDWR)
+    except Exception:
+        _KERNEL32.CloseHandle(handle)
+        raise
+    try:
+        return os.fdopen(descriptor, "w+b")
+    except Exception:
+        os.close(descriptor)
+        raise
 
 
 @contextmanager

@@ -264,7 +264,7 @@ class TrustCache:
                 None,
             )
             try:
-                self._write_encoded_unlocked(after_bytes)
+                self._write_encoded_unlocked(after_bytes, private_storage=private_storage)
             except Exception:
                 raise TrustCacheMutationWriteError from None
             try:
@@ -349,7 +349,7 @@ class TrustCache:
                 None,
             )
             try:
-                self._write_encoded_unlocked(after_bytes)
+                self._write_encoded_unlocked(after_bytes, private_storage=private_storage)
             except Exception:
                 raise TrustCacheMutationWriteError from None
             try:
@@ -526,11 +526,14 @@ class TrustCache:
             raise TrustCacheError("unavailable", "The local trust store exceeds its size limit.")
         return encoded
 
-    def _write_encoded_unlocked(self, encoded: bytes) -> None:
+    def _write_encoded_unlocked(self, encoded: bytes, *, private_storage: bool = False) -> None:
         try:
             if len(encoded) > self.max_bytes:
                 raise TrustCacheError("unavailable", "The local trust store exceeds its size limit.")
-            write_bytes_atomic(self.path, encoded)
+            if private_storage:
+                write_bytes_atomic(self.path, encoded, private_storage=True)
+            else:
+                write_bytes_atomic(self.path, encoded)
         except TrustCacheError:
             raise
         except OSError as error:

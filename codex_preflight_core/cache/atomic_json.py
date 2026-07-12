@@ -6,6 +6,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
+from codex_preflight_core.cache.file_lock import open_owner_only_file, validate_private_cache_storage
+
 
 def read_json(path: Path, default: object) -> object:
     if not path.exists():
@@ -24,16 +26,25 @@ def write_json_atomic(path: Path, data: object) -> None:
     write_bytes_atomic(path, encoded)
 
 
-def write_bytes_atomic(path: Path, data: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+def write_bytes_atomic(path: Path, data: bytes, *, private_storage: bool = False) -> None:
+    if private_storage:
+        validate_private_cache_storage(path)
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True)
     temp_path: Path | None = None
     try:
         temp_path = path.parent / f"{path.name}.{uuid4().hex}.tmp"
-        with temp_path.open("xb") as handle:
+        if private_storage:
+            handle_context = open_owner_only_file(temp_path)
+        else:
+            handle_context = temp_path.open("xb")
+        with handle_context as handle:
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
-        if path.exists():
+        if private_storage:
+            validate_private_cache_storage(temp_path)
+        elif path.exists():
             os.chmod(temp_path, stat.S_IMODE(path.stat().st_mode))
         else:
             os.chmod(temp_path, 0o600)

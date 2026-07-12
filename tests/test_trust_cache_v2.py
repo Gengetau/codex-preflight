@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import stat
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
@@ -9,7 +10,7 @@ from uuid import UUID
 
 import pytest
 
-from codex_preflight_core.cache import atomic_json, trust_cache
+from codex_preflight_core.cache import atomic_json, file_lock, trust_cache
 from codex_preflight_core.cache.trust_cache import (
     TRUST_CACHE_MAX_BYTES,
     TrustCache,
@@ -46,6 +47,62 @@ def mcp_approval_kwargs(tmp_path: Path, **overrides: object) -> dict[str, object
     }
     kwargs.update(overrides)
     return kwargs
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows owner-only ACL regression")
+@pytest.mark.parametrize("existing", [False, True], ids=["create", "replace"])
+def test_private_atomic_trust_write_is_owner_only_before_post_replace_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    existing: bool,
+) -> None:
+    path = tmp_path / "private" / "trust.json"
+    # A valid non-inheritable owner ACL exposes unsafe process-default ACLs on ordinary child creation.
+    with file_lock._windows_private_security_attributes(directory=False) as attributes:
+        created = file_lock._KERNEL32.CreateDirectoryW(
+            file_lock._windows_path(path.parent),
+            file_lock.ctypes.byref(attributes),
+        )
+    if not created:
+        raise file_lock.ctypes.WinError(file_lock.ctypes.get_last_error())
+    file_lock.validate_private_cache_storage(path)
+    if existing:
+        with file_lock.locked_cache_file(path, private_storage=True):
+            with file_lock.open_owner_only_file(path) as handle:
+                handle.write(b"[]")
+                handle.flush()
+                os.fsync(handle.fileno())
+        file_lock.validate_private_cache_storage(path)
+
+    real_replace = atomic_json.os.replace
+    events: list[str] = []
+
+    def replace_after_acl_check(source: Path, destination: Path) -> None:
+        file_lock.validate_private_cache_storage(source)
+        events.append("temp")
+        real_replace(source, destination)
+        file_lock.validate_private_cache_storage(destination)
+        events.append("target")
+
+    monkeypatch.setattr(atomic_json.os, "replace", replace_after_acl_check)
+    real_post_replace_validation = trust_cache.validate_private_cache_storage
+
+    def track_post_replace_validation(candidate: Path) -> None:
+        real_post_replace_validation(candidate)
+        events.append("post-replace-validation")
+
+    monkeypatch.setattr(trust_cache, "validate_private_cache_storage", track_post_replace_validation)
+
+    result = TrustCache(path).approve_mcp(
+        **mcp_approval_kwargs(tmp_path),
+        prepare=lambda plan: TrustCacheMutationPrepared(plan.planned_event_id, None),
+        commit=lambda _prepared: events.append("commit") or MCP_FINAL_EVENT_ID,
+        private_storage=True,
+    )
+
+    assert events == ["temp", "target", "post-replace-validation", "commit"]
+    assert result.outcome == "approved"
+    file_lock.validate_private_cache_storage(path)
 
 
 def arm_stat_failure_after_atomic_replace(
