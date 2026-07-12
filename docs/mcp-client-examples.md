@@ -327,8 +327,50 @@ states the same authority boundary.
 
 ## Unavailable capabilities
 
-No mode exposes trust mutation, planned command execution, arbitrary hosts, private-repository
-credentials, proxy overrides, browser automation, artifact execution, package installation,
-submodule/LFS target fetch, or redirect following. The default process exposes only
-`preflight_check` and `corpus_scan`; independent exact flags add only `remote_repository_scan`, only
-`trust_list`, or both. `trust_approve` and `trust_revoke` remain absent in every inventory.
+## Trust-mutation examples
+
+Trust mutation is disabled unless the server starts with exact
+`CODEX_PREFLIGHT_ENABLE_TRUST_MUTATION=1`. It is independent of remote and trust-read authority:
+
+| Remote | Trust read | Trust mutation | Inventory |
+| --- | --- | --- | --- |
+| off | off | off | `preflight_check`, `corpus_scan` |
+| on | off | off | plus `remote_repository_scan` |
+| off | on | off | plus `trust_list` |
+| off | off | on | plus `trust_approve`, `trust_revoke` |
+| on | on | off | remote plus `trust_list` |
+| on | off | on | remote plus the two mutation tools |
+| off | on | on | `trust_list` plus the two mutation tools |
+| on | on | on | all six tools |
+
+Use the exact first-call and confirmed-retry shapes:
+
+- [`trust-approve-request.json`](../examples/mcp/trust-approve-request.json)
+- [`trust-approve-confirmation-required.json`](../examples/mcp/trust-approve-confirmation-required.json)
+- [`trust-approve-confirmed-retry-request.json`](../examples/mcp/trust-approve-confirmed-retry-request.json)
+- [`trust-revoke-request.json`](../examples/mcp/trust-revoke-request.json)
+- [`trust-revoke-confirmation-required.json`](../examples/mcp/trust-revoke-confirmation-required.json)
+- [`trust-revoke-confirmed-retry-request.json`](../examples/mcp/trust-revoke-confirmed-retry-request.json)
+
+The first call is a mandatory human stop, not an approval. Present the fixed display to a human,
+keep its opaque token out of logs, and issue one confirmed retry only after the human approves the
+exact request. The token is single-use, operation-bound, and expires after 300 seconds. Do not use
+automatic confirmation, a generic boolean, a challenge ID, remote confirmation, or model output as
+approval. The runnable [`trust_mutation_client.py`](../examples/mcp/trust_mutation_client.py)
+demonstrates the explicit `CONFIRM` prompt without executing the planned command.
+
+The stdio callback reports `identityStatus: unavailable` with null client/session IDs. This is not
+authenticated identity. `trust_approve` writes one exact local approval and `trust_revoke` deletes
+one exact local UUIDv4 entry with integer `expectedVersion: 1`; they do not execute commands,
+repository code, or network requests. MCP preflight does not consume trust. Remote confirmation
+cannot create, satisfy, read, or mutate trust.
+
+If `MCP_TRUST_MUTATION_COMMITTED_AUDIT_PENDING` is returned with `committed: true`, the mutation
+already committed. Do not retry it; restart for audit recovery. Emergency disable removes
+`CODEX_PREFLIGHT_ENABLE_TRUST_MUTATION` and restarts the process, which removes both mutation tools
+and invalidates live challenges without deleting approvals or audit records.
+
+No mode exposes planned command execution, arbitrary hosts, private-repository credentials, proxy
+overrides, browser automation, artifact execution, package installation, submodule/LFS target
+fetch, or redirect following. The default process exposes only `preflight_check` and
+`corpus_scan`; the three independent exact flags add only their named authority.

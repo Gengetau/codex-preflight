@@ -11,7 +11,7 @@ from codex_preflight_mcp.errors import McpErrorCode
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_v033_version_sources_and_plugin_copies_are_aligned() -> None:
+def test_current_version_sources_and_plugin_copies_are_aligned() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     root_plugin = json.loads((ROOT / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8"))
     marketplace_plugin = json.loads(
@@ -20,11 +20,11 @@ def test_v033_version_sources_and_plugin_copies_are_aligned() -> None:
         )
     )
 
-    assert project["project"]["version"] == "0.3.3"
-    assert core_version == "0.3.3"
-    assert mcp_version == "0.3.3"
-    assert root_plugin["version"] == "0.3.3"
-    assert marketplace_plugin["version"] == "0.3.3"
+    assert project["project"]["version"] == "0.3.4"
+    assert core_version == "0.3.4"
+    assert mcp_version == "0.3.4"
+    assert root_plugin["version"] == "0.3.4"
+    assert marketplace_plugin["version"] == "0.3.4"
 
 
 def test_trust_read_docs_cover_authority_migration_audit_and_rollback() -> None:

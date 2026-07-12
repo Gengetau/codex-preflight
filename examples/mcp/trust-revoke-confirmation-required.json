@@ -1,0 +1,44 @@
+{
+  "isError": true,
+  "error": {
+    "code": "MCP_TRUST_MUTATION_CONFIRMATION_REQUIRED",
+    "message": "Human confirmation is required for this exact trust mutation.",
+    "remediation": "Present the fixed confirmation display to a human, then retry once with the returned confirmationToken only if the human approves it.",
+    "retryable": false,
+    "field": "confirmationToken",
+    "safetyBoundary": "No trust approval or revocation has occurred.",
+    "context": {
+      "runtimeIdentity": {
+        "transport": "stdio",
+        "identityStatus": "unavailable",
+        "clientId": null,
+        "sessionId": null
+      },
+      "confirmation": {
+        "schemaVersion": "trust-mutation-confirmation/v1",
+        "challengeId": "123e4567-e89b-42d3-a456-426614174001",
+        "confirmationToken": "example.opaque.single-use-token",
+        "operation": "revoke",
+        "issuedAt": "2026-07-12T00:00:00Z",
+        "expiresAt": "2026-07-12T00:05:00Z",
+        "display": {
+          "template": "revoke-exact-local-trust/v1",
+          "repositoryContentTrust": "untrusted",
+          "entry": {
+            "entryId": "123e4567-e89b-42d3-a456-426614174000",
+            "entryVersion": 1,
+            "repoIdHash": "hmac-sha256:example-process-local-value",
+            "repoIdRedacted": true,
+            "headCommit": "0123456789abcdef0123456789abcdef01234567",
+            "criticalFingerprint": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "commandScope": "test",
+            "policyVersion": "default-v1",
+            "rulesetVersion": "2026.07.02",
+            "expiresAt": "2030-07-12T00:00:00Z"
+          },
+          "reason": "A human reviewed this exact local approval removal."
+        }
+      }
+    }
+  }
+}

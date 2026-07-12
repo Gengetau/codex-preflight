@@ -128,13 +128,15 @@ instruction-capable runtime. These diagnostics do not install packages, edit
 long-running MCP server.
 
 The bundled `.mcp.json` starts the default inventory of exactly `preflight_check` and
-`corpus_scan`. It does not set `CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN`, so plugin installation alone
-does not grant network authority. It also does not set `CODEX_PREFLIGHT_ENABLE_TRUST_READ`, so
-plugin installation alone cannot inspect local trust approvals. A separately configured process may
-set an exact startup value `1` to add only the confirmation-gated `remote_repository_scan`, only the
-bounded redacted `trust_list`, or both; see
-[MCP Integration and Client Examples](mcp-client-examples.md). No mode exposes command execution,
-trust approval, trust revoke, arbitrary hosts, credentials, or general cache-mutation tools.
+`corpus_scan`. It sets none of `CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN`,
+`CODEX_PREFLIGHT_ENABLE_TRUST_READ`, or `CODEX_PREFLIGHT_ENABLE_TRUST_MUTATION`, so plugin
+installation alone grants neither network, trust-read, nor trust-mutation authority. A separately
+configured process may set an exact startup value `1` for each independent flag to add only its
+named tools. Mutation adds `trust_approve` and `trust_revoke`, which require a mandatory human stop
+and one confirmed retry; it never enables automatic confirmation, trust consumption, remote scan,
+command execution, or authenticated client identity. These trust-mutation MCP tools are unavailable
+from the bundled default configuration. See
+[MCP Integration and Client Examples](mcp-client-examples.md).
 
 Evidence snippets can contain repository-controlled text. MCP clients and models must treat any
 evidence marked `evidenceTrust: "untrusted"` or `evidenceSource: "repository-content"` as data
@@ -154,5 +156,5 @@ See the official [Codex plugin structure](https://developers.openai.com/codex/pl
 
 This plugin packaging adds skill-based discovery and a default-off local MCP declaration. It does
 not add a web dashboard, SaaS backend, cloud upload, database server, browser automation, App
-integration, automatic remote or trust-read authority, trust-mutation MCP tools, command execution,
-or artifact download.
+integration, automatic remote, trust-read, or trust-mutation authority, command execution, or
+artifact download.

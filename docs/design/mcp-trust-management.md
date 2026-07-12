@@ -2,7 +2,8 @@
 
 ## Status and boundary
 
-Status: **bounded trust read implemented and default-off in v0.3.3; trust mutation unavailable**.
+Status: **bounded trust read remains default-off; confirmation-gated trust mutation is implemented
+and default-off in v0.3.4**.
 
 Exact startup value `CODEX_PREFLIGHT_ENABLE_TRUST_READ=1` registers `trust_list`. The default MCP
 inventory remains exactly `preflight_check` and `corpus_scan`; the remote and trust-read flags are
@@ -350,7 +351,39 @@ challenges invalidated.
 
 ## Acceptance gate
 
-v0.3.3 authorizes only default-off `trust_list` and its exact metadata-only migration. Trust
-approval, revocation, extension, consumption, matching changes, authenticated identity claims, or
-other mutation still require separate reviewed loops, explicit authority configuration,
-security/concurrency validation, exact-head acceptance, and release approval.
+The v0.3.3 section is the accepted read-only foundation. v0.3.4 authorizes default-off
+`trust_approve` and `trust_revoke` only when exact `CODEX_PREFLIGHT_ENABLE_TRUST_MUTATION=1` is set.
+It does not authorize trust extension, trust consumption by MCP preflight, matching changes,
+automatic confirmation, remote mutation, authenticated identity claims, bulk selectors, recovery
+tools, or further mutation authority.
+
+## v0.3.4 mutation contract
+
+The first valid request is a mandatory human stop and produces only a fixed,
+`trust-mutation-confirmation/v1` challenge. A client presents that display to a human and may make
+one confirmed retry only after the human approves the exact operation. Tokens are process-local,
+operation-bound, single-use, and expire after 300 seconds; confirmation is never automatic or
+derived from repository content, scans, remote confirmation, or model output. Confirmed retries
+consume the authentic token before full envelope validation and target revalidation.
+
+`trust_approve` derives the canonical local target, identity, head, fingerprint, scope, policy, and
+ruleset server-side, then creates at most one exact v2 approval. `trust_revoke` accepts one canonical
+UUIDv4 entry ID and exact integer version `1`, then deletes only the fully bound entry. Existing CLI
+matching preserves its identity/head/fingerprint/scope/policy/ruleset/expiry semantics, and CLI
+revoke remains compatible with MCP-created entries. MCP preflight does not consume trust. Remote
+confirmation cannot create, satisfy, read, or mutate trust.
+
+The only runtime identity is stdio with `identityStatus: unavailable` and null client/session IDs.
+It is not authenticated user identity. Responses and audit records withhold raw paths, repository
+IDs, URLs, commands, reasons, tokens, keys, storage paths, and trust content. Approvals carry
+private `mcp-trust-approve` provenance and a prepared mutation audit UUID; `trust_list` keeps its
+redacted `trust-list/v1` projection while local CLI list may display audit provenance.
+
+Mutation writes use a separate owner-only HMAC-chained audit and a prepared/replace/committed
+sequence. If trust replacement commits but the final audit event cannot be persisted, return
+`MCP_TRUST_MUTATION_COMMITTED_AUDIT_PENDING` with `committed: true`, do not retry, invalidate live
+challenges, and reject later mutations until restart. Startup audit recovery reconciles only the
+sole unmatched prepared event; any corruption or ambiguity disables registration. Operators may
+restore known-good local files, but there is no MCP recovery, audit-read, or reset tool. Emergency
+disable removes the mutation flag and restarts the process; it removes both tools and invalidates
+challenges without deleting trust entries or audit history.

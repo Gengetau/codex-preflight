@@ -13,8 +13,8 @@ v0.3.3 keeps the trust store as a JSON array and adds metadata to each entry:
 entryId: stored UUIDv4
 entryVersion: 1
 provenance.schema: trust-cache-array-v2
-provenance.source: legacy-migration | cli-trust-approve
-provenance.migrationVersion: v0.3.3-trust-read-foundation
+provenance.source: legacy-migration | cli-trust-approve | mcp-trust-approve
+provenance.migrationVersion: v0.3.3-trust-read-foundation | v0.3.4-trust-mutation
 ```
 
 The first read of a valid legacy array acquires the same sidecar lock used by CLI approve/revoke,
@@ -36,3 +36,21 @@ MCP trust reads use only the normal trust-cache resolver, including the existing
 or destination. Read audit state is separate at `trust-read/audit.jsonl`; it is not scan cache,
 remote cache, remote audit, or trust data. The active audit segment is capped at 1 MiB with three
 rotated segments and 4096-byte records.
+
+## Trust mutation state
+
+With exact `CODEX_PREFLIGHT_ENABLE_TRUST_MUTATION=1`, confirmed MCP approval creates a normal v2
+entry with exact private provenance: `source: mcp-trust-approve`, migration version
+`v0.3.4-trust-mutation`, the server-issued `createdAt`, bounded `approvalReason`, and prepared
+`mutationAuditEventId`. Existing entries remain unchanged. Local CLI `trust list` can display this
+provenance and audit ID; CLI matching and identity-based revoke use the same existing store and
+matching key without a migration or broader approval semantics.
+
+Mutation audit state is separate under `trust-mutation/audit.jsonl` and `trust-mutation/audit.key`.
+It is owner-only where supported, HMAC-chained, fsynced, redacted, and bounded to 4096-byte records,
+one 1 MiB active segment, three rotated segments, and 4 MiB total. The write-ahead sequence is a
+prepared audit record, atomic trust-file replacement, then a committed audit record. If replacement
+commits but final audit persistence fails, return
+`MCP_TRUST_MUTATION_COMMITTED_AUDIT_PENDING` with `committed: true`; never retry the write. Restart
+performs audit recovery of the sole unmatched prepared event or fails closed. There is no MCP
+recovery, audit-read, or reset tool.

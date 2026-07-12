@@ -63,3 +63,27 @@ Rollback removes `CODEX_PREFLIGHT_ENABLE_TRUST_READ` and restarts the process. `
 disappears and process-local cursors become invalid; CLI trust data and migration backups are not
 deleted or downgraded. The compatible v2 reader remains required after migration because rollback
 must never rewrite approvals into a broader older representation.
+
+## v0.3.4 trust-mutation MCP authority
+
+Trust mutation is absent by default. Exact startup flag `CODEX_PREFLIGHT_ENABLE_TRUST_MUTATION=1`
+registers only `trust_approve` and `trust_revoke`; it does not enable remote scanning or trust
+reads. Every state-changing call first returns a fixed challenge and requires a mandatory human
+stop followed by one confirmed retry. The process can verify integrity, binding, 300-second expiry,
+and single-use consumption, but stdio identity remains `identityStatus: unavailable` and is not
+authenticated user identity.
+
+| Threat | Control |
+| --- | --- |
+| Silent or automatic approval | First call performs no mutation; fixed display, mandatory human stop, and no automatic confirmation. |
+| Token replay or substitution | Separate process-local HMAC key, full operation/target binding, 300-second single-use token, and consume-before-revalidation. |
+| Scope expansion | Server derives local identity, head, fingerprint, scope, policy, and ruleset; revoke accepts only one UUIDv4 plus integer version `1`. |
+| Command, code, or network execution | No caller command, repository script, hook, build, test, browser, package manager, or network access is executed. |
+| Remote authority crossing into trust | MCP preflight does not consume trust. Remote confirmation cannot create, satisfy, read, or mutate trust. |
+| Privacy disclosure | Results use process-local hashes and fixed stdio identity; raw repository ID, path, URL, command, reason, token, key, and audit content are withheld. |
+| Crash between store and audit commit | Fsynced prepared record, atomic replacement, committed record, and startup audit recovery; `MCP_TRUST_MUTATION_COMMITTED_AUDIT_PENDING` means committed and must not be retried. |
+| Audit corruption or recovery ambiguity | Owner-only HMAC chain, bounded rotation, sole-tail reconciliation, fail-closed registration, and no MCP recovery/audit-read/reset tool. |
+
+Emergency disable removes the mutation flag and restarts the process. Both tools disappear and live
+challenges expire, while existing trust entries, v2 compatibility, and audit files remain intact
+for operator review and audit recovery.

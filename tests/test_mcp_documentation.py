@@ -162,13 +162,12 @@ def test_python_examples_are_valid_and_call_only_documented_tools() -> None:
         "preflight_check_client.py",
         "remote_repository_scan_client.py",
         "trust_list_client.py",
+        "trust_mutation_client.py",
     }
     for filename, source in sources.items():
         ast.parse(source, filename=filename)
         assert "StdioServerParameters" in source
         assert "codex_preflight_mcp.server" in source
-        assert "trust_approve" not in source
-        assert "trust_revoke" not in source
     assert re.search(r'call_tool\(\s*"preflight_check"', sources["preflight_check_client.py"])
     assert re.search(r'call_tool\(\s*"corpus_scan"', sources["corpus_scan_client.py"])
     remote = sources["remote_repository_scan_client.py"]
@@ -182,6 +181,13 @@ def test_python_examples_are_valid_and_call_only_documented_tools() -> None:
     assert 'CODEX_PREFLIGHT_ENABLE_TRUST_READ": "1"' in trust
     assert "trust_approve" not in trust
     assert "trust_revoke" not in trust
+    mutation = sources["trust_mutation_client.py"]
+    assert re.search(r'call_tool\(\s*"trust_approve"', mutation)
+    assert 'CODEX_PREFLIGHT_ENABLE_TRUST_MUTATION": "1"' in mutation
+    assert "confirmationToken" in mutation
+    assert "input(" in mutation
+    assert '!= "CONFIRM"' in mutation
+    assert "automatic confirmation" in mutation
 
 
 def test_generic_configuration_has_no_shell_wrapper_or_secrets() -> None:

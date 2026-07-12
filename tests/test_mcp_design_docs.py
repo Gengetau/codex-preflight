@@ -90,7 +90,7 @@ def test_user_documentation_says_remote_is_default_off_and_rollbackable() -> Non
 def test_trust_management_design_covers_required_contracts() -> None:
     text = TRUST_DESIGN.read_text(encoding="utf-8")
     required = (
-        "bounded trust read implemented and default-off in v0.3.3",
+        "confirmation-gated trust mutation is implemented",
         "CODEX_PREFLIGHT_ENABLE_TRUST_READ=1",
         "trust_list",
         "trust_approve",

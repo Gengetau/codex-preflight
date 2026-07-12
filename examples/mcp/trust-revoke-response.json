@@ -1,0 +1,36 @@
+{
+  "mcpSchemaVersion": "1.0",
+  "tool": "trust_revoke",
+  "schemaVersion": "trust-revoke/v1",
+  "sourceType": "trust-cache",
+  "outcome": "revoked",
+  "mutationApplied": true,
+  "entry": {
+    "entryId": "123e4567-e89b-42d3-a456-426614174000",
+    "entryVersion": 1
+  },
+  "confirmation": {
+    "challengeId": "123e4567-e89b-42d3-a456-426614174001",
+    "consumed": true
+  },
+  "runtimeIdentity": {
+    "transport": "stdio",
+    "identityStatus": "unavailable",
+    "clientId": null,
+    "sessionId": null
+  },
+  "auditEventId": "123e4567-e89b-42d3-a456-426614174002",
+  "safety": {
+    "plannedCommandExecuted": false,
+    "repositoryCodeExecuted": false,
+    "networkAccessed": false,
+    "remoteConfirmationUsed": false,
+    "trustConsumed": false,
+    "mcpPreflightUsesTrust": false,
+    "rawRepoIdReturned": false,
+    "rawPathReturned": false,
+    "rawRemoteUrlReturned": false,
+    "approvedCommandReturned": false,
+    "reasonReturned": false
+  }
+}

@@ -209,6 +209,52 @@ identity, path, remote URL, and approved command as not returned, and confirms t
 remote confirmation do not use trust. See the complete machine-checked
 [`trust-list-response.json`](../examples/mcp/trust-list-response.json).
 
+## `trust_approve` and `trust_revoke` results
+
+Both mutation tools are available only when exact startup flag
+`CODEX_PREFLIGHT_ENABLE_TRUST_MUTATION=1` is set. Their first valid call is an error envelope with
+`MCP_TRUST_MUTATION_CONFIRMATION_REQUIRED`, `field: "confirmationToken"`, fixed unavailable stdio
+runtime identity, and a `trust-mutation-confirmation/v1` object containing `challengeId`, opaque
+`confirmationToken`, operation, issued/expiry timestamps, and fixed display. It means no trust
+mutation occurred. The challenge is single-use and 300-second expiring; a client must stop for a
+human decision and make one confirmed retry only after confirmation. The fixed display is the only
+place a first approval response may echo caller-supplied cwd, command, or reason.
+
+Successful approval uses exact `trust-approve/v1`; successful revocation uses exact
+`trust-revoke/v1`. Both include `mcpSchemaVersion`, `tool`, `sourceType: "trust-cache"`, `outcome`,
+`mutationApplied`, public entry projection, consumed challenge ID, fixed runtime identity,
+`auditEventId`, and the mutation safety object. Approvals expose the redacted repo hash, head,
+fingerprint, scope, policy/ruleset, and requested expiry; revocations expose only entry ID and
+version. Neither returns raw path, repository ID, remote URL, approved command, reason, token,
+key, or audit storage path. See the machine-checked examples:
+
+- [`trust-approve-confirmation-required.json`](../examples/mcp/trust-approve-confirmation-required.json)
+- [`trust-approve-response.json`](../examples/mcp/trust-approve-response.json)
+- [`trust-revoke-confirmation-required.json`](../examples/mcp/trust-revoke-confirmation-required.json)
+- [`trust-revoke-response.json`](../examples/mcp/trust-revoke-response.json)
+
+`MCP_TRUST_MUTATION_COMMITTED_AUDIT_PENDING` is a terminal, non-retryable error. It unambiguously
+means that the trust change committed while the final audit event is pending recovery:
+
+```json
+{
+  "error": {
+    "code": "MCP_TRUST_MUTATION_COMMITTED_AUDIT_PENDING",
+    "retryable": false,
+    "context": {
+      "committed": true,
+      "operation": "approve-or-revoke",
+      "entryId": "lowercase UUIDv4",
+      "preparedAuditEventId": "lowercase UUIDv4"
+    }
+  }
+}
+```
+
+Clients must not retry that mutation. The process refuses later mutation calls until restart and
+audit recovery; recovery can only commit or abort the sole unmatched prepared event and has no MCP
+tool surface.
+
 ## Structured errors
 
 Expected MCP input failures are raised through the MCP runtime error mechanism. The error message
