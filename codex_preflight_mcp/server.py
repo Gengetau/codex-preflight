@@ -874,7 +874,10 @@ def create_mcp_server(*, fastmcp_factory: Callable[..., Any] | None = None):
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Run the read-only Codex Preflight MCP server.",
+        description=(
+            "Run the Codex Preflight MCP server, read-only by default. Optional startup flags enable bounded "
+            "remote scan, trust read, and human-confirmed local trust mutation authorities."
+        ),
     )
     parser.add_argument(
         "--list-tools",

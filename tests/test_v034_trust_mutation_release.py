@@ -12,6 +12,7 @@ import pytest
 from jsonschema import validate
 from typer.testing import CliRunner
 
+import codex_preflight_mcp
 from codex_preflight_cli.main import app
 from codex_preflight_core import __version__ as core_version
 from codex_preflight_core.cache.trust_cache import (
@@ -23,7 +24,11 @@ from codex_preflight_core.preflight import POLICY_VERSION, RULESET_VERSION
 from codex_preflight_core.repo.fingerprint import compute_critical_fingerprint
 from codex_preflight_core.repo.identity import resolve_repo_identity
 from codex_preflight_mcp import __version__ as mcp_version
+from codex_preflight_mcp.contract import MCP_SAFETY_METADATA
+from codex_preflight_mcp.server import main as mcp_main
 from codex_preflight_mcp.server import tool_definitions
+from codex_preflight_mcp.trust_mutation import MUTATION_SAFETY as IMPLEMENTATION_MUTATION_SAFETY
+from codex_preflight_mcp.trust_read import TRUST_LIST_SAFETY
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES = ROOT / "examples" / "mcp"
@@ -107,6 +112,15 @@ FORBIDDEN_ACTIVE_ASSERTIONS = (
 
 def _load_example(name: str) -> dict[str, object]:
     return json.loads((EXAMPLES / name).read_text(encoding="utf-8"))
+
+
+def _documented_json_object(markdown: str, heading: str) -> dict[str, object]:
+    marker = f"### {heading}"
+    assert marker in markdown, f"missing documented section {marker!r}"
+    section = markdown.split(marker, 1)[1].split("\n### ", 1)[0].split("\n## ", 1)[0]
+    match = re.search(r"```json\s*(\{.*?\})\s*```", section, re.DOTALL)
+    assert match is not None, f"{marker!r} must contain one JSON object"
+    return json.loads(match.group(1))
 
 
 def test_v034_version_sources_and_plugin_copies_are_aligned() -> None:
@@ -310,6 +324,48 @@ def test_revoke_success_example_matches_the_exact_contract() -> None:
         "auditEventId": "123e4567-e89b-42d3-a456-426614174002",
         "safety": MUTATION_SAFETY,
     }
+
+
+def test_documented_mutation_safety_matches_implementation_and_success_examples() -> None:
+    markdown = (ROOT / "docs/mcp-report-schema.md").read_text(encoding="utf-8")
+    documented = _documented_json_object(markdown, "Mutation safety object")
+    approve = _load_example("trust-approve-response.json")["safety"]
+    revoke = _load_example("trust-revoke-response.json")["safety"]
+
+    assert documented == MUTATION_SAFETY
+    assert IMPLEMENTATION_MUTATION_SAFETY == MUTATION_SAFETY
+    assert approve == MUTATION_SAFETY
+    assert revoke == MUTATION_SAFETY
+    assert set(documented) == set(IMPLEMENTATION_MUTATION_SAFETY) == set(approve) == set(revoke)
+
+
+def test_documented_scan_and_trust_read_safety_objects_are_scoped_to_their_tools() -> None:
+    markdown = (ROOT / "docs/mcp-report-schema.md").read_text(encoding="utf-8")
+    common_section = markdown.split("## Common MCP fields", 1)[1].split("\n## ", 1)[0]
+
+    assert _documented_json_object(markdown, "Scan safety object") == MCP_SAFETY_METADATA
+    assert _documented_json_object(markdown, "Trust-list safety object") == TRUST_LIST_SAFETY
+    assert "tool-specific safety object" in common_section
+    assert "Every successful MCP tool result" not in common_section
+
+
+def test_active_mcp_package_and_help_describe_default_and_optional_authorities(capsys) -> None:
+    package_description = " ".join((codex_preflight_mcp.__doc__ or "").split()).lower()
+
+    with pytest.raises(SystemExit) as exit_info:
+        mcp_main(["--help"])
+    assert exit_info.value.code == 0
+    help_description = " ".join(capsys.readouterr().out.split()).lower()
+
+    for surface, stale in (
+        (package_description, "read-only mcp-facing package"),
+        (help_description, "run the read-only codex preflight mcp server"),
+    ):
+        assert stale not in surface
+        assert "read-only by default" in surface
+        assert "remote scan" in surface
+        assert "trust read" in surface
+        assert "trust mutation" in surface
 
 
 def test_trust_mutation_requests_use_exact_schemas_and_client_requires_a_human_stop(

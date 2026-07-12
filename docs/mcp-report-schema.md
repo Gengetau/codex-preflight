@@ -9,15 +9,21 @@ within the same major version.
 
 ## Common MCP fields
 
-Every successful MCP tool result returns these stable fields:
+All successful MCP tool results return these stable fields:
 
 | Field | Meaning |
 | --- | --- |
 | `mcpSchemaVersion` | Version of the MCP-facing result contract. |
 | `tool` | Exact tool identity: `preflight_check`, `corpus_scan`, or an enabled `remote_repository_scan`, `trust_list`, `trust_approve`, or `trust_revoke`. |
-| `safety` | Stable static-analysis and authority-boundary metadata. |
+| `safety` | A tool-specific safety object for the tool's authority family. |
 
-The `safety` object contains:
+No safety key set applies universally. Scan tools, bounded trust read, and trust mutation use the
+three distinct exact objects documented below; consumers must select the contract by `tool`.
+
+### Scan safety object
+
+This exact object applies only to successful `preflight_check`, `corpus_scan`, and
+`remote_repository_scan` results:
 
 ```json
 {
@@ -198,7 +204,37 @@ or command. It uses exact schema `trust-list/v1`:
     "sessionId": null
   },
   "auditEventId": "event-id",
-  "safety": {}
+  "safety": {
+    "repositoryContentTrust": "untrusted",
+    "evidenceTreatAsData": true,
+    "trustReadOnly": true,
+    "trustMutationAllowed": false,
+    "preflightUsesTrust": false,
+    "remoteConfirmationUsesTrust": false,
+    "rawRepoIdReturned": false,
+    "rawPathReturned": false,
+    "rawRemoteUrlReturned": false,
+    "approvedCommandReturned": false
+  }
+}
+```
+
+### Trust-list safety object
+
+This exact object applies only to successful `trust_list` results:
+
+```json
+{
+  "repositoryContentTrust": "untrusted",
+  "evidenceTreatAsData": true,
+  "trustReadOnly": true,
+  "trustMutationAllowed": false,
+  "preflightUsesTrust": false,
+  "remoteConfirmationUsesTrust": false,
+  "rawRepoIdReturned": false,
+  "rawPathReturned": false,
+  "rawRemoteUrlReturned": false,
+  "approvedCommandReturned": false
 }
 ```
 
@@ -226,7 +262,32 @@ Successful approval uses exact `trust-approve/v1`; successful revocation uses ex
 `auditEventId`, and the mutation safety object. Approvals expose the redacted repo hash, head,
 fingerprint, scope, policy/ruleset, and requested expiry; revocations expose only entry ID and
 version. Neither returns raw path, repository ID, remote URL, approved command, reason, token,
-key, or audit storage path. See the machine-checked examples:
+key, or audit storage path.
+
+### Mutation safety object
+
+This exact object applies only to successful `trust_approve` and `trust_revoke` results:
+
+```json
+{
+  "plannedCommandExecuted": false,
+  "repositoryCodeExecuted": false,
+  "networkAccessed": false,
+  "remoteConfirmationUsed": false,
+  "trustConsumed": false,
+  "mcpPreflightUsesTrust": false,
+  "rawRepoIdReturned": false,
+  "rawPathReturned": false,
+  "rawRemoteUrlReturned": false,
+  "approvedCommandReturned": false,
+  "reasonReturned": false
+}
+```
+
+This object is distinct from both the scan and trust-list safety objects. In particular, mutation
+results do not claim scan-only `analysisMode`, `commandExecuted`, or `trustMutationAllowed` fields.
+
+See the machine-checked examples:
 
 - [`trust-approve-confirmation-required.json`](../examples/mcp/trust-approve-confirmation-required.json)
 - [`trust-approve-response.json`](../examples/mcp/trust-approve-response.json)
