@@ -101,6 +101,9 @@ def test_private_lock_migrates_v033_windows_directory_and_lock(tmp_path: Path) -
     _create_windows_v033_app_root(app_root)
     cache_path = app_root / "private" / "trust.json"
     lock_path = _create_v033_cache_storage(cache_path)
+    file_lock.set_current_user_owner(cache_path.parent, directory=True)
+    file_lock.set_current_user_owner(cache_path)
+    file_lock.set_current_user_owner(lock_path)
     assert not file_lock._windows_permissions_are_private(cache_path.parent)
     assert not file_lock._windows_permissions_are_private(lock_path)
 
@@ -144,6 +147,7 @@ def test_v033_windows_migration_rejects_path_replacement(
     _create_windows_v033_app_root(app_root)
     path = app_root / "legacy.lock"
     path.write_bytes(b"")
+    file_lock.set_current_user_owner(path)
     moved = app_root / "moved.lock"
     real_set_dacl = file_lock._windows_set_private_dacl_handle
 
@@ -181,6 +185,7 @@ def test_v033_windows_migration_rejects_non_current_owner(
     _create_windows_v033_app_root(app_root)
     path = app_root / "legacy.lock"
     path.write_bytes(b"")
+    file_lock.set_current_user_owner(path)
     monkeypatch.setattr(file_lock, "_windows_current_sid_string", lambda: "S-1-5-18")
 
     with pytest.raises(UnsafeCacheStorageError, match="ACL is unsafe"):
