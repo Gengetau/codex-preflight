@@ -49,13 +49,15 @@ local indirection, surfaces uncertainty, and gives the user a decision with evid
 - Static Rust and Go ecosystem coverage for Cargo build scripts, Cargo source replacement,
   Cargo aliases, git-sourced Cargo lock entries, Go generator directives, TestMain hooks, cgo
   indicators, and Go module replacements.
+- Static Ruby ecosystem coverage for Bundler git/local sources, gemspec extensions and lifecycle
+  hooks, native `extconf.rb` configuration, and command-running Rake tasks.
 - Reachability parsing for common wrappers such as shell `-c`, interpreter flags, `env`,
   package-manager wrappers, PowerShell, `cmd /c`, and Windows-style paths.
 - Cross-file Node.js module reachability for local `require()` and `import` chains.
 - Evidence trust-boundary labels for repository-controlled snippets.
 - Nested monorepo critical file collection.
 - Package lifecycle detection.
-- Shell, Docker, GitHub Actions, MCP, agent instruction, Rust, Go, and secret checks.
+- Shell, Docker, GitHub Actions, MCP, agent instruction, Rust, Go, Ruby, and secret checks.
 - Execution graph for reachable local scripts/files.
 - Capability detection for Node.js, Python, shell, and Docker.
 - Uncertainty policy: unknown is not safe.

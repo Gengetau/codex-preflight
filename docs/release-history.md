@@ -1,5 +1,18 @@
 # Release History
 
+## v0.3.5
+
+Warning-oriented Ruby ecosystem coverage:
+
+- Added static findings for Bundler git and local path sources, gemspec native extensions,
+  RubyGems install/uninstall hooks, `extconf.rb`, and command-running Rake tasks.
+- Added deterministic reachability for `bundle install`, `bundle exec rake`, and direct Rake test
+  and build forms without adding an MCP tool or changing optional authority flags.
+- Added active and clean Ruby corpus cases plus commented-indicator negative controls.
+- Preserved CLI/MCP schemas and the existing remote scan, trust-read, and trust-mutation authority
+  boundaries. The scanner does not run Ruby, Bundler, Rake, extconf, compilers, hooks, tests,
+  package managers, or repository code.
+
 ## v0.3.4
 
 Confirmation-gated default-off MCP trust mutation:
