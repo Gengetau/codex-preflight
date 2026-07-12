@@ -30,6 +30,11 @@ CRITICAL_BASENAMES = {
     "build.rs",
     "go.mod",
     "go.sum",
+    "Gemfile",
+    "Gemfile.lock",
+    "gems.locked",
+    "Rakefile",
+    "extconf.rb",
     "Makefile",
     "Dockerfile",
     "docker-compose.yml",
@@ -80,6 +85,7 @@ def is_critical_path(relative_path: str) -> bool:
         or normalized in ROOT_DOCUMENTATION_BASENAMES
         or _is_bounded_documentation_surface(normalized)
         or normalized.endswith(".go")
+        or normalized.endswith(".gemspec")
         or any(normalized.startswith(prefix) for prefix in CRITICAL_PREFIXES)
     )
 

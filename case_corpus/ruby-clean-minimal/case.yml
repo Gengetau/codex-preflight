@@ -1,0 +1,8 @@
+id: ruby-clean-minimal
+title: Clean minimal Ruby gem
+category: ecosystem-ruby
+command: rake test
+expectedDecision: ALLOW
+expectedRules: []
+description: Minimal Ruby gem without git or local sources, native extensions, lifecycle hooks, or command-running Rake tasks.
+safetyNote: Contains inert static Ruby and Bundler text only; Ruby, Bundler, Rake, tests, hooks, and package commands are never executed.

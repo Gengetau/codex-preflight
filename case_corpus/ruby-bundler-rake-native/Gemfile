@@ -1,0 +1,2 @@
+source "https://example.invalid/gems"
+gem "reviewed", git: "https://example.invalid/reviewed.git", branch: "main"

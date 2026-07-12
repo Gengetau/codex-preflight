@@ -1,0 +1,4 @@
+PATH
+  remote: ../local-gem
+  specs:
+    local-gem (1.0.0)

@@ -1,0 +1,2 @@
+source "https://example.invalid/gems"
+gem "rake", "~> 13.0"

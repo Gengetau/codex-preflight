@@ -16,7 +16,7 @@ from codex_preflight_core.report.json_renderer import build_report
 from codex_preflight_core.scanner.engine import scan_repository
 
 POLICY_VERSION = "default-v1"
-RULESET_VERSION = "2026.07.08"
+RULESET_VERSION = "2026.07.12"
 REPORT_FORMAT_VERSION = "policy-explanation-v1"
 
 
