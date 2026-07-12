@@ -6,19 +6,21 @@ import re
 import stat
 from collections.abc import Callable
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 from uuid import UUID, uuid4
 
-from codex_preflight_core.cache.atomic_json import write_json_atomic
-from codex_preflight_core.cache.file_lock import locked_cache_file
+from codex_preflight_core.cache.atomic_json import write_bytes_atomic, write_json_atomic
+from codex_preflight_core.cache.file_lock import locked_cache_file, validate_private_cache_storage
 
 TRUST_CACHE_MAX_BYTES = 1024 * 1024
 TRUST_CACHE_MAX_MIGRATION_BACKUPS = 3
 TRUST_CACHE_ENTRY_VERSION = 1
 TRUST_CACHE_SCHEMA = "trust-cache-array-v2"
 TRUST_CACHE_MIGRATION_VERSION = "v0.3.3-trust-read-foundation"
+TRUST_CACHE_MCP_MUTATION_VERSION = "v0.3.4-trust-mutation"
 
 _APPROVAL_FIELDS = {
     "repoId",
@@ -59,6 +61,59 @@ class TrustCacheError(OSError):
         self.code = code
         self.message = message
         super().__init__(message)
+
+
+@dataclass(frozen=True)
+class TrustCacheMutationPlan:
+    operation: str
+    entry_id: str
+    before_bytes: bytes | None
+    after_bytes: bytes
+    planned_event_id: str | None
+
+
+@dataclass(frozen=True)
+class TrustCacheMutationPrepared:
+    event_id: str
+    state: object
+
+
+@dataclass(frozen=True)
+class _TrustCacheSnapshot:
+    entries: list[dict[str, Any]]
+    raw_bytes: bytes | None
+
+
+class MutationPrepareHook(Protocol):
+    def __call__(self, plan: TrustCacheMutationPlan) -> TrustCacheMutationPrepared: ...
+
+
+class MutationCommitHook(Protocol):
+    def __call__(self, prepared: TrustCacheMutationPrepared) -> str: ...
+
+
+class MutationRevalidateHook(Protocol):
+    def __call__(self, before_bytes: bytes | None) -> None: ...
+
+
+@dataclass(frozen=True)
+class TrustCacheMutationResult:
+    outcome: str
+    applied: bool
+    entry: dict[str, Any] | None
+    prepared_event_id: str | None
+    final_event_id: str | None
+
+
+class TrustCacheMutationCommitError(RuntimeError):
+    def __init__(self, result: TrustCacheMutationResult) -> None:
+        self.result = result
+        super().__init__("The trust mutation was committed but its audit commit failed.")
+
+
+class TrustCacheMutationWriteError(RuntimeError):
+    def __init__(self) -> None:
+        super().__init__("The prepared trust mutation could not be written.")
 
 
 class TrustCache:
@@ -127,6 +182,105 @@ class TrustCache:
             entries.append(entry)
             self._write_unlocked(entries)
 
+    def approve_mcp(
+        self,
+        *,
+        repo_id: str,
+        path: Path,
+        remote_url: str | None,
+        head_commit: str | None,
+        critical_fingerprint: str,
+        command_scope: str,
+        approved_command: str,
+        expires_at: str,
+        policy_version: str,
+        ruleset_version: str,
+        entry_id: str,
+        approved_at: str,
+        approval_reason: str,
+        mutation_audit_event_id: str,
+        prepare: MutationPrepareHook,
+        commit: MutationCommitHook,
+        private_storage: bool = False,
+        revalidate: MutationRevalidateHook | None = None,
+    ) -> TrustCacheMutationResult:
+        with locked_cache_file(self.path, private_storage=private_storage):
+            snapshot = self._read_snapshot_unlocked()
+            entries = snapshot.entries
+            before_bytes = snapshot.raw_bytes
+            entry = {
+                "repoId": repo_id,
+                "path": str(path),
+                "remoteUrl": remote_url,
+                "headCommit": head_commit,
+                "criticalFingerprint": critical_fingerprint,
+                "commandScope": command_scope,
+                "approvedCommand": approved_command,
+                "decision": "USER_APPROVED",
+                "approvedAt": approved_at,
+                "expiresAt": expires_at,
+                "approvedBy": "local-user",
+                "policyVersion": policy_version,
+                "rulesetVersion": ruleset_version,
+                "entryId": entry_id,
+                "entryVersion": TRUST_CACHE_ENTRY_VERSION,
+                "provenance": {
+                    "schema": TRUST_CACHE_SCHEMA,
+                    "source": "mcp-trust-approve",
+                    "migrationVersion": TRUST_CACHE_MCP_MUTATION_VERSION,
+                    "createdAt": approved_at,
+                    "approvalReason": approval_reason,
+                    "mutationAuditEventId": mutation_audit_event_id,
+                },
+            }
+            _validate_entry(entry, migrated=False)
+            if revalidate is not None:
+                revalidate(before_bytes)
+            now = self._now()
+            existing = _matching_entry(
+                entries,
+                repo_id=repo_id,
+                head_commit=head_commit,
+                critical_fingerprint=critical_fingerprint,
+                command_scope=command_scope,
+                policy_version=policy_version,
+                ruleset_version=ruleset_version,
+                now=now,
+            )
+            if existing is not None:
+                return TrustCacheMutationResult("already-approved", False, deepcopy(existing), None, None)
+
+            entries.append(entry)
+            _validate_unique_entry_ids(entries)
+            after_bytes = self._serialize_entries(entries)
+            result_entry = deepcopy(entry)
+            plan = TrustCacheMutationPlan("approve", entry_id, before_bytes, after_bytes, mutation_audit_event_id)
+            prepared = _validate_prepared(prepare(plan), planned_event_id=mutation_audit_event_id)
+            result = TrustCacheMutationResult(
+                "approved",
+                True,
+                result_entry,
+                prepared.event_id,
+                None,
+            )
+            try:
+                self._write_encoded_unlocked(after_bytes, private_storage=private_storage)
+            except Exception:
+                raise TrustCacheMutationWriteError from None
+            try:
+                if private_storage:
+                    validate_private_cache_storage(self.path)
+                final_event_id = _validate_uuid4(commit(prepared))
+            except Exception:
+                raise TrustCacheMutationCommitError(result) from None
+            return TrustCacheMutationResult(
+                result.outcome,
+                result.applied,
+                result.entry,
+                result.prepared_event_id,
+                final_event_id,
+            )
+
     def match(
         self,
         *,
@@ -149,6 +303,69 @@ class TrustCache:
                 return entry
         return None
 
+    def revoke_entry_id(
+        self,
+        entry_id: str,
+        *,
+        expected_version: object,
+        expected_entry: dict[str, Any],
+        prepare: MutationPrepareHook,
+        commit: MutationCommitHook,
+        private_storage: bool = False,
+    ) -> TrustCacheMutationResult:
+        entry_id = _validate_uuid4(entry_id)
+        if type(expected_version) is not int or expected_version != TRUST_CACHE_ENTRY_VERSION:
+            raise ValueError("expected_version must be exactly integer 1")
+        expected_entry = _validate_expected_entry(expected_entry, entry_id, expected_version)
+        with locked_cache_file(self.path, private_storage=private_storage):
+            snapshot = self._read_snapshot_unlocked()
+            entries = snapshot.entries
+            before_bytes = snapshot.raw_bytes
+            now = self._now()
+            index = next(
+                (
+                    index
+                    for index, entry in enumerate(entries)
+                    if entry["entryId"] == entry_id and _timestamp(entry["expiresAt"]) > now
+                ),
+                None,
+            )
+            if index is None:
+                return TrustCacheMutationResult("not-found", False, None, None, None)
+            entry = entries[index]
+            if entry != expected_entry:
+                return TrustCacheMutationResult("version-conflict", False, deepcopy(entry), None, None)
+
+            remaining = [candidate for candidate_index, candidate in enumerate(entries) if candidate_index != index]
+            after_bytes = self._serialize_entries(remaining)
+            result_entry = deepcopy(entry)
+            plan = TrustCacheMutationPlan("revoke", entry_id, before_bytes, after_bytes, None)
+            prepared = _validate_prepared(prepare(plan), planned_event_id=None)
+            result = TrustCacheMutationResult(
+                "revoked",
+                True,
+                result_entry,
+                prepared.event_id,
+                None,
+            )
+            try:
+                self._write_encoded_unlocked(after_bytes, private_storage=private_storage)
+            except Exception:
+                raise TrustCacheMutationWriteError from None
+            try:
+                if private_storage:
+                    validate_private_cache_storage(self.path)
+                final_event_id = _validate_uuid4(commit(prepared))
+            except Exception:
+                raise TrustCacheMutationCommitError(result) from None
+            return TrustCacheMutationResult(
+                result.outcome,
+                result.applied,
+                result.entry,
+                result.prepared_event_id,
+                final_event_id,
+            )
+
     def revoke_identity(self, repo_id: str, command_scope: str | None = None) -> int:
         with locked_cache_file(self.path):
             entries = self._read_all_unlocked()
@@ -167,20 +384,17 @@ class TrustCache:
             return removed
 
     def _read_all_unlocked(self, *, event_hook: Callable[[str], None] | None = None) -> list[dict[str, Any]]:
-        if not self.path.exists():
+        return self._read_snapshot_unlocked(event_hook=event_hook).entries
+
+    def _read_snapshot_unlocked(
+        self,
+        *,
+        event_hook: Callable[[str], None] | None = None,
+    ) -> _TrustCacheSnapshot:
+        raw = self._read_store_bytes_unlocked()
+        if raw is None:
             _notify(event_hook, "trust_file_missing")
-            return []
-        try:
-            size = self.path.stat().st_size
-            if size > self.max_bytes:
-                raise TrustCacheError("unavailable", "The local trust store exceeds its read limit.")
-            raw = self.path.read_bytes()
-        except TrustCacheError:
-            raise
-        except OSError as error:
-            raise TrustCacheError("unavailable", "The local trust store could not be read safely.") from error
-        if len(raw) > self.max_bytes:
-            raise TrustCacheError("unavailable", "The local trust store exceeds its read limit.")
+            return _TrustCacheSnapshot([], None)
         try:
             payload = json.loads(raw.decode("utf-8", "strict"))
         except (UnicodeError, json.JSONDecodeError) as error:
@@ -215,19 +429,35 @@ class TrustCache:
         if legacy_indexes:
             _notify(event_hook, "migration_started")
             try:
-                entries = self._migrate_unlocked(entries, legacy_indexes, raw)
+                entries, raw = self._migrate_unlocked(entries, legacy_indexes, raw)
             except BaseException:
                 _notify(event_hook, "migration_failed")
                 raise
             _notify(event_hook, "migration_completed")
-        return entries
+        return _TrustCacheSnapshot(entries, raw)
+
+    def _read_store_bytes_unlocked(self) -> bytes | None:
+        if not self.path.exists():
+            return None
+        try:
+            size = self.path.stat().st_size
+            if size > self.max_bytes:
+                raise TrustCacheError("unavailable", "The local trust store exceeds its read limit.")
+            raw = self.path.read_bytes()
+        except TrustCacheError:
+            raise
+        except OSError as error:
+            raise TrustCacheError("unavailable", "The local trust store could not be read safely.") from error
+        if len(raw) > self.max_bytes:
+            raise TrustCacheError("unavailable", "The local trust store exceeds its read limit.")
+        return raw
 
     def _migrate_unlocked(
         self,
         entries: list[dict[str, Any]],
         legacy_indexes: list[int],
         original: bytes,
-    ) -> list[dict[str, Any]]:
+    ) -> tuple[list[dict[str, Any]], bytes]:
         self._prune_backups_unlocked(retain=TRUST_CACHE_MAX_MIGRATION_BACKUPS - 1)
         self._create_backup_unlocked(original)
         migrated_at = self._now().isoformat()
@@ -243,11 +473,11 @@ class TrustCache:
                 }
                 _validate_entry(entries[index], migrated=True)
             _validate_unique_entry_ids(entries)
-            self._write_unlocked(entries)
+            migrated_bytes = self._write_unlocked(entries)
         except Exception as error:
             raise TrustCacheError("migration-failed", "The trust metadata migration failed closed.") from error
         self._prune_backups_unlocked()
-        return entries
+        return entries, migrated_bytes
 
     def _create_backup_unlocked(self, original: bytes) -> None:
         timestamp = self._now().strftime("%Y%m%dT%H%M%S%fZ")
@@ -275,14 +505,35 @@ class TrustCache:
         except OSError as error:
             raise TrustCacheError("migration-failed", "Trust migration backup retention failed closed.") from error
 
-    def _write_unlocked(self, entries: list[dict[str, Any]]) -> None:
+    def _write_unlocked(self, entries: list[dict[str, Any]]) -> bytes:
         try:
-            encoded = json.dumps(entries, indent=2).replace("\n", os.linesep).encode("utf-8")
-            if len(encoded) > self.max_bytes:
-                raise TrustCacheError("unavailable", "The local trust store exceeds its size limit.")
+            encoded = self._serialize_entries(entries)
             write_json_atomic(self.path, entries)
             if self.path.stat().st_size > self.max_bytes:
                 raise TrustCacheError("unavailable", "The local trust store exceeds its size limit.")
+        except TrustCacheError:
+            raise
+        except OSError as error:
+            raise TrustCacheError("unavailable", "The local trust store could not be written safely.") from error
+        return encoded
+
+    def _serialize_entries(self, entries: list[dict[str, Any]]) -> bytes:
+        try:
+            encoded = json.dumps(entries, indent=2).replace("\n", os.linesep).encode("utf-8")
+        except (TypeError, UnicodeEncodeError) as error:
+            raise TrustCacheError("corrupt", "The local trust store could not be serialized safely.") from error
+        if len(encoded) > self.max_bytes:
+            raise TrustCacheError("unavailable", "The local trust store exceeds its size limit.")
+        return encoded
+
+    def _write_encoded_unlocked(self, encoded: bytes, *, private_storage: bool = False) -> None:
+        try:
+            if len(encoded) > self.max_bytes:
+                raise TrustCacheError("unavailable", "The local trust store exceeds its size limit.")
+            if private_storage:
+                write_bytes_atomic(self.path, encoded, private_storage=True)
+            else:
+                write_bytes_atomic(self.path, encoded)
         except TrustCacheError:
             raise
         except OSError as error:
@@ -344,20 +595,52 @@ def _validate_entry(entry: dict[str, Any], *, migrated: bool | None) -> None:
     if not isinstance(provenance, dict):
         raise TrustCacheError("corrupt", "The trust entry provenance is invalid.")
     source = provenance.get("source")
-    timestamp_name = "migratedAt" if source == "legacy-migration" else "createdAt"
-    if source not in {"legacy-migration", "cli-trust-approve"} or set(provenance) != {
-        "schema",
-        "source",
-        "migrationVersion",
-        timestamp_name,
-    }:
+    if source == "legacy-migration":
+        expected_provenance = {
+            "schema",
+            "source",
+            "migrationVersion",
+            "migratedAt",
+        }
+        timestamp_name = "migratedAt"
+        migration_version = TRUST_CACHE_MIGRATION_VERSION
+    elif source == "cli-trust-approve":
+        expected_provenance = {
+            "schema",
+            "source",
+            "migrationVersion",
+            "createdAt",
+        }
+        timestamp_name = "createdAt"
+        migration_version = TRUST_CACHE_MIGRATION_VERSION
+    elif source == "mcp-trust-approve":
+        expected_provenance = {
+            "schema",
+            "source",
+            "migrationVersion",
+            "createdAt",
+            "approvalReason",
+            "mutationAuditEventId",
+        }
+        timestamp_name = "createdAt"
+        migration_version = TRUST_CACHE_MCP_MUTATION_VERSION
+    else:
+        raise TrustCacheError("corrupt", "The trust entry provenance is invalid.")
+    if set(provenance) != expected_provenance:
         raise TrustCacheError("corrupt", "The trust entry provenance is invalid.")
     if (
         provenance["schema"] != TRUST_CACHE_SCHEMA
-        or provenance["migrationVersion"] != TRUST_CACHE_MIGRATION_VERSION
+        or provenance["migrationVersion"] != migration_version
     ):
         raise TrustCacheError("unsupported-schema", "The trust entry provenance schema is unsupported.")
     _timestamp(provenance[timestamp_name])
+    if source == "mcp-trust-approve":
+        _utc_z_timestamp(entry["approvedAt"])
+        _utc_z_timestamp(entry["expiresAt"])
+        _utc_z_timestamp(provenance["createdAt"])
+        _approval_reason(provenance["approvalReason"])
+        if not _is_uuid4(provenance["mutationAuditEventId"]):
+            raise TrustCacheError("corrupt", "The trust entry provenance is invalid.")
 
 
 def _bounded_string(value: object) -> str:
@@ -370,6 +653,19 @@ def _bounded_string(value: object) -> str:
         or _CONTROL.search(value)
     ):
         raise TrustCacheError("corrupt", "The local trust store contains an invalid string field.")
+    return value
+
+
+def _approval_reason(value: object) -> str:
+    encoded_length = _utf8_length(value) if isinstance(value, str) else None
+    if (
+        not isinstance(value, str)
+        or not value
+        or encoded_length is None
+        or encoded_length > 512
+        or _CONTROL.search(value)
+    ):
+        raise TrustCacheError("corrupt", "The trust entry provenance is invalid.")
     return value
 
 
@@ -392,6 +688,13 @@ def _timestamp(value: object) -> datetime:
     return parsed.astimezone(UTC)
 
 
+def _utc_z_timestamp(value: object) -> datetime:
+    parsed = _timestamp(value)
+    if not isinstance(value, str) or not value.endswith("Z"):
+        raise TrustCacheError("corrupt", "The trust entry provenance timestamp is invalid.")
+    return parsed
+
+
 def _utf8_length(value: str) -> int | None:
     try:
         return len(value.encode("utf-8"))
@@ -403,6 +706,77 @@ def _validate_unique_entry_ids(entries: list[dict[str, Any]]) -> None:
     entry_ids = [entry["entryId"] for entry in entries if "entryId" in entry]
     if len(entry_ids) != len(set(entry_ids)):
         raise TrustCacheError("corrupt", "The local trust store contains duplicate entry identifiers.")
+
+
+def _matching_entry(
+    entries: list[dict[str, Any]],
+    *,
+    repo_id: str,
+    head_commit: str | None,
+    critical_fingerprint: str,
+    command_scope: str,
+    policy_version: str,
+    ruleset_version: str,
+    now: datetime,
+) -> dict[str, Any] | None:
+    for entry in entries:
+        if (
+            _timestamp(entry["expiresAt"]) > now
+            and entry["repoId"] == repo_id
+            and entry["headCommit"] == head_commit
+            and entry["criticalFingerprint"] == critical_fingerprint
+            and entry["commandScope"] == command_scope
+            and entry["policyVersion"] == policy_version
+            and entry["rulesetVersion"] == ruleset_version
+        ):
+            return entry
+    return None
+
+
+def _validate_prepared(
+    prepared: TrustCacheMutationPrepared,
+    *,
+    planned_event_id: str | None,
+) -> TrustCacheMutationPrepared:
+    if not isinstance(prepared, TrustCacheMutationPrepared):
+        raise ValueError("prepare must return TrustCacheMutationPrepared")
+    event_id = _validate_uuid4(prepared.event_id)
+    if planned_event_id is not None and event_id != _validate_uuid4(planned_event_id):
+        raise ValueError("prepared audit event does not match the planned event")
+    return prepared
+
+
+def _validate_expected_entry(
+    expected_entry: object,
+    entry_id: str,
+    expected_version: int,
+) -> dict[str, Any]:
+    if type(expected_entry) is not dict:
+        raise ValueError("expected_entry must be a complete canonical trust entry")
+    candidate = deepcopy(expected_entry)
+    try:
+        _validate_entry(candidate, migrated=False)
+    except TrustCacheError:
+        raise ValueError("expected_entry must be a complete canonical trust entry") from None
+    if candidate["entryId"] != entry_id or candidate["entryVersion"] != expected_version:
+        raise ValueError("expected_entry does not match the requested entry identity")
+    return candidate
+
+
+def _validate_uuid4(value: object) -> str:
+    if not _is_uuid4(value):
+        raise ValueError("expected a lowercase UUIDv4")
+    return value
+
+
+def _is_uuid4(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        parsed = UUID(value)
+    except (ValueError, AttributeError):
+        return False
+    return parsed.version == 4 and str(parsed) == value
 
 
 def _notify(event_hook: Callable[[str], None] | None, event: str) -> None:

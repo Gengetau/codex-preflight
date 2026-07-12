@@ -1,0 +1,10 @@
+{
+  "tool": "trust_approve",
+  "arguments": {
+    "cwd": "C:\\example\\local-repository",
+    "command": "python -m pytest",
+    "expiresAt": "2030-07-12T00:00:00Z",
+    "reason": "A human reviewed this exact local test command.",
+    "confirmationToken": "example.opaque.single-use-token"
+  }
+}

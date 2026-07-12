@@ -9,15 +9,21 @@ within the same major version.
 
 ## Common MCP fields
 
-Every successful MCP tool result returns these stable fields:
+All successful MCP tool results return these stable fields:
 
 | Field | Meaning |
 | --- | --- |
 | `mcpSchemaVersion` | Version of the MCP-facing result contract. |
-| `tool` | Exact tool identity: `preflight_check`, `corpus_scan`, or opt-in `remote_repository_scan`. |
-| `safety` | Stable static-analysis and authority-boundary metadata. |
+| `tool` | Exact tool identity: `preflight_check`, `corpus_scan`, or an enabled `remote_repository_scan`, `trust_list`, `trust_approve`, or `trust_revoke`. |
+| `safety` | A tool-specific safety object for the tool's authority family. |
 
-The `safety` object contains:
+No safety key set applies universally. Scan tools, bounded trust read, and trust mutation use the
+three distinct exact objects documented below; consumers must select the contract by `tool`.
+
+### Scan safety object
+
+This exact object applies only to successful `preflight_check`, `corpus_scan`, and
+`remote_repository_scan` results:
 
 ```json
 {
@@ -198,7 +204,37 @@ or command. It uses exact schema `trust-list/v1`:
     "sessionId": null
   },
   "auditEventId": "event-id",
-  "safety": {}
+  "safety": {
+    "repositoryContentTrust": "untrusted",
+    "evidenceTreatAsData": true,
+    "trustReadOnly": true,
+    "trustMutationAllowed": false,
+    "preflightUsesTrust": false,
+    "remoteConfirmationUsesTrust": false,
+    "rawRepoIdReturned": false,
+    "rawPathReturned": false,
+    "rawRemoteUrlReturned": false,
+    "approvedCommandReturned": false
+  }
+}
+```
+
+### Trust-list safety object
+
+This exact object applies only to successful `trust_list` results:
+
+```json
+{
+  "repositoryContentTrust": "untrusted",
+  "evidenceTreatAsData": true,
+  "trustReadOnly": true,
+  "trustMutationAllowed": false,
+  "preflightUsesTrust": false,
+  "remoteConfirmationUsesTrust": false,
+  "rawRepoIdReturned": false,
+  "rawPathReturned": false,
+  "rawRemoteUrlReturned": false,
+  "approvedCommandReturned": false
 }
 ```
 
@@ -208,6 +244,77 @@ timestamps, actor, policy/ruleset, and provenance. The safety object explicitly 
 identity, path, remote URL, and approved command as not returned, and confirms that preflight and
 remote confirmation do not use trust. See the complete machine-checked
 [`trust-list-response.json`](../examples/mcp/trust-list-response.json).
+
+## `trust_approve` and `trust_revoke` results
+
+Both mutation tools are available only when exact startup flag
+`CODEX_PREFLIGHT_ENABLE_TRUST_MUTATION=1` is set. Their first valid call is an error envelope with
+`MCP_TRUST_MUTATION_CONFIRMATION_REQUIRED`, `field: "confirmationToken"`, fixed unavailable stdio
+runtime identity, and a `trust-mutation-confirmation/v1` object containing `challengeId`, opaque
+`confirmationToken`, operation, issued/expiry timestamps, and fixed display. It means no trust
+mutation occurred. The challenge is single-use and 300-second expiring; a client must stop for a
+human decision and make one confirmed retry only after confirmation. The fixed display is the only
+place a first approval response may echo caller-supplied cwd, command, or reason.
+
+Successful approval uses exact `trust-approve/v1`; successful revocation uses exact
+`trust-revoke/v1`. Both include `mcpSchemaVersion`, `tool`, `sourceType: "trust-cache"`, `outcome`,
+`mutationApplied`, public entry projection, consumed challenge ID, fixed runtime identity,
+`auditEventId`, and the mutation safety object. Approvals expose the redacted repo hash, head,
+fingerprint, scope, policy/ruleset, and requested expiry; revocations expose only entry ID and
+version. Neither returns raw path, repository ID, remote URL, approved command, reason, token,
+key, or audit storage path.
+
+### Mutation safety object
+
+This exact object applies only to successful `trust_approve` and `trust_revoke` results:
+
+```json
+{
+  "plannedCommandExecuted": false,
+  "repositoryCodeExecuted": false,
+  "networkAccessed": false,
+  "remoteConfirmationUsed": false,
+  "trustConsumed": false,
+  "mcpPreflightUsesTrust": false,
+  "rawRepoIdReturned": false,
+  "rawPathReturned": false,
+  "rawRemoteUrlReturned": false,
+  "approvedCommandReturned": false,
+  "reasonReturned": false
+}
+```
+
+This object is distinct from both the scan and trust-list safety objects. In particular, mutation
+results do not claim scan-only `analysisMode`, `commandExecuted`, or `trustMutationAllowed` fields.
+
+See the machine-checked examples:
+
+- [`trust-approve-confirmation-required.json`](../examples/mcp/trust-approve-confirmation-required.json)
+- [`trust-approve-response.json`](../examples/mcp/trust-approve-response.json)
+- [`trust-revoke-confirmation-required.json`](../examples/mcp/trust-revoke-confirmation-required.json)
+- [`trust-revoke-response.json`](../examples/mcp/trust-revoke-response.json)
+
+`MCP_TRUST_MUTATION_COMMITTED_AUDIT_PENDING` is a terminal, non-retryable error. It unambiguously
+means that the trust change committed while the final audit event is pending recovery:
+
+```json
+{
+  "error": {
+    "code": "MCP_TRUST_MUTATION_COMMITTED_AUDIT_PENDING",
+    "retryable": false,
+    "context": {
+      "committed": true,
+      "operation": "approve-or-revoke",
+      "entryId": "lowercase UUIDv4",
+      "preparedAuditEventId": "lowercase UUIDv4"
+    }
+  }
+}
+```
+
+Clients must not retry that mutation. The process refuses later mutation calls until restart and
+audit recovery; recovery can only commit or abort the sole unmatched prepared event and has no MCP
+tool surface.
 
 ## Structured errors
 
@@ -283,26 +390,29 @@ Errors are not successful report objects and therefore do not carry the successf
 
 ## Authority boundary
 
-The default runtime registers exactly two tools:
+Three independent exact-value flags produce eight exact inventories. Only value `1` enables an
+authority; absent flags and every other value leave that authority disabled.
 
-```text
-preflight_check
-corpus_scan
-```
+| Remote scan | Trust read | Trust mutation | Exact ordered inventory |
+| --- | --- | --- | --- |
+| off | off | off | `preflight_check`, `corpus_scan` |
+| on | off | off | `preflight_check`, `corpus_scan`, `remote_repository_scan` |
+| off | on | off | `preflight_check`, `corpus_scan`, `trust_list` |
+| off | off | on | `preflight_check`, `corpus_scan`, `trust_approve`, `trust_revoke` |
+| on | on | off | `preflight_check`, `corpus_scan`, `remote_repository_scan`, `trust_list` |
+| on | off | on | `preflight_check`, `corpus_scan`, `remote_repository_scan`, `trust_approve`, `trust_revoke` |
+| off | on | on | `preflight_check`, `corpus_scan`, `trust_list`, `trust_approve`, `trust_revoke` |
+| on | on | on | `preflight_check`, `corpus_scan`, `remote_repository_scan`, `trust_list`, `trust_approve`, `trust_revoke` |
 
-With exact startup flag `CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN=1`, registration adds only:
+The flags are:
 
-```text
-remote_repository_scan
-```
+- `CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN=1`: adds only `remote_repository_scan`.
+- `CODEX_PREFLIGHT_ENABLE_TRUST_READ=1`: adds only `trust_list`.
+- `CODEX_PREFLIGHT_ENABLE_TRUST_MUTATION=1`: adds only `trust_approve` and `trust_revoke`.
 
-With exact startup flag `CODEX_PREFLIGHT_ENABLE_TRUST_READ=1`, registration adds only:
-
-```text
-trust_list
-```
-
-Both flags add both optional tools. No mode exposes command execution, trust approval, trust
-revocation, arbitrary filesystem mutation, arbitrary network destinations, credentials, or proxy
-control. Removing a flag and restarting removes its tool and invalidates its process-local token or
-cursor; the default remains the two-tool, no-network, no-trust-read inventory.
+Mutation authority remains local, exact-entry, and confirmation-gated. No inventory exposes
+planned-command execution, arbitrary filesystem mutation, arbitrary network destinations,
+credentials, proxy control, trust consumption by MCP preflight, or remote trust mutation. Removing
+a flag and restarting removes its tools and invalidates the corresponding process-local token,
+cursor, or challenge; the default remains the two-tool no-network, no-trust-read, no-trust-mutation
+inventory.

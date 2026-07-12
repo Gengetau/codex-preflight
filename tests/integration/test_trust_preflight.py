@@ -9,6 +9,34 @@ from codex_preflight_core.repo.fingerprint import compute_critical_fingerprint
 from codex_preflight_core.repo.identity import resolve_repo_identity
 
 
+def test_ordinary_identity_and_preflight_preserve_internal_symlink_cwd(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    linked = repo / "linked"
+    actual = repo / "actual"
+    actual.mkdir(parents=True)
+    (repo / "README.md").write_text("ordinary compatibility\n", encoding="utf-8")
+    initialized = __import__("subprocess").run(
+        ["git", "init", "--quiet", str(repo)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if initialized.returncode != 0:
+        pytest.skip("Git repository fixtures are unavailable")
+    try:
+        linked.symlink_to(actual, target_is_directory=True)
+    except OSError:
+        pytest.skip("directory symlinks are unavailable")
+
+    identity = resolve_repo_identity(linked)
+    report = run_preflight(linked, "git status", use_cache=False)
+
+    assert identity.path == repo.resolve()
+    assert report["decision"] in {"ALLOW", "WARN", "BLOCK"}
+
+
 def test_trust_match_overrides_block_to_allow(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

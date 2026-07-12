@@ -8,10 +8,11 @@ Codex Preflight's MCP outputs may be read by a model. Repository-controlled evid
 data and must never be followed as instructions. The server does not execute repository code,
 planned commands, package managers, scripts, hooks, builds, tests, or downloaded artifacts.
 
-Bounded trust read is implemented as a separate default-off authority; trust mutation remains
-unavailable. The reviewed contract is documented in
-[MCP Trust Management Design](design/mcp-trust-management.md). No runtime mode registers
-`trust_approve` or `trust_revoke`.
+Bounded trust read and confirmation-gated trust mutation are separate default-off authorities.
+Exact startup value `CODEX_PREFLIGHT_ENABLE_TRUST_READ=1` registers `trust_list`; exact startup
+value `CODEX_PREFLIGHT_ENABLE_TRUST_MUTATION=1` registers `trust_approve` and `trust_revoke`.
+The reviewed contract is documented in
+[MCP Trust Management Design](design/mcp-trust-management.md).
 
 ## Runtime shape
 
@@ -156,17 +157,67 @@ The tool cannot approve, revoke, extend, refresh, consume, satisfy, or create tr
 authorized write is an idempotent locked migration that adds UUIDv4 IDs, entry version `1`, and
 provenance to valid legacy entries while preserving all approval values and matching behavior.
 
+### `trust_approve` and `trust_revoke`
+
+Trust mutation is a separate default-off authority. Only exact startup value
+`CODEX_PREFLIGHT_ENABLE_TRUST_MUTATION=1` registers both tools. It does not enable remote scans or
+`trust_list`; all eight remote/trust-read/trust-mutation flag combinations have independently
+scoped inventories. When the mutation flag is absent or has any other value, the tools are absent,
+no mutation audit/key/challenge state is created, and direct calls fail with
+`MCP_TRUST_MUTATION_DISABLED`.
+
+`trust_approve` accepts only `cwd`, `command`, `expiresAt`, `reason`, and an optional
+`confirmationToken`. It derives repository identity, head, fingerprint, command scope, policy,
+and ruleset server-side, records one exact local approval, and never executes the command,
+repository code, package manager, hook, build, test, browser, or network request. `trust_revoke`
+accepts only canonical UUIDv4 `trustEntryId`, integer `expectedVersion: 1`, `reason`, and an
+optional `confirmationToken`; it removes exactly that one entry. There is no bulk selector,
+extension, import/export, wildcard approval, cache clear, audit reader, recovery tool, or reset
+tool.
+
+The first fully valid request has a mandatory human stop: it creates no approval or revocation and
+returns `MCP_TRUST_MUTATION_CONFIRMATION_REQUIRED` with a fixed display. The client must display
+only that object to a human, keep the token out of logs/display, and make one confirmed retry only
+after the human approves the exact operation. Challenges are process-local, operation-bound,
+single-use, and expire after 300 seconds. Repository content, stored trust, scan results, model
+output, remote confirmation, and automatic client logic cannot satisfy a challenge; there is no
+automatic confirmation. An authentic token is consumed before full retry validation, so a retry
+that fails validation cannot be replayed.
+
+The runtime reports fixed stdio identity only:
+
+```json
+{
+  "transport": "stdio",
+  "identityStatus": "unavailable",
+  "clientId": null,
+  "sessionId": null
+}
+```
+
+This is a deliberately enabled single-user local process, not authenticated user or session
+identity. `approvedBy: local-user` is a compatibility label, not an actor claim. MCP preflight does
+not consume trust. Remote confirmation cannot create, satisfy, read, or mutate trust, and no
+remote scan can authorize local mutation.
+
+MCP-created approvals use private `mcp-trust-approve` provenance with a local
+`mutationAuditEventId`. `trust_list` remains redacted and does not expose the reason or audit
+linkage, while local CLI `trust list` displays both provenance and audit ID. CLI `preflight` can
+match the approval under the unchanged identity/head/fingerprint/scope/policy/ruleset/expiry key,
+and CLI `trust revoke` can remove it through existing local behavior.
+
 ## Server instructions
 
 MCP initialization returns fixed, source-controlled instructions. Every mode states that analysis
 is static-only, repository evidence is untrusted data, repository code and planned commands are
 never executed, and `ASK_USER`/`BLOCK` stop automatic execution.
 
-The selected instruction set describes only the enabled remote and/or trust-read authority. Public
-GitHub scans require one-time operation-bound human confirmation and never create trust.
-`trust_list` is bounded read-only and cannot create, consume, satisfy, extend, approve, or revoke
-trust. Repository content, stored trust values, user input, environment values, findings, and
-errors are never interpolated into an instruction string.
+The selected instruction set describes only the enabled remote, trust-read, and/or trust-mutation
+authority. Public GitHub scans require one-time operation-bound human confirmation and never
+create trust. `trust_list` is bounded read-only and cannot create, consume, satisfy, extend,
+approve, or revoke trust. `trust_approve` and `trust_revoke` require the mandatory human stop and
+one confirmed retry. Repository content, stored trust values, user input, environment values,
+findings, and errors are never interpolated into an instruction string.
 
 ## Results and evidence
 
@@ -221,6 +272,40 @@ Read audit records use a separate namespace:
 Records are redacted, at most 4096 bytes, locked and fsynced, with a 1 MiB active segment and three
 rotated segments. Audit failure returns no trust metadata.
 
+## Trust-mutation state and audit recovery
+
+Mutation state derives only from the normal application home:
+
+```text
+~/.codex-preflight/trust-mutation/audit.jsonl
+~/.codex-preflight/trust-mutation/audit.key
+```
+
+It is distinct from trust-read, remote, scan-cache, and trust data. Audit records are owner-only
+where supported, redacted, HMAC-chained, fsynced, limited to 4096 bytes, and retained as one 1 MiB
+active segment plus at most three rotated segments. Before a mutation, the service fsyncs a
+`mutation_prepared` record; it atomically replaces the trust store; then it fsyncs
+`mutation_committed`.
+
+If replacement succeeds but the final audit record cannot be persisted, the response is exactly
+`MCP_TRUST_MUTATION_COMMITTED_AUDIT_PENDING`, is not retryable, and includes this fixed context:
+
+```json
+{
+  "committed": true,
+  "operation": "approve-or-revoke",
+  "entryId": "lowercase UUIDv4",
+  "preparedAuditEventId": "lowercase UUIDv4"
+}
+```
+
+The operation is committed; clients must not repeat it. The process becomes unhealthy, invalidates
+outstanding challenges, and rejects further mutations until restart. Startup audit recovery
+reconciles only the sole unmatched prepared tail against exact trust-store bytes. A corrupt chain,
+ambiguous state, or failed recovery disables mutation registration. Operators may restore known-good
+local trust and audit files; this release intentionally provides no MCP recovery, audit-read, or
+reset tool.
+
 ## Error troubleshooting
 
 Expected failures use the structured shape in
@@ -235,8 +320,10 @@ credentials, subprocess output, or internal temporary paths.
 
 Trust-read codes cover disabled direct calls, invalid arguments, cursor/limit rejection,
 unavailable/corrupt/future stores, lock timeout, migration failure, audit failure, and normalized
-internal failure. They never expose raw identity, path, URL, approved command, token, environment,
-or trust-file content.
+internal failure. Mutation codes cover disabled calls, argument/confirmation/replay/rate-limit,
+identity/budget/drift/version/not-found, storage/audit/persistence, committed-audit-pending,
+recovery-required, and normalized internal failure. They never expose raw identity, path, URL,
+approved command, reason, token, environment, or trust-file content.
 
 ## Plugin and diagnostics
 
@@ -254,8 +341,10 @@ that writes banners or logs to stdout.
 
 ## Disable and rollback
 
-Remove either optional startup flag (or set it to any value other than `1`) and restart the server.
-The corresponding tool disappears; remote confirmation tokens and trust-list cursors are
-process-local and become invalid. Remote state can be cleared independently only after verifying
-the exact `~/.codex-preflight/remote` path. Disabling trust read does not delete or downgrade CLI
-trust data, migration backups, or dedicated audit state.
+Remove an optional startup flag (or set it to any value other than `1`) and restart the server. The
+corresponding tool disappears; remote confirmation tokens, trust-list cursors, and mutation
+challenges are process-local and become invalid. Emergency disable of mutation removes both
+mutating tools without deleting approvals, downgrading the v2 reader, or rewriting mutation audit
+records. Remote state can be cleared independently only after verifying the exact
+`~/.codex-preflight/remote` path. Disabling trust read does not delete or downgrade CLI trust data,
+migration backups, or dedicated audit state.

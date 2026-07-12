@@ -1,5 +1,26 @@
 # Release History
 
+## v0.3.4
+
+Confirmation-gated default-off MCP trust mutation:
+
+- Added `trust_approve` and `trust_revoke` only for exact
+  `CODEX_PREFLIGHT_ENABLE_TRUST_MUTATION=1`, preserving all eight independently scoped optional
+  authority inventories and keeping the bundled plugin flags absent.
+- Added process-local, operation-bound, single-use 300-second confirmation challenges with a
+  mandatory human stop and one confirmed retry. Stdio identity remains unavailable and is not an
+  authenticated actor claim.
+- Added exact local approval/revoke scope, source-specific v2 provenance, CLI list provenance/audit
+  display, and compatibility with existing CLI trust matching and revocation.
+- Added separate redacted owner-only HMAC-chained mutation audit, write-ahead persistence, startup
+  audit recovery, and explicit `MCP_TRUST_MUTATION_COMMITTED_AUDIT_PENDING` handling. A committed
+  pending response is terminal and must not be retried.
+- Preserved MCP preflight trust blindness and remote-confirmation authority separation: MCP
+  preflight does not consume trust, and remote confirmation cannot create, satisfy, read, or mutate
+  trust.
+- Added exact request/challenge/retry/result examples, default-off plugin copy validation, focused
+  CLI compatibility checks, and synchronized all release versions to `0.3.4`.
+
 ## v0.3.3
 
 Default-off bounded MCP trust reads:

@@ -218,10 +218,8 @@ More details are in [docs/plugin.md](docs/plugin.md).
 ## MCP
 
 The MCP-facing package never executes repository code or planned commands. Evidence and stored
-trust values are marked or described as untrusted data; no MCP mode exposes trust mutation,
-command execution, arbitrary hosts, credentials, proxy control, or artifact execution. Server
-initialization supplies fixed safety instructions requiring `ASK_USER` and `BLOCK` decisions to
-stop automatic execution.
+trust values are marked or described as untrusted data. Server initialization supplies fixed safety
+instructions requiring `ASK_USER` and `BLOCK` decisions to stop automatic execution.
 
 The default runtime authority remains exactly two tools:
 
@@ -252,8 +250,31 @@ semantic. Migration is locked, permission-preserving, backed up, capped at 1 MiB
 Trust-read audit records use the separate `trust-read/audit.jsonl` namespace and never contain raw
 identities or trust content.
 
-Disable either optional authority by removing its flag and restarting the MCP process. The bundled
-plugin configuration sets neither flag, so its default remains the two local/no-network tools.
+v0.3.4 adds two independently default-off local tools. Only the exact startup value
+`CODEX_PREFLIGHT_ENABLE_TRUST_MUTATION=1` registers `trust_approve` and `trust_revoke`; it does not
+imply remote scanning or trust reads. The bundled plugin configures none of the remote, trust-read,
+or trust-mutation flags. The first fully valid mutation request returns a single-use, 300-second
+challenge and makes no approval or revocation. A mandatory human stop must present the fixed
+display and make the decision; the client may make one confirmed retry only after that human
+approves the exact request. There is no automatic confirmation.
+
+MCP preflight does not consume trust. Remote confirmation cannot create, satisfy, read, or mutate
+trust. A confirmed approval writes one exact local v2 entry and a confirmed revoke deletes one
+exact UUIDv4 entry at `expectedVersion: 1`; neither operation executes a caller command,
+repository code, or network request. The stdio runtime reports `identityStatus: unavailable`, so
+the process flag and confirmation integrity are not authenticated client identity.
+
+Mutation audit records are redacted and recoverable under `trust-mutation/`. If a trust-file write
+commits but the audit commit cannot be persisted, the server returns
+`MCP_TRUST_MUTATION_COMMITTED_AUDIT_PENDING` with `committed: true`; do not retry the mutation.
+Restart performs audit recovery or leaves mutation registration disabled. Emergency disable removes
+`CODEX_PREFLIGHT_ENABLE_TRUST_MUTATION` and restarts the process; it removes the two tools and
+invalidates outstanding challenges without deleting existing approvals or audit state. Local CLI
+`trust list` displays MCP provenance and `mutationAuditEventId`, and existing CLI matching and
+revoke behavior remains compatible with MCP-created approvals.
+
+Disable any optional authority by removing its flag and restarting the MCP process. The bundled
+plugin configuration sets none of the flags, so its default remains the two local/no-network tools.
 
 See [docs/mcp.md](docs/mcp.md) for MCP safety notes and
 [docs/mcp-client-examples.md](docs/mcp-client-examples.md) for machine-checked integration examples.
