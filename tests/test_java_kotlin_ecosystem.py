@@ -2,8 +2,12 @@ from pathlib import Path
 
 import pytest
 
+from codex_preflight_core.command.classifier import classify_command
+from codex_preflight_core.command.java import parse_java_invocation, split_command_words
+from codex_preflight_core.command.scope import CommandScope
 from codex_preflight_core.preflight import run_preflight
 from codex_preflight_core.repo.collector import collect_critical_files
+from codex_preflight_core.repo.fingerprint import compute_critical_fingerprint
 
 
 def rule_ids(report: dict) -> list[str]:
@@ -265,3 +269,213 @@ def test_explicit_gradle_init_reaches_only_the_selected_init_script(tmp_path: Pa
     assert "config/bootstrap.gradle" in graph_files(report)
     assert "init.gradle" not in graph_files(report)
     assert capability_files(report) == {"config/bootstrap.gradle"}
+
+
+@pytest.mark.parametrize(
+    "command",
+    ['mvn -f "dir/my pom.xml" test', 'mvn --file="dir/my pom.xml" test'],
+)
+def test_quoted_maven_pom_is_classified_collected_scanned_fingerprinted_and_reachable(
+    tmp_path: Path, command: str
+) -> None:
+    target = tmp_path / "dir" / "my pom.xml"
+    target.parent.mkdir()
+    target.write_text(
+        "<project><modelVersion>4.0.0</modelVersion><build><plugins><plugin>"
+        "<artifactId>exec-maven-plugin</artifactId><executions><execution>"
+        "<goals><goal>exec</goal></goals></execution></executions>"
+        "</plugin></plugins></build></project>",
+        encoding="utf-8",
+    )
+
+    report = run_preflight(tmp_path, command, use_cache=False)
+    before = compute_critical_fingerprint(tmp_path, command=command)
+    target.write_text(target.read_text(encoding="utf-8") + "\n<!-- fingerprint change -->\n", encoding="utf-8")
+
+    invocation = parse_java_invocation(split_command_words(command))
+    assert invocation is not None and invocation.maven_files == ("dir/my pom.xml",)
+    assert classify_command(command).scope == CommandScope.TEST
+    assert report["decision"] == "WARN"
+    assert Path("dir/my pom.xml") in collect_critical_files(tmp_path, command=command)
+    assert "JAVA_MAVEN_PLUGIN_EXECUTION" in rule_ids(report)
+    assert graph_files(report) == {"dir/my pom.xml"}
+    assert capability_files(report) == {"dir/my pom.xml"}
+    assert compute_critical_fingerprint(tmp_path, command=command) != before
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'gradle -I "config/my init.gradle" test',
+        'gradle --init-script="config/my init.gradle" test',
+    ],
+)
+def test_quoted_gradle_init_is_classified_collected_scanned_fingerprinted_and_reachable(
+    tmp_path: Path, command: str
+) -> None:
+    target = tmp_path / "config" / "my init.gradle"
+    target.parent.mkdir()
+    target.write_text("beforeSettings { }\n", encoding="utf-8")
+    (tmp_path / "build.gradle").write_text("plugins { id 'java' }\n", encoding="utf-8")
+
+    report = run_preflight(tmp_path, command, use_cache=False)
+    before = compute_critical_fingerprint(tmp_path, command=command)
+    target.write_text("beforeSettings { println('changed') }\n", encoding="utf-8")
+
+    invocation = parse_java_invocation(split_command_words(command))
+    assert invocation is not None and invocation.gradle_init_scripts == ("config/my init.gradle",)
+    assert classify_command(command).scope == CommandScope.TEST
+    assert report["decision"] == "WARN"
+    assert Path("config/my init.gradle") in collect_critical_files(tmp_path, command=command)
+    assert "JAVA_GRADLE_INIT_SCRIPT" in rule_ids(report)
+    assert {"build.gradle", "config/my init.gradle"} <= graph_files(report)
+    assert capability_files(report) == {"config/my init.gradle"}
+    assert compute_critical_fingerprint(tmp_path, command=command) != before
+
+
+@pytest.mark.parametrize(
+    ("command", "target_name"),
+    [
+        ("gradle -c config/custom.gradle test", "config/custom.gradle"),
+        ("gradle --settings-file=config/custom.gradle test", "config/custom.gradle"),
+        ('gradle -c "config/custom settings.gradle" test', "config/custom settings.gradle"),
+    ],
+)
+def test_gradle_settings_file_is_classified_collected_scanned_fingerprinted_and_reachable(
+    tmp_path: Path, command: str, target_name: str
+) -> None:
+    target = tmp_path / target_name
+    target.parent.mkdir(exist_ok=True)
+    target.write_text(
+        "pluginManagement { repositories { gradlePluginPortal() } }\n",
+        encoding="utf-8",
+    )
+    (target.parent / "build.gradle").write_text("plugins { id 'java' }\n", encoding="utf-8")
+    (tmp_path / "settings.gradle").write_text("rootProject.name = 'default'\n", encoding="utf-8")
+
+    report = run_preflight(tmp_path, command, use_cache=False)
+    before = compute_critical_fingerprint(tmp_path, command=command)
+    target.write_text(target.read_text(encoding="utf-8") + "// changed\n", encoding="utf-8")
+
+    invocation = parse_java_invocation(split_command_words(command))
+    assert invocation is not None and invocation.gradle_settings_files == (target_name,)
+    assert classify_command(command).scope == CommandScope.TEST
+    assert report["decision"] == "WARN"
+    assert Path(target_name) in collect_critical_files(tmp_path, command=command)
+    assert "JAVA_GRADLE_PLUGIN_REPOSITORY" in rule_ids(report)
+    assert target_name in graph_files(report)
+    assert "settings.gradle" not in graph_files(report)
+    assert capability_files(report) == {target_name}
+    assert compute_critical_fingerprint(tmp_path, command=command) != before
+
+
+@pytest.mark.parametrize("command", ["gradle -p sub test", "gradle --project-dir=sub test"])
+def test_gradle_project_dir_limits_reachability_to_selected_project(
+    tmp_path: Path, command: str
+) -> None:
+    (tmp_path / "sub" / "buildSrc").mkdir(parents=True)
+    (tmp_path / "other").mkdir()
+    (tmp_path / "sub" / "settings.gradle").write_text(
+        "pluginManagement { repositories { gradlePluginPortal() } }\n", encoding="utf-8"
+    )
+    (tmp_path / "sub" / "build.gradle").write_text("plugins { id 'java' }\n", encoding="utf-8")
+    (tmp_path / "sub" / "buildSrc" / "build.gradle").write_text(
+        "plugins { id 'groovy' }\n", encoding="utf-8"
+    )
+    (tmp_path / "other" / "settings.gradle").write_text(
+        "pluginManagement { repositories { mavenCentral() } }\n", encoding="utf-8"
+    )
+    (tmp_path / "other" / "build.gradle").write_text("plugins { id 'java' }\n", encoding="utf-8")
+
+    report = run_preflight(tmp_path, command, use_cache=False)
+    invocation = parse_java_invocation(split_command_words(command))
+
+    assert invocation is not None and invocation.gradle_project_dir == "sub"
+    assert classify_command(command).scope == CommandScope.TEST
+    assert report["decision"] == "WARN"
+    assert {
+        Path("sub/settings.gradle"),
+        Path("sub/build.gradle"),
+        Path("sub/buildSrc/build.gradle"),
+    } <= set(collect_critical_files(tmp_path, command=command))
+    assert {"JAVA_GRADLE_PLUGIN_REPOSITORY", "JAVA_GRADLE_BUILD_LOGIC"} <= set(rule_ids(report))
+    assert graph_files(report) == {
+        "sub/settings.gradle",
+        "sub/build.gradle",
+        "sub/buildSrc/build.gradle",
+    }
+    assert capability_files(report) == {"sub/settings.gradle", "sub/buildSrc/build.gradle"}
+    assert not any(path.startswith("other/") for path in graph_files(report))
+
+
+def test_gradle_project_dir_is_the_base_for_custom_settings_file(tmp_path: Path) -> None:
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "custom-settings.gradle").write_text(
+        "pluginManagement { repositories { gradlePluginPortal() } }\n", encoding="utf-8"
+    )
+    (tmp_path / "sub" / "build.gradle").write_text("plugins { id 'java' }\n", encoding="utf-8")
+    (tmp_path / "custom-settings.gradle").write_text(
+        "pluginManagement { repositories { mavenCentral() } }\n", encoding="utf-8"
+    )
+    command = "gradle -p sub -c custom-settings.gradle test"
+
+    report = run_preflight(tmp_path, command, use_cache=False)
+
+    assert classify_command(command).scope == CommandScope.TEST
+    assert report["decision"] == "WARN"
+    assert Path("sub/custom-settings.gradle") in collect_critical_files(tmp_path, command=command)
+    assert Path("custom-settings.gradle") not in collect_critical_files(tmp_path, command=command)
+    assert "JAVA_GRADLE_PLUGIN_REPOSITORY" in rule_ids(report)
+    assert graph_files(report) == {"sub/build.gradle", "sub/custom-settings.gradle"}
+    assert capability_files(report) == {"sub/custom-settings.gradle"}
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "gradle -p ../outside-gradle test",
+        "gradle -c ../outside-settings.gradle test",
+        "gradle -I ../outside-init.gradle test",
+    ],
+)
+def test_gradle_scoped_paths_outside_repository_are_rejected(tmp_path: Path, command: str) -> None:
+    outside_project = tmp_path.parent / "outside-gradle"
+    outside_project.mkdir(exist_ok=True)
+    (outside_project / "settings.gradle").write_text(
+        "pluginManagement { repositories { gradlePluginPortal() } }\n", encoding="utf-8"
+    )
+    (tmp_path.parent / "outside-settings.gradle").write_text(
+        "pluginManagement { repositories { gradlePluginPortal() } }\n", encoding="utf-8"
+    )
+    (tmp_path.parent / "outside-init.gradle").write_text("beforeSettings { }\n", encoding="utf-8")
+
+    report = run_preflight(tmp_path, command, use_cache=False)
+
+    assert classify_command(command).scope == CommandScope.TEST
+    assert report["decision"] == "ALLOW"
+    assert rule_ids(report) == []
+    assert collect_critical_files(tmp_path, command=command) == []
+    assert graph_files(report) == set()
+    assert capability_files(report) == set()
+
+
+def test_gradle_scoped_symlink_targets_are_rejected(tmp_path: Path) -> None:
+    real = tmp_path / "real-settings.gradle"
+    real.write_text(
+        "pluginManagement { repositories { gradlePluginPortal() } }\n", encoding="utf-8"
+    )
+    linked = tmp_path / "linked-settings.gradle"
+    try:
+        linked.symlink_to(real)
+    except OSError:
+        pytest.skip("File symlinks are unavailable in this environment")
+    command = "gradle -c linked-settings.gradle test"
+
+    report = run_preflight(tmp_path, command, use_cache=False)
+
+    assert classify_command(command).scope == CommandScope.TEST
+    assert report["decision"] == "ALLOW"
+    assert Path("linked-settings.gradle") not in collect_critical_files(tmp_path, command=command)
+    assert rule_ids(report) == []
+    assert graph_files(report) == set()
+    assert capability_files(report) == set()

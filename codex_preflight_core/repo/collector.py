@@ -336,14 +336,25 @@ def _command_target_files_for_segment(
     _check_budget(budget_check)
     invocation = parse_java_invocation(parts)
     if invocation is not None:
-        raw_targets = (
-            invocation.maven_files if invocation.kind == "maven" else invocation.gradle_init_scripts
-        )
+        base = root
+        if invocation.kind == "gradle" and invocation.gradle_project_dir is not None:
+            project_dir = resolve_command_target_directory(
+                root,
+                invocation.gradle_project_dir,
+                reject_unsafe=reject_unsafe,
+            )
+            if project_dir is None:
+                return []
+            base = root / project_dir
+        raw_targets = invocation.maven_files
+        if invocation.kind == "gradle":
+            raw_targets = (*invocation.gradle_init_scripts, *invocation.gradle_settings_files)
         targets: list[Path] = []
         for raw_target in raw_targets:
-            target = _resolve_command_target_file(
+            target = resolve_command_target_file(
                 root,
                 raw_target,
+                base=base,
                 budget_check=budget_check,
                 reject_unsafe=reject_unsafe,
             )
@@ -352,7 +363,7 @@ def _command_target_files_for_segment(
         return targets
     if len(parts) < 2 or parts[0].lower() not in COMMAND_TARGET_TOOLS:
         return []
-    target = _resolve_command_target_file(
+    target = resolve_command_target_file(
         root,
         parts[1],
         budget_check=budget_check,
@@ -361,19 +372,29 @@ def _command_target_files_for_segment(
     return [target] if target is not None else []
 
 
-def _resolve_command_target_file(
+def resolve_command_target_file(
     root: Path,
     raw_target: str,
     *,
-    budget_check: Callable[[], None] | None,
-    reject_unsafe: bool,
+    base: Path | None = None,
+    budget_check: Callable[[], None] | None = None,
+    reject_unsafe: bool = False,
 ) -> Path | None:
+    root = root.resolve()
+    base = root if base is None else base
+    try:
+        base.resolve().relative_to(root)
+    except (OSError, ValueError):
+        return None
     target = Path(raw_target.replace("\\", "/"))
     if target.is_absolute():
         return None
+    lexical_path = base / target
     if reject_unsafe:
+        if _has_unsafe_lexical_component(root, lexical_path):
+            raise CriticalFileCollectionError("A command target file is unsafe.")
         try:
-            path = local_absolute_path(root / target)
+            path = local_absolute_path(lexical_path)
             relative = path.relative_to(root)
             verify_regular_file_nofollow(path)
         except FileNotFoundError:
@@ -384,17 +405,78 @@ def _resolve_command_target_file(
             raise CriticalFileCollectionError("A command target file is unsafe.") from error
         return Path(relative.as_posix())
 
-    path = (root / target).resolve()
+    try:
+        path = lexical_path.resolve()
+    except OSError:
+        return None
     _check_budget(budget_check)
     try:
         relative = path.relative_to(root)
     except ValueError:
         return None
-    if os.path.lexists(path) and not _is_safe_file(root, path, reject_unsafe=False):
+    if _has_unsafe_lexical_component(root, lexical_path):
         return None
     if _is_safe_file(root, path, reject_unsafe=False):
         return Path(relative.as_posix())
     return None
+
+
+def resolve_command_target_directory(
+    root: Path,
+    raw_target: str,
+    *,
+    base: Path | None = None,
+    reject_unsafe: bool = False,
+) -> Path | None:
+    root = root.resolve()
+    base = root if base is None else base
+    target = Path(raw_target.replace("\\", "/"))
+    if target.is_absolute():
+        return None
+    lexical_path = base / target
+    try:
+        path = local_absolute_path(lexical_path) if reject_unsafe else lexical_path.resolve()
+        relative = path.relative_to(root)
+    except (OSError, SafePathError, ValueError):
+        return None
+    if _has_unsafe_lexical_component(root, lexical_path):
+        if reject_unsafe:
+            raise CriticalFileCollectionError("A command target directory is unsafe.")
+        return None
+    try:
+        info = path.lstat()
+    except OSError:
+        return None
+    if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode) or _is_reparse(info):
+        return None
+    if reject_unsafe:
+        try:
+            with open_directory_handle_nofollow(path):
+                pass
+        except (OSError, SafePathError) as error:
+            raise CriticalFileCollectionError("A command target directory is unsafe.") from error
+    return Path(relative.as_posix())
+
+
+def _has_unsafe_lexical_component(root: Path, lexical_path: Path) -> bool:
+    try:
+        relative = Path(os.path.relpath(lexical_path, root))
+    except ValueError:
+        return True
+    if relative.parts and relative.parts[0] == "..":
+        return True
+    current = root
+    for part in relative.parts:
+        current /= part
+        try:
+            info = current.lstat()
+        except FileNotFoundError:
+            return False
+        except OSError:
+            return True
+        if stat.S_ISLNK(info.st_mode) or _is_reparse(info):
+            return True
+    return False
 
 
 def _check_budget(check: Callable[[], None] | None) -> None:

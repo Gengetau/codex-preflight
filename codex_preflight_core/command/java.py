@@ -1,4 +1,3 @@
-import shlex
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -49,20 +48,45 @@ class JavaInvocation:
     task: str
     maven_files: tuple[str, ...] = ()
     gradle_init_scripts: tuple[str, ...] = ()
+    gradle_project_dir: str | None = None
+    gradle_settings_files: tuple[str, ...] = ()
     uses_gradle_wrapper: bool = False
 
 
 def split_command_words(command: str) -> list[str]:
-    try:
-        return [_strip_quotes(part) for part in shlex.split(command, posix=False)]
-    except ValueError:
-        return [_strip_quotes(part) for part in command.split()]
+    words: list[str] = []
+    current: list[str] = []
+    quote: str | None = None
+    word_started = False
+    for char in command:
+        if quote is not None:
+            if char == quote:
+                quote = None
+            else:
+                current.append(char)
+            word_started = True
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            word_started = True
+            continue
+        if char.isspace():
+            if word_started:
+                words.append("".join(current))
+                current.clear()
+                word_started = False
+            continue
+        current.append(char)
+        word_started = True
+    if word_started:
+        words.append("".join(current))
+    return words
 
 
 def parse_java_invocation(parts: Sequence[str]) -> JavaInvocation | None:
     if not parts:
         return None
-    cleaned = [_strip_quotes(part) for part in parts]
+    cleaned = list(parts)
     executable = cleaned[0]
     basename = executable.lower().replace("\\", "/").rsplit("/", 1)[-1]
     arguments = cleaned[1:]
@@ -79,6 +103,8 @@ def parse_java_invocation(parts: Sequence[str]) -> JavaInvocation | None:
             executable=executable,
             task=_first_task(arguments, GRADLE_VALUE_OPTIONS, "build").lower(),
             gradle_init_scripts=_option_values(arguments, {"-I", "--init-script"}),
+            gradle_project_dir=_last_option_value(arguments, {"-p", "--project-dir"}),
+            gradle_settings_files=_option_values(arguments, {"-c", "--settings-file"}),
             uses_gradle_wrapper=basename in {"gradlew", "gradlew.bat"},
         )
     return None
@@ -121,5 +147,6 @@ def _option_values(parts: Sequence[str], option_names: set[str]) -> tuple[str, .
     return tuple(values)
 
 
-def _strip_quotes(value: str) -> str:
-    return value.strip("\"'")
+def _last_option_value(parts: Sequence[str], option_names: set[str]) -> str | None:
+    values = _option_values(parts, option_names)
+    return values[-1] if values else None

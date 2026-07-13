@@ -51,8 +51,9 @@ extension and lifecycle declarations, and `extconf.rb`. The clean Ruby fixture c
 Bundler metadata, a non-command-running Rake task, a gemspec, and representative library source.
 Corpus scans never run Ruby, Bundler, Rake, lifecycle hooks, extconf, compilers, or package tasks.
 
-The Java/Kotlin positive fixture covers Maven plugin execution, Gradle plugin repositories,
-`buildSrc` and included build logic, an init script, and an unpinned non-HTTPS wrapper distribution.
+The Java/Kotlin positive fixture covers quoted nonstandard Maven POM and Gradle init-script paths,
+Maven plugin execution, Gradle plugin repositories, `buildSrc` and included build logic, and an
+unpinned non-HTTPS wrapper distribution.
 The clean fixture includes ordinary Maven and Gradle metadata, representative Java/Kotlin source,
 and an HTTPS wrapper distribution with a pinned SHA-256 checksum. Corpus scans never run Maven,
 Gradle, wrappers, plugins, JVM compilers, tests, or repository code.

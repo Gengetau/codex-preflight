@@ -4,6 +4,10 @@ from pathlib import Path
 
 from codex_preflight_core.command.classifier import split_shell_segments
 from codex_preflight_core.command.java import parse_java_invocation, split_command_words
+from codex_preflight_core.repo.collector import (
+    resolve_command_target_directory,
+    resolve_command_target_file,
+)
 from codex_preflight_core.rules.base import line_number
 from codex_preflight_core.scanner.finding import Finding, Severity
 
@@ -30,11 +34,16 @@ class JavaKotlinEcosystemRule:
         self.command = command
 
     def scan(self, root: Path, relative_path: Path, text: str) -> list[Finding]:
-        maven_targets, init_targets = _command_targets(root, self.command)
+        maven_targets, init_targets, settings_targets = _command_targets(root, self.command)
         if relative_path.name == "pom.xml" or relative_path in maven_targets:
             return _scan_pom(relative_path, text)
-        if relative_path.name in _GRADLE_FILES:
-            return _scan_gradle_file(relative_path, text)
+        if relative_path.name in _GRADLE_FILES or relative_path in settings_targets:
+            return _scan_gradle_file(
+                relative_path,
+                text,
+                is_settings=relative_path.name in {"settings.gradle", "settings.gradle.kts"}
+                or relative_path in settings_targets,
+            )
         if relative_path.name in _INIT_FILES or relative_path in init_targets:
             return [_init_script_finding(relative_path)]
         if relative_path.name == "gradle-wrapper.properties":
@@ -42,32 +51,36 @@ class JavaKotlinEcosystemRule:
         return []
 
 
-def _command_targets(root: Path, command: str | None) -> tuple[set[Path], set[Path]]:
+def _command_targets(root: Path, command: str | None) -> tuple[set[Path], set[Path], set[Path]]:
     maven_targets: set[Path] = set()
     init_targets: set[Path] = set()
+    settings_targets: set[Path] = set()
     if not command:
-        return maven_targets, init_targets
+        return maven_targets, init_targets, settings_targets
     for segment in split_shell_segments(command):
         invocation = parse_java_invocation(split_command_words(segment))
         if invocation is None:
             continue
-        raw_targets = invocation.maven_files if invocation.kind == "maven" else invocation.gradle_init_scripts
-        destination = maven_targets if invocation.kind == "maven" else init_targets
-        for raw_target in raw_targets:
-            relative = _relative_command_target(root, raw_target)
-            if relative is not None:
-                destination.add(relative)
-    return maven_targets, init_targets
-
-
-def _relative_command_target(root: Path, raw_target: str) -> Path | None:
-    target = Path(raw_target.replace("\\", "/"))
-    if target.is_absolute():
-        return None
-    try:
-        return (root / target).resolve().relative_to(root.resolve())
-    except (OSError, ValueError):
-        return None
+        base = root
+        if invocation.kind == "gradle" and invocation.gradle_project_dir is not None:
+            project_dir = resolve_command_target_directory(root, invocation.gradle_project_dir)
+            if project_dir is None:
+                continue
+            base = root / project_dir
+        destinations = (
+            ((invocation.maven_files, maven_targets),)
+            if invocation.kind == "maven"
+            else (
+                (invocation.gradle_init_scripts, init_targets),
+                (invocation.gradle_settings_files, settings_targets),
+            )
+        )
+        for raw_targets, destination in destinations:
+            for raw_target in raw_targets:
+                relative = resolve_command_target_file(root, raw_target, base=base)
+                if relative is not None:
+                    destination.add(relative)
+    return maven_targets, init_targets, settings_targets
 
 
 def _scan_pom(relative_path: Path, text: str) -> list[Finding]:
@@ -111,12 +124,11 @@ def _executed_maven_plugins(root: ET.Element) -> list[ET.Element]:
     return plugins
 
 
-def _scan_gradle_file(relative_path: Path, text: str) -> list[Finding]:
+def _scan_gradle_file(relative_path: Path, text: str, *, is_settings: bool = False) -> list[Finding]:
     code = _mask_gradle_comments_and_strings(text)
     findings: list[Finding] = []
     if (
-        relative_path.name in {"settings.gradle", "settings.gradle.kts"}
-        and _has_plugin_management_repository(code)
+        is_settings and _has_plugin_management_repository(code)
     ):
         findings.append(
             _finding(

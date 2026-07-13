@@ -78,9 +78,9 @@ EXPECTED_CASES = {
     "java-kotlin-maven-gradle": (
         "WARN",
         [
-            "JAVA_MAVEN_PLUGIN_EXECUTION",
             "JAVA_GRADLE_BUILD_LOGIC",
             "JAVA_GRADLE_INIT_SCRIPT",
+            "JAVA_MAVEN_PLUGIN_EXECUTION",
             "JAVA_GRADLE_WRAPPER_INTEGRITY",
             "JAVA_GRADLE_PLUGIN_REPOSITORY",
             "JAVA_GRADLE_BUILD_LOGIC",

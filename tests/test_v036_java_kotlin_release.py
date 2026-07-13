@@ -3,7 +3,10 @@ import tomllib
 from pathlib import Path
 
 from codex_preflight_core import __version__ as core_version
+from codex_preflight_core.command.classifier import classify_command
+from codex_preflight_core.command.scope import CommandScope
 from codex_preflight_core.preflight import RULESET_VERSION, run_preflight
+from codex_preflight_core.repo.collector import collect_critical_files
 from codex_preflight_mcp import __version__ as mcp_version
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -29,7 +32,7 @@ def test_v036_version_sources_and_ruleset_are_aligned() -> None:
     assert mcp_version == VERSION
     assert root_plugin["version"] == VERSION
     assert marketplace_plugin["version"] == VERSION
-    assert RULESET_VERSION == "2026.07.13.1"
+    assert RULESET_VERSION == "2026.07.13.2"
 
 
 def test_v036_documentation_names_java_kotlin_coverage_and_static_boundary() -> None:
@@ -52,17 +55,20 @@ def test_v036_corpus_pins_active_and_clean_java_kotlin_surfaces() -> None:
     clean = ROOT / "case_corpus/java-kotlin-clean-minimal"
 
     case = (active / "case.yml").read_text(encoding="utf-8")
-    assert "mvn -f alternate.xml test" in case
-    assert "./gradlew -I config/bootstrap.gradle build" in case
-    assert "<executions>" in (active / "alternate.xml").read_text(encoding="utf-8")
-    assert "beforeSettings" in (active / "config/bootstrap.gradle").read_text(encoding="utf-8")
+    assert 'mvn -f "dir/my pom.xml" test' in case
+    assert './gradlew -I "config/my init.gradle" build' in case
+    assert "<executions>" in (active / "dir/my pom.xml").read_text(encoding="utf-8")
+    assert "beforeSettings" in (active / "config/my init.gradle").read_text(encoding="utf-8")
     report = run_preflight(
         active,
-        "mvn -f alternate.xml test && ./gradlew -I config/bootstrap.gradle build",
+        'mvn -f "dir/my pom.xml" test && ./gradlew -I "config/my init.gradle" build',
         use_cache=False,
     )
     graph_files = {node["file"] for node in report["executionGraph"]["nodes"] if node["file"]}
-    assert {"alternate.xml", "config/bootstrap.gradle"} <= graph_files
+    capability_files = {capability["file"] for capability in report["executionGraph"]["capabilities"]}
+    assert report["decision"] == "WARN"
+    assert {"dir/my pom.xml", "config/my init.gradle"} <= graph_files
+    assert {"dir/my pom.xml", "config/my init.gradle"} <= capability_files
     assert "includeBuild" in (active / "settings.gradle.kts").read_text(encoding="utf-8")
     assert "distributionSha256Sum" not in (active / "gradle/wrapper/gradle-wrapper.properties").read_text(
         encoding="utf-8"
@@ -70,3 +76,36 @@ def test_v036_corpus_pins_active_and_clean_java_kotlin_surfaces() -> None:
     assert "distributionSha256Sum" in (clean / "gradle/wrapper/gradle-wrapper.properties").read_text(
         encoding="utf-8"
     )
+
+
+def test_v036_release_gate_pins_gradle_project_and_settings_scope(tmp_path: Path) -> None:
+    (tmp_path / "sub" / "buildSrc").mkdir(parents=True)
+    (tmp_path / "other").mkdir()
+    (tmp_path / "sub" / "custom-settings.gradle").write_text(
+        "pluginManagement { repositories { gradlePluginPortal() } }\n", encoding="utf-8"
+    )
+    (tmp_path / "sub" / "build.gradle").write_text("plugins { id 'java' }\n", encoding="utf-8")
+    (tmp_path / "sub" / "buildSrc" / "build.gradle").write_text(
+        "plugins { id 'groovy' }\n", encoding="utf-8"
+    )
+    (tmp_path / "other" / "settings.gradle").write_text(
+        "pluginManagement { repositories { mavenCentral() } }\n", encoding="utf-8"
+    )
+    command = "gradle -p sub -c custom-settings.gradle test"
+
+    report = run_preflight(tmp_path, command, use_cache=False)
+    files = {node["file"] for node in report["executionGraph"]["nodes"] if node["file"]}
+    capabilities = {item["file"] for item in report["executionGraph"]["capabilities"]}
+
+    assert classify_command(command).scope == CommandScope.TEST
+    assert report["decision"] == "WARN"
+    assert Path("sub/custom-settings.gradle") in collect_critical_files(tmp_path, command=command)
+    assert "JAVA_GRADLE_PLUGIN_REPOSITORY" in {
+        finding["ruleId"] for finding in report["findings"]
+    }
+    assert files == {
+        "sub/build.gradle",
+        "sub/buildSrc/build.gradle",
+        "sub/custom-settings.gradle",
+    }
+    assert capabilities == {"sub/buildSrc/build.gradle", "sub/custom-settings.gradle"}

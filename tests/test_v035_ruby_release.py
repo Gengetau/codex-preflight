@@ -30,7 +30,7 @@ def test_v035_version_sources_and_ruleset_are_aligned() -> None:
     assert mcp_version == VERSION
     assert root_plugin["version"] == VERSION
     assert marketplace_plugin["version"] == VERSION
-    assert RULESET_VERSION == "2026.07.13.1"
+    assert RULESET_VERSION == "2026.07.13.2"
 
 
 def test_v035_user_documentation_names_ruby_coverage_and_static_boundary() -> None:
