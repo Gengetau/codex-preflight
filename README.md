@@ -151,7 +151,11 @@ trusted installation when an independent code-provenance boundary is required.
 Every required target file is opened through no-follow handles; symbolic links, reparse points,
 unsafe hard links, and repository escapes fail readiness. `HEAD` must equal the requested canonical
 commit, and every file actually consumed by diagnostics must content-match its tracked commit blob.
-Only the safe built-in CRLF-to-LF checkout conversion is accepted; repository filters are never run.
+The commit tree entry must be a regular `100644` or `100755` blob; symlink and submodule modes fail
+even when a checkout materializes them as ordinary files. One immutable no-follow byte snapshot is
+verified and then reused by all version, plugin, and inventory parsers. Only the safe built-in
+CRLF-to-LF checkout conversion is accepted; repository filters are never run. Dynamic namespace
+writes such as `globals()` and `exec` fail the strict static version/inventory contract.
 Index hints such as `assume-unchanged` and `skip-worktree` cannot hide drift. Git environment
 overrides are discarded, and the verifier does not call `git status` or repository fsmonitor hooks.
 Tag checks require annotated tags; lightweight tags fail. External checks reject redirects, cap response bytes,

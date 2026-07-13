@@ -42,14 +42,16 @@ def _runtime_inventory(_argv, environment) -> subprocess.CompletedProcess[str]:
 def _git(argv, cwd) -> subprocess.CompletedProcess[str]:
     if argv[-1] == "--show-toplevel":
         output = str(cwd)
-    elif ":" in argv[-1] and argv[-1].split(":", 1)[0] == HEAD:
-        relative_name = argv[-1].split(":", 1)[1]
+    elif argv[1] == "ls-tree":
+        relative_name = argv[-1]
         data = (cwd / relative_name).read_bytes()
         header = f"blob {len(data)}\0".encode("ascii")
-        output = hashlib.sha1(header + data).hexdigest()
+        object_id = hashlib.sha1(header + data).hexdigest()
+        output = f"100644 blob {object_id}\t{relative_name}\0"
     else:
         output = HEAD
-    return subprocess.CompletedProcess(args=list(argv), returncode=0, stdout=f"{output}\n", stderr="")
+    stdout = output if "\0" in output else f"{output}\n"
+    return subprocess.CompletedProcess(args=list(argv), returncode=0, stdout=stdout, stderr="")
 
 
 def test_v037_version_sources_plugin_copy_and_release_history_are_aligned() -> None:
@@ -90,7 +92,7 @@ def test_v037_release_gate_pins_clean_readiness_and_no_new_authority(tmp_path: P
     checks = {check["id"]: check for check in report["checks"]}
 
     assert report["schemaVersion"] == "release-readiness/v1"
-    assert report["ready"] is True
+    assert report["ready"] is True, [check for check in report["checks"] if check["status"] == "FAIL"]
     assert report["safety"]["mutating"] is False
     assert checks["repository.root"]["status"] == "PASS"
     assert checks["git.repository-commit"]["status"] == "PASS"

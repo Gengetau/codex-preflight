@@ -24,7 +24,9 @@ from codex_preflight_cli.release_diagnostics import (
 
 
 def _layout(root: Path, version: str = "0.3.7") -> None:
-    inventory_source = '''def tool_definitions():
+    inventory_source = '''import os
+
+def tool_definitions():
     tools = [{"name": "preflight_check"}, {"name": "corpus_scan"}]
     if remote_scan_enabled():
         tools.append({"name": "remote_repository_scan"})
@@ -91,6 +93,8 @@ def _git(
     *,
     head: str | None = None,
     blob_overrides: dict[str, bytes] | None = None,
+    tree_modes: dict[str, str] | None = None,
+    tree_types: dict[str, str] | None = None,
     annotated: bool = True,
     repository: bool = True,
     unknown_ref: str | None = None,
@@ -110,8 +114,8 @@ def _git(
         reference = arguments[-1]
         if unknown_ref is not None and reference.startswith(unknown_ref):
             return subprocess.CompletedProcess(args=arguments, returncode=128, stdout="", stderr="unknown ref")
-        if ":" in reference and reference.split(":", 1)[0] == expected:
-            relative_name = reference.split(":", 1)[1]
+        if arguments[1] == "ls-tree":
+            relative_name = reference
             try:
                 data = (blob_overrides or {}).get(relative_name)
                 if data is None:
@@ -120,7 +124,10 @@ def _git(
                 return subprocess.CompletedProcess(args=arguments, returncode=128, stdout="", stderr="missing blob")
             header = f"blob {len(data)}\0".encode("ascii")
             object_id = hashlib.sha1(header + data).hexdigest()
-            return subprocess.CompletedProcess(args=arguments, returncode=0, stdout=f"{object_id}\n", stderr="")
+            mode = (tree_modes or {}).get(relative_name, "100644")
+            object_type = (tree_types or {}).get(relative_name, "blob")
+            entry = f"{mode} {object_type} {object_id}\t{relative_name}\0"
+            return subprocess.CompletedProcess(args=arguments, returncode=0, stdout=entry, stderr="")
         if reference == "HEAD^{commit}" and head is not None:
             target = head
         else:
@@ -638,6 +645,65 @@ def test_commit_blob_binding_accepts_only_safe_crlf_checkout_conversion(tmp_path
     assert _checks(report)["git.repository-commit"]["status"] == "PASS"
 
 
+def test_all_content_checks_consume_the_same_verified_immutable_snapshot(tmp_path: Path) -> None:
+    _layout(tmp_path)
+    server = tmp_path / "codex_preflight_mcp/server.py"
+    delegate = _git()
+    mutated = False
+
+    def mutate_after_server_snapshot(argv, cwd):
+        nonlocal mutated
+        arguments = list(argv)
+        if arguments[1] == "ls-tree" and arguments[-1] == ".codex-plugin/plugin.json" and not mutated:
+            server.write_text('raise RuntimeError("replaced after snapshot")\n', encoding="utf-8")
+            mutated = True
+        return delegate(argv, cwd)
+
+    report = verify_release_readiness(
+        tmp_path,
+        expected_commit="a" * 40,
+        executable_finder=lambda _name: "git",
+        runtime_finder=lambda _name: object(),
+        git_runner=mutate_after_server_snapshot,
+        tool_runner=_runtime_ok,
+    )
+
+    assert mutated is True
+    assert server.read_text(encoding="utf-8").startswith("raise RuntimeError")
+    assert report["ready"] is True
+    assert _checks(report)["git.repository-commit"]["evidence"]["immutableSnapshot"] is True
+    assert _checks(report)["mcp.inventory.static"]["status"] == "PASS"
+
+
+@pytest.mark.parametrize(
+    ("mode", "object_type"),
+    (("120000", "blob"), ("160000", "commit")),
+)
+def test_commit_tree_rejects_non_regular_entries_materialized_as_files(
+    tmp_path: Path,
+    mode: str,
+    object_type: str,
+) -> None:
+    _layout(tmp_path)
+    relative_name = "codex_preflight_core/__init__.py"
+
+    report = verify_release_readiness(
+        tmp_path,
+        expected_commit="a" * 40,
+        executable_finder=lambda _name: "git",
+        runtime_finder=lambda _name: object(),
+        git_runner=_git(
+            tree_modes={relative_name: mode},
+            tree_types={relative_name: object_type},
+        ),
+        tool_runner=_runtime_ok,
+    )
+
+    check = _checks(report)["git.repository-commit"]
+    assert report["ready"] is False
+    assert check["evidence"]["invalidEntries"] == {relative_name: f"{mode} {object_type}"}
+
+
 def _commit_test_repository(root: Path) -> str:
     commands = (
         ("git", "-c", "core.longpaths=true", "init"),
@@ -787,6 +853,12 @@ def test_git_subprocess_scrubs_hostile_git_environment(tmp_path: Path, monkeypat
         lambda source: source + "\nif True:\n    remote_scan_enabled = lambda: True\n",
         lambda source: source + "\nif True:\n    tool_definitions = lambda: []\n",
         lambda source: source + "\nif True:\n    del trust_read_enabled\n",
+        lambda source: source + '\nglobals()["remote_scan_enabled"] = lambda: True\n',
+        lambda source: source + '\nexec("remote_scan_enabled = lambda: True")\n',
+        lambda source: source + '\nos.environ["CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN"] = "1"\n',
+        lambda source: source + '\nenv = os.environ\nenv.update(CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN="1")\n',
+        lambda source: source + '\nos.putenv("CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN", "1")\n',
+        lambda source: source + '\nfrom os import environ\nenviron["CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN"] = "1"\n',
     ],
 )
 def test_static_inventory_strict_ast_rejects_semantic_bypasses(tmp_path: Path, mutation) -> None:
@@ -839,6 +911,31 @@ def test_python_version_requires_one_top_level_literal_assignment(tmp_path: Path
     assert "codex_preflight_core/__init__.py" in _checks(duplicate)["version.sources"]["evidence"]["invalid"]
     assert "codex_preflight_core/__init__.py" in _checks(nested)["version.sources"]["evidence"]["invalid"]
     assert _checks(string_decoy)["version.sources"]["status"] == "PASS"
+
+
+@pytest.mark.parametrize(
+    "dynamic_write",
+    (
+        'globals()["__version__"] = "9.9.9"',
+        'exec("__version__ = \'9.9.9\'")',
+        '__builtins__["exec"]("__version__ = \'9.9.9\'")',
+    ),
+)
+def test_python_version_rejects_dynamic_global_writes(tmp_path: Path, dynamic_write: str) -> None:
+    _layout(tmp_path)
+    relative_name = "codex_preflight_core/__init__.py"
+    core = tmp_path / relative_name
+    core.write_text(f'__version__ = "0.3.7"\n{dynamic_write}\n', encoding="utf-8")
+
+    report = verify_release_readiness(
+        tmp_path,
+        executable_finder=lambda _name: "git",
+        runtime_finder=lambda _name: object(),
+        git_runner=_git(),
+        tool_runner=_runtime_ok,
+    )
+
+    assert relative_name in _checks(report)["version.sources"]["evidence"]["invalid"]
 
 
 def test_editable_self_runtime_overlap_fails_without_executing_probe(tmp_path: Path) -> None:

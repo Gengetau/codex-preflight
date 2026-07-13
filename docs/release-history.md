@@ -17,7 +17,8 @@ Deterministic release automation and supported-integration diagnostics:
   contracts, exact `HEAD` plus consumed-file commit-blob binding, scrubbed Git environment overrides,
   and verified runtime module provenance outside the target. The verifier avoids `git status` and
   repository fsmonitor or filter execution; safe CRLF checkout conversion is handled locally, while
-  blob binding detects index-hidden worktree drift.
+  regular tree modes and an immutable shared byte snapshot prevent symlink-mode, index-hidden, and
+  second-read drift. Dynamic namespace writes fail closed in version and inventory AST validation.
   Editable/self runtime overlap fails before probes start. Release tags must be annotated;
   GitHub checks reject redirects, cap response bytes, validate ref inputs, and require positive
   repository identification before branch deletion can pass. Markdown interpolations remain inert data.

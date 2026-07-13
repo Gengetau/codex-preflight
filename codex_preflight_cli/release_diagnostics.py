@@ -16,6 +16,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from importlib.util import find_spec
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 from codex_preflight_core.repo.safe_path import (
@@ -23,7 +24,6 @@ from codex_preflight_core.repo.safe_path import (
     hold_directory_nofollow,
     local_absolute_path,
     open_regular_file_nofollow,
-    read_text_file_nofollow,
 )
 
 SCHEMA_VERSION = "release-readiness/v1"
@@ -39,6 +39,13 @@ _REPOSITORY_COMPONENT = re.compile(r"^[A-Za-z0-9_.-]+$")
 _RELEASE_VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 _COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 _GIT_OBJECT_ID = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+_DYNAMIC_NAMESPACE_NAMES = frozenset(
+    {"__import__", "compile", "delattr", "eval", "exec", "globals", "locals", "setattr", "vars"}
+)
+_MAPPING_MUTATION_METHODS = frozenset(
+    {"__delitem__", "__setitem__", "clear", "pop", "popitem", "setdefault", "update"}
+)
+_OS_ENVIRONMENT_MUTATORS = frozenset({"putenv", "unsetenv"})
 _CONSUMED_TARGET_FILES = (
     "pyproject.toml",
     "codex_preflight_core/__init__.py",
@@ -83,6 +90,7 @@ class ReleaseCheck:
 GitRunner = Callable[[Sequence[str], Path], subprocess.CompletedProcess[str]]
 ToolRunner = Callable[[Sequence[str], Mapping[str, str]], subprocess.CompletedProcess[str]]
 GithubFetcher = Callable[[str], tuple[int, Mapping[str, Any] | None]]
+FileSnapshot = Mapping[str, bytes]
 
 
 def verify_release_readiness(
@@ -104,7 +112,6 @@ def verify_release_readiness(
     root = Path(os.path.abspath(root))
     run_git = git_runner or _run_git
     run_tool = tool_runner or _run_tool
-    version = expected_version or _project_version(root)
     checks: list[ReleaseCheck] = []
     checks.append(_check_python(python_version))
     git_path = executable_finder("git")
@@ -112,7 +119,7 @@ def verify_release_readiness(
     checks.append(_check_optional_mcp(runtime_finder))
     root_check = _check_target_root(root)
     checks.append(root_check)
-    commit, commit_check = _check_repository_commit(
+    commit, snapshot, commit_check = _check_repository_commit(
         root,
         expected_commit or "HEAD",
         run_git,
@@ -120,9 +127,10 @@ def verify_release_readiness(
         root_safe=root_check.passed,
     )
     checks.append(commit_check)
-    checks.append(_check_version_sources(root, version))
-    checks.append(_check_plugin_copy(root))
-    checks.append(_check_static_inventories(root))
+    version = expected_version or _project_version(snapshot)
+    checks.append(_check_version_sources(snapshot, version))
+    checks.append(_check_plugin_copy(snapshot))
+    checks.append(_check_static_inventories(snapshot))
     checks.append(
         _check_runtime_inventories(
             root,
@@ -189,9 +197,9 @@ def render_release_readiness_markdown(report: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _project_version(root: Path) -> str:
+def _project_version(snapshot: FileSnapshot) -> str:
     try:
-        return str(tomllib.loads(_read_text(root / "pyproject.toml"))["project"]["version"])
+        return _read_pyproject_version(snapshot["pyproject.toml"])
     except (OSError, KeyError, TypeError, ValueError, tomllib.TOMLDecodeError):
         return "unknown"
 
@@ -255,17 +263,18 @@ def _check_repository_commit(
     *,
     git_available: bool,
     root_safe: bool,
-) -> tuple[str | None, ReleaseCheck]:
+) -> tuple[str | None, FileSnapshot, ReleaseCheck]:
+    empty_snapshot: FileSnapshot = MappingProxyType({})
     remediation = "Pass an exact valid commit or ref in a Git repository rooted at --root."
     if not root_safe:
-        return None, ReleaseCheck(
+        return None, empty_snapshot, ReleaseCheck(
             "git.repository-commit",
             "FAIL",
             "Repository and commit resolution was skipped because the target root is unsafe.",
             remediation,
         )
     if not git_available:
-        return None, ReleaseCheck(
+        return None, empty_snapshot, ReleaseCheck(
             "git.repository-commit",
             "FAIL",
             "Repository and commit resolution requires Git on PATH.",
@@ -282,7 +291,7 @@ def _check_repository_commit(
             root,
         )
     except (OSError, subprocess.SubprocessError) as error:
-        return None, ReleaseCheck(
+        return None, empty_snapshot, ReleaseCheck(
             "git.repository-commit",
             "FAIL",
             f"Read-only repository resolution failed with {type(error).__name__}.",
@@ -304,7 +313,7 @@ def _check_repository_commit(
         or not _COMMIT_SHA.fullmatch(head_commit)
         or head_commit != commit
     ):
-        return None, ReleaseCheck(
+        return None, empty_snapshot, ReleaseCheck(
             "git.repository-commit",
             "FAIL",
             "The target root and HEAD must match the requested commit/ref.",
@@ -318,24 +327,31 @@ def _check_repository_commit(
 
     mismatched: list[str] = []
     invalid: list[str] = []
+    invalid_entries: dict[str, str] = {}
+    snapshot: dict[str, bytes] = {}
     for relative_name in _CONSUMED_TARGET_FILES:
         try:
             result = runner(
-                ("git", "rev-parse", "--verify", "--end-of-options", f"{commit}:{relative_name}"),
+                ("git", "ls-tree", "-z", "--full-tree", commit, "--", relative_name),
                 root,
             )
-            object_id = result.stdout.strip().lower()
+            mode, object_type, object_id, entry_path = _parse_git_tree_entry(result.stdout)
             data = _read_bytes(root / relative_name)
-        except (OSError, SafePathError, subprocess.SubprocessError):
+        except (OSError, SafePathError, subprocess.SubprocessError, ValueError):
             invalid.append(relative_name)
             continue
-        if result.returncode != 0 or not _GIT_OBJECT_ID.fullmatch(object_id):
+        if result.returncode != 0 or not _GIT_OBJECT_ID.fullmatch(object_id) or entry_path != relative_name:
             invalid.append(relative_name)
+            continue
+        if object_type != "blob" or mode not in {"100644", "100755"}:
+            invalid_entries[relative_name] = f"{mode} {object_type}"
             continue
         if not _git_blob_matches(data, object_id):
             mismatched.append(relative_name)
-    if invalid or mismatched:
-        return None, ReleaseCheck(
+            continue
+        snapshot[relative_name] = data
+    if invalid or invalid_entries or mismatched:
+        return None, empty_snapshot, ReleaseCheck(
             "git.repository-commit",
             "FAIL",
             "One or more consumed target files do not match the requested commit blobs.",
@@ -345,10 +361,12 @@ def _check_repository_commit(
                 "canonicalCommit": commit,
                 "headCommit": head_commit,
                 "invalidFiles": sorted(invalid),
+                "invalidEntries": dict(sorted(invalid_entries.items())),
                 "mismatchedFiles": sorted(mismatched),
             },
         )
-    return commit, ReleaseCheck(
+    immutable_snapshot: FileSnapshot = MappingProxyType(snapshot)
+    return commit, immutable_snapshot, ReleaseCheck(
         "git.repository-commit",
         "PASS",
         "HEAD equals the requested canonical commit and every consumed file matches its commit blob.",
@@ -356,9 +374,23 @@ def _check_repository_commit(
             "canonicalCommit": commit,
             "headCommit": head_commit,
             "consumedFilesMatchedCommit": True,
+            "consumedFileModes": "regular-blob-only",
+            "immutableSnapshot": True,
             "consumedFiles": list(_CONSUMED_TARGET_FILES),
         },
     )
+
+
+def _parse_git_tree_entry(value: str) -> tuple[str, str, str, str]:
+    entries = value.removesuffix("\0").split("\0") if value else []
+    if len(entries) != 1 or "\t" not in entries[0]:
+        raise ValueError("expected one exact tree entry")
+    metadata, path = entries[0].split("\t", 1)
+    fields = metadata.split()
+    if len(fields) != 3:
+        raise ValueError("invalid tree entry metadata")
+    mode, object_type, object_id = fields
+    return mode, object_type, object_id.lower(), path
 
 
 def _git_blob_id(data: bytes, object_id_length: int) -> str:
@@ -387,23 +419,22 @@ def _check_optional_mcp(runtime_finder: Callable[[str], object | None]) -> Relea
     )
 
 
-def _check_version_sources(root: Path, expected: str) -> ReleaseCheck:
+def _check_version_sources(snapshot: FileSnapshot, expected: str) -> ReleaseCheck:
     values: dict[str, str] = {}
     errors: list[str] = []
-    readers: tuple[tuple[str, Path, Callable[[Path], str]], ...] = (
-        ("pyproject.toml", root / "pyproject.toml", _read_pyproject_version),
-        ("codex_preflight_core/__init__.py", root / "codex_preflight_core/__init__.py", _read_init_version),
-        ("codex_preflight_mcp/__init__.py", root / "codex_preflight_mcp/__init__.py", _read_init_version),
-        (".codex-plugin/plugin.json", root / ".codex-plugin/plugin.json", _read_manifest_version),
+    readers: tuple[tuple[str, Callable[[bytes], str]], ...] = (
+        ("pyproject.toml", _read_pyproject_version),
+        ("codex_preflight_core/__init__.py", _read_init_version),
+        ("codex_preflight_mcp/__init__.py", _read_init_version),
+        (".codex-plugin/plugin.json", _read_manifest_version),
         (
             ".agents/plugins/plugins/codex-preflight/.codex-plugin/plugin.json",
-            root / ".agents/plugins/plugins/codex-preflight/.codex-plugin/plugin.json",
             _read_manifest_version,
         ),
     )
-    for name, path, reader in readers:
+    for name, reader in readers:
         try:
-            values[name] = reader(path)
+            values[name] = reader(snapshot[name])
         except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError, tomllib.TOMLDecodeError):
             errors.append(name)
     mismatched = sorted(name for name, value in values.items() if value != expected)
@@ -425,7 +456,7 @@ def _check_version_sources(root: Path, expected: str) -> ReleaseCheck:
     return ReleaseCheck("version.sources", "PASS", f"All five version sources equal {expected}.", evidence=values)
 
 
-def _check_plugin_copy(root: Path) -> ReleaseCheck:
+def _check_plugin_copy(snapshot: FileSnapshot) -> ReleaseCheck:
     pairs = (
         (".codex-plugin/plugin.json", ".agents/plugins/plugins/codex-preflight/.codex-plugin/plugin.json"),
         (".mcp.json", ".agents/plugins/plugins/codex-preflight/.mcp.json"),
@@ -434,8 +465,8 @@ def _check_plugin_copy(root: Path) -> ReleaseCheck:
     stale: list[str] = []
     for source_name, destination_name in pairs:
         try:
-            matches = _read_bytes(root / source_name) == _read_bytes(root / destination_name)
-        except (OSError, SafePathError):
+            matches = snapshot[source_name] == snapshot[destination_name]
+        except KeyError:
             matches = False
         if not matches:
             stale.append(destination_name)
@@ -450,10 +481,10 @@ def _check_plugin_copy(root: Path) -> ReleaseCheck:
     return ReleaseCheck("plugin.copy", "PASS", "All three marketplace plugin-copy files match their sources.")
 
 
-def _check_static_inventories(root: Path) -> ReleaseCheck:
+def _check_static_inventories(snapshot: FileSnapshot) -> ReleaseCheck:
     try:
-        groups = _parse_target_inventory_groups(_read_text(root / "codex_preflight_mcp/server.py"))
-    except (OSError, SafePathError, SyntaxError, ValueError):
+        groups = _parse_target_inventory_groups(_snapshot_text(snapshot, "codex_preflight_mcp/server.py"))
+    except (KeyError, UnicodeError, SyntaxError, ValueError):
         return ReleaseCheck(
             "mcp.inventory.static",
             "FAIL",
@@ -577,6 +608,7 @@ def _check_runtime_inventories(
 
 def _parse_target_inventory_groups(source: str) -> dict[str, tuple[str, ...]]:
     module = ast.parse(source)
+    _reject_dynamic_namespace_mutation(module, protect_os=True)
     functions = [
         node for node in module.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         and node.name == "tool_definitions"
@@ -1066,12 +1098,13 @@ def _github_fetch(path: str) -> tuple[int, Mapping[str, Any] | None]:
         raise OSError("GitHub API response was unavailable") from error
 
 
-def _read_pyproject_version(path: Path) -> str:
-    return str(tomllib.loads(_read_text(path))["project"]["version"])
+def _read_pyproject_version(data: bytes) -> str:
+    return str(tomllib.loads(data.decode("utf-8"))["project"]["version"])
 
 
-def _read_init_version(path: Path) -> str:
-    module = ast.parse(_read_text(path))
+def _read_init_version(data: bytes) -> str:
+    module = ast.parse(data.decode("utf-8"))
+    _reject_dynamic_namespace_mutation(module)
     if _recursive_binding_count(module, "__version__") != 1:
         raise ValueError("version must have one assignment")
     bindings = [statement for statement in module.body if _statement_binds_name(statement, "__version__")]
@@ -1140,6 +1173,79 @@ def _recursive_binding_count(module: ast.Module, name: str) -> int:
     return count
 
 
+def _reject_dynamic_namespace_mutation(
+    module: ast.Module,
+    *,
+    protect_os: bool = False,
+) -> None:
+    if protect_os:
+        os_imports = [
+            alias
+            for statement in module.body
+            if isinstance(statement, ast.Import)
+            for alias in statement.names
+            if alias.name == "os" and alias.asname is None
+        ]
+        if len(os_imports) != 1 or _recursive_binding_count(module, "os") != 1:
+            raise ValueError("os dependency must have one direct import")
+        if any(
+            isinstance(node, ast.ImportFrom) and node.module == "os"
+            or isinstance(node, ast.alias) and node.name == "os" and node.asname is not None
+            for node in ast.walk(module)
+        ):
+            raise ValueError("os dependency aliases are not allowed")
+
+    for node in ast.walk(module):
+        if isinstance(node, ast.Name) and node.id in _DYNAMIC_NAMESPACE_NAMES | {"__builtins__"}:
+            raise ValueError("dynamic namespace access is not allowed")
+        if isinstance(node, ast.alias) and node.name == "builtins":
+            raise ValueError("builtins namespace access is not allowed")
+        if isinstance(node, ast.Attribute) and node.attr in {"__dict__", "__globals__"}:
+            raise ValueError("dynamic namespace attributes are not allowed")
+        if (
+            isinstance(node, ast.Attribute)
+            and node.attr == "modules"
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "sys"
+        ):
+            raise ValueError("sys.modules namespace access is not allowed")
+        if protect_os and isinstance(node, (ast.Attribute, ast.Subscript)):
+            if isinstance(node.ctx, (ast.Store, ast.Del)) and _ast_contains_name(node, "os"):
+                raise ValueError("os dependency mutation is not allowed")
+        if (
+            protect_os
+            and isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr))
+            and _is_os_environ(node.value)
+        ):
+            raise ValueError("environment aliases are not allowed")
+        if (
+            protect_os
+            and isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and (
+                node.func.attr in _OS_ENVIRONMENT_MUTATORS
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "os"
+                or node.func.attr in _MAPPING_MUTATION_METHODS
+                and _is_os_environ(node.func.value)
+            )
+        ):
+            raise ValueError("environment mutation is not allowed")
+
+
+def _ast_contains_name(node: ast.AST, name: str) -> bool:
+    return any(isinstance(item, ast.Name) and item.id == name for item in ast.walk(node))
+
+
+def _is_os_environ(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Attribute)
+        and node.attr == "environ"
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "os"
+    )
+
+
 def _statement_binds_name(statement: ast.stmt, name: str) -> bool:
     if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
         return statement.name == name
@@ -1162,12 +1268,12 @@ def _target_binds_name(target: ast.AST, name: str) -> bool:
     return False
 
 
-def _read_manifest_version(path: Path) -> str:
-    return str(json.loads(_read_text(path))["version"])
+def _read_manifest_version(data: bytes) -> str:
+    return str(json.loads(data.decode("utf-8"))["version"])
 
 
-def _read_text(path: Path) -> str:
-    return read_text_file_nofollow(path, max_bytes=MAX_DIAGNOSTIC_FILE_SIZE)
+def _snapshot_text(snapshot: FileSnapshot, name: str) -> str:
+    return snapshot[name].decode("utf-8")
 
 
 def _read_bytes(path: Path) -> bytes:

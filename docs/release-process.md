@@ -47,8 +47,10 @@ installation whose resolved module path is outside the target; editable/self ove
 probe starts. This proves filesystem separation, not independent provenance for a package built from
 the target. The target must be the exact Git worktree root and `HEAD` must equal the requested
 canonical commit. Every file consumed by diagnostics is read no-follow and content-matched against
-its tracked commit blob, accepting only safe CRLF-to-LF checkout conversion and never running a
-repository filter. Thus `assume-unchanged` and `skip-worktree` cannot hide drift. Git environment
+its tracked regular-blob commit entry. Symlink/submodule modes fail even if materialized as files.
+All downstream parsing uses the same immutable verified byte snapshot, eliminating a second-read
+window. Only safe CRLF-to-LF conversion is accepted; repository filters never run. Dynamic global
+writes fail the strict AST contract. Thus `assume-unchanged` and `skip-worktree` cannot hide drift. Git environment
 overrides are discarded, `git status` and repository fsmonitor hooks are not invoked, and a supplied
 release tag must be annotated.
 
