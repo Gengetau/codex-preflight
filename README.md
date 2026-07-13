@@ -143,6 +143,15 @@ you explicitly want bounded, read-only tag, published Release, and branch-cleanu
 JSON output uses the stable `release-readiness/v1` schema. Repository and GitHub evidence remains
 untrusted data.
 
+The target checkout is never added to `PYTHONPATH`, imported, or executed. Target MCP inventories
+are derived with bounded static parsing, while subprocess inventory probes run the already trusted
+Codex Preflight installation with safe-path isolation. Every required target file is opened through
+no-follow handles; symbolic links, reparse points, unsafe hard links, and repository escapes fail
+readiness. The Git root and requested ref must resolve to an exact canonical commit. Tag checks
+require annotated tags; lightweight tags fail. External checks require valid option combinations
+and positive public-repository identification before a branch `404` can mean deletion. Markdown
+output encodes every interpolated value as data.
+
 ## Codex Plugin Usage
 
 Codex Preflight remains a Python CLI project and is also packaged as a Codex plugin that bundles

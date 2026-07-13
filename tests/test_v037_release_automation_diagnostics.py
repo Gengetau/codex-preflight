@@ -33,8 +33,9 @@ def _runtime_inventory(_argv, environment) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _git(argv, _cwd) -> subprocess.CompletedProcess[str]:
-    return subprocess.CompletedProcess(args=list(argv), returncode=0, stdout=f"{HEAD}\n", stderr="")
+def _git(argv, cwd) -> subprocess.CompletedProcess[str]:
+    output = str(cwd) if argv[-1] == "--show-toplevel" else HEAD
+    return subprocess.CompletedProcess(args=list(argv), returncode=0, stdout=f"{output}\n", stderr="")
 
 
 def test_v037_version_sources_plugin_copy_and_release_history_are_aligned() -> None:
@@ -69,6 +70,8 @@ def test_v037_release_gate_pins_clean_readiness_and_no_new_authority() -> None:
     assert report["schemaVersion"] == "release-readiness/v1"
     assert report["ready"] is True
     assert report["safety"]["mutating"] is False
+    assert checks["repository.root"]["status"] == "PASS"
+    assert checks["git.repository-commit"]["status"] == "PASS"
     assert checks["mcp.inventory.static"]["status"] == "PASS"
     assert checks["mcp.inventory.runtime"]["status"] == "PASS"
     assert checks["github.release-target"]["status"] == "SKIP"
@@ -85,6 +88,9 @@ def test_v037_docs_and_protected_ci_pin_read_only_release_verification() -> None
         assert "never" in document.lower() or "does not" in document.lower()
     assert "--github-repo OWNER/NAME" in process
     assert "--merged-branch" in process
+    assert "never added to `PYTHONPATH`" in readme
+    assert "must be annotated" in process
+    assert "positively identify" in process
     assert "--expected-version 0.3.7" in workflow
     assert "--expected-commit HEAD" in workflow
 

@@ -13,6 +13,10 @@ Deterministic release automation and supported-integration diagnostics:
   never installed automatically; missing MCP support reports the exact supported install command.
 - Added explicit, bounded, read-only helpers for local tag targets, published GitHub Release
   targets, and merged-branch cleanup. Repository and remote evidence remains untrusted data.
+- Hardened the diagnostic boundary so target checkouts are never imported or executed, all target
+  files use no-follow reads, Git refs resolve canonically, release tags must be annotated, GitHub
+  branch deletion requires positive repository identification, option dependencies fail closed,
+  and Markdown interpolations remain inert data.
 - Added clean, drift, stale-state, missing-integration, read-only failure, and Windows/Linux
   path/process regression coverage while preserving existing CLI, plugin, report, and MCP
   authority boundaries.

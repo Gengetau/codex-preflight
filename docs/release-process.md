@@ -41,6 +41,10 @@ branches, trust records, cache entries, credentials, artifacts, or repository fi
 installs an optional dependency. A missing MCP runtime is a `SKIP` with the supported remediation:
 `python -m pip install "codex-preflight[mcp]"`. Local verification checks all version sources,
 plugin copies, supported integrations, and all eight exact static and runtime MCP inventories.
+The target checkout is read through bounded no-follow handles and static parsers; it is never added
+to `PYTHONPATH`, imported, or executed. Runtime inventory probes use only the already trusted
+Codex Preflight installation. The target must be the exact Git worktree root, the requested ref
+must resolve to a canonical commit, and a supplied release tag must be annotated.
 
 External verification is opt-in, bounded to the public GitHub API, and read-only:
 
@@ -58,6 +62,9 @@ codex-preflight release verify \
 Use the external form only after publishing the Release and deleting the merged branch. Treat all
 remote and repository evidence as untrusted data. A mismatch or unavailable read-only integration
 must stop closeout; never move an existing tag to make a diagnostic pass.
+`--merged-branch` requires `--github-repo`; `--github-repo` requires at least `--tag` or
+`--merged-branch`. Repository metadata must positively identify an accessible public repository
+before a branch `404` is accepted as deletion.
 
 Run optional MCP runtime validation for releases that touch MCP packaging or runtime behavior:
 
