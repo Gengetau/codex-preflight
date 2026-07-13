@@ -15,9 +15,14 @@ RUBY_RULE_IDS = (
 
 _GIT_SOURCE = re.compile(r"(?:\bgit\s*:|\bgithub\s*:|^\s*git\s*\()")
 _LOCAL_PATH_SOURCE = re.compile(r"(?:\bpath\s*:|^\s*path\s*\()")
+_GIT_BLOCK_SOURCE = re.compile(r"^\s*git\s+['\"]")
+_LOCAL_PATH_BLOCK_SOURCE = re.compile(r"^\s*path\s+['\"]")
 _GEMSPEC_EXTENSION = re.compile(r"\.extensions?\s*(?:=|<<)")
 _INSTALL_HOOK = re.compile(r"\bGem\.(?:pre|post)_(?:install|uninstall)\b")
 _RAKE_COMMAND = re.compile(r"(?:^\s*(?:sh|ruby)\s+|\b(?:system|exec|spawn)\s*\(|`[^`]+`)")
+_RAKE_COMMAND_NO_PARENS = re.compile(
+    r"(?:^\s*|[;=]\s*|\b(?:if|unless|while|until)\s+|\bKernel\.)(?:system|exec|spawn)\s+['\"]"
+)
 
 
 class RubyEcosystemRule:
@@ -42,9 +47,22 @@ def _scan_bundler_file(relative_path: Path, text: str) -> list[Finding]:
         git_line = next(((number, line) for number, line in active if line.strip() == "GIT"), None)
         path_line = next(((number, line) for number, line in active if line.strip() == "PATH"), None)
     else:
-        git_line = next(((number, line) for number, line in active if _GIT_SOURCE.search(_mask_strings(line))), None)
+        git_line = next(
+            (
+                (number, line)
+                for number, line in active
+                if _GIT_SOURCE.search(_mask_strings(line))
+                or _GIT_BLOCK_SOURCE.search(_mask_string_contents(line))
+            ),
+            None,
+        )
         path_line = next(
-            ((number, line) for number, line in active if _LOCAL_PATH_SOURCE.search(_mask_strings(line))),
+            (
+                (number, line)
+                for number, line in active
+                if _LOCAL_PATH_SOURCE.search(_mask_strings(line))
+                or _LOCAL_PATH_BLOCK_SOURCE.search(_mask_string_contents(line))
+            ),
             None,
         )
     findings: list[Finding] = []
@@ -109,7 +127,12 @@ def _scan_gemspec(relative_path: Path, text: str) -> list[Finding]:
 
 def _scan_rakefile(relative_path: Path, text: str) -> list[Finding]:
     command = next(
-        ((number, line) for number, line in _active_lines(text) if _RAKE_COMMAND.search(_mask_strings(line))),
+        (
+            (number, line)
+            for number, line in _active_lines(text)
+            if _RAKE_COMMAND.search(_mask_strings(line))
+            or _RAKE_COMMAND_NO_PARENS.search(_mask_string_contents(line))
+        ),
         None,
     )
     if not command:
@@ -187,6 +210,14 @@ def _strip_comment(line: str) -> str:
 
 
 def _mask_strings(line: str) -> str:
+    return _mask_string_text(line, preserve_delimiters=False)
+
+
+def _mask_string_contents(line: str) -> str:
+    return _mask_string_text(line, preserve_delimiters=True)
+
+
+def _mask_string_text(line: str, *, preserve_delimiters: bool) -> str:
     masked: list[str] = []
     quote: str | None = None
     escaped = False
@@ -201,7 +232,7 @@ def _mask_strings(line: str) -> str:
             continue
         if char in {"'", '"'}:
             quote = None if quote == char else char if quote is None else quote
-            masked.append(" ")
+            masked.append(char if preserve_delimiters else " ")
             continue
         masked.append(" " if quote else char)
     return "".join(masked)

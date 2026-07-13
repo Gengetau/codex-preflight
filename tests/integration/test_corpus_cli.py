@@ -99,6 +99,7 @@ EXPECTED_CASES = {
         [
             "RUBY_BUNDLER_GIT_SOURCE",
             "RUBY_BUNDLER_LOCAL_PATH_SOURCE",
+            "RUBY_BUNDLER_LOCAL_PATH_SOURCE",
             "RUBY_RAKE_COMMAND_EXEC",
             "RUBY_GEMSPEC_EXTENSION",
             "RUBY_INSTALL_HOOK",

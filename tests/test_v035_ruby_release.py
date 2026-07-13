@@ -47,3 +47,13 @@ def test_v035_user_documentation_names_ruby_coverage_and_static_boundary() -> No
     assert "Ruby, Bundler, Rake" in corpus
     assert history.startswith("# Release History\n\n## v0.3.5")
     assert "does not run Ruby, Bundler, Rake" in history
+
+
+def test_v035_release_corpus_covers_no_parentheses_ruby_calls() -> None:
+    gemfile = (ROOT / "case_corpus/ruby-bundler-rake-native/Gemfile").read_text(encoding="utf-8")
+    rakefile = (ROOT / "case_corpus/ruby-bundler-rake-native/Rakefile").read_text(encoding="utf-8")
+
+    assert 'git "https://example.invalid/reviewed.git" do' in gemfile
+    assert 'path "../local-gem" do' in gemfile
+    for method in ("system", "exec", "spawn"):
+        assert f'{method} "' in rakefile

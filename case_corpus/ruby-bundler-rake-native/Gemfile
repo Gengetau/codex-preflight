@@ -1,2 +1,7 @@
 source "https://example.invalid/gems"
-gem "reviewed", git: "https://example.invalid/reviewed.git", branch: "main"
+git "https://example.invalid/reviewed.git" do
+  gem "reviewed"
+end
+path "../local-gem" do
+  gem "local-gem"
+end

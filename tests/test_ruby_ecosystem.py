@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from codex_preflight_core.preflight import run_preflight
 
 
@@ -101,6 +103,44 @@ def test_bundle_install_reaches_gemspec_and_native_extension_configuration(tmp_p
     assert {"Gemfile", "demo.gemspec", "ext/demo/extconf.rb"} <= graph_files(report)
 
 
+@pytest.mark.parametrize(
+    ("method", "rule_id"),
+    [
+        ("git", "RUBY_BUNDLER_GIT_SOURCE"),
+        ("path", "RUBY_BUNDLER_LOCAL_PATH_SOURCE"),
+    ],
+)
+def test_bundle_install_detects_no_parentheses_block_sources(
+    tmp_path: Path,
+    method: str,
+    rule_id: str,
+) -> None:
+    (tmp_path / "Gemfile").write_text(
+        f'{method} "../source" do\n  gem "demo"\nend\n',
+        encoding="utf-8",
+    )
+
+    report = run_preflight(tmp_path, "bundle install", use_cache=False)
+
+    assert report["decision"] == "WARN"
+    assert rule_ids(report) == [rule_id]
+    assert capability_ids(report) == [rule_id]
+
+
+@pytest.mark.parametrize("method", ["system", "exec", "spawn"])
+def test_rake_detects_no_parentheses_command_calls(tmp_path: Path, method: str) -> None:
+    (tmp_path / "Rakefile").write_text(
+        f'task :build do\n  {method} "./scripts/build"\nend\n',
+        encoding="utf-8",
+    )
+
+    report = run_preflight(tmp_path, "rake build", use_cache=False)
+
+    assert report["decision"] == "WARN"
+    assert rule_ids(report) == ["RUBY_RAKE_COMMAND_EXEC"]
+    assert capability_ids(report) == ["RUBY_RAKE_COMMAND_EXEC"]
+
+
 def test_clean_ruby_project_allows_rake_test(tmp_path: Path) -> None:
     (tmp_path / "Gemfile").write_text(
         'source "https://rubygems.org"\ngem "rake", "~> 13.0"\n',
@@ -143,13 +183,39 @@ def test_commented_ruby_indicators_remain_clean(tmp_path: Path) -> None:
 
 
 def test_ruby_indicator_words_inside_strings_remain_clean(tmp_path: Path) -> None:
-    (tmp_path / "Gemfile").write_text('gem "path: not-a-source"\n', encoding="utf-8")
+    (tmp_path / "Gemfile").write_text(
+        'gem "path: not-a-source"\n'
+        'puts \'git "https://example.invalid/not-a-source.git" do\'\n'
+        'puts \'path "../not-a-source" do\'\n',
+        encoding="utf-8",
+    )
     (tmp_path / "Rakefile").write_text(
-        'task :test do\n  puts "system(\\"not called\\")"\nend\n',
+        "task :test do\n"
+        '  puts \'system "not called"\'\n'
+        '  puts \'exec "not called"\'\n'
+        '  puts \'spawn "not called"\'\n'
+        "end\n",
         encoding="utf-8",
     )
     (tmp_path / "demo.gemspec").write_text(
         'Gem::Specification.new { |spec| spec.summary = "Gem.post_install and spec.extensions =" }\n',
+        encoding="utf-8",
+    )
+
+    report = run_preflight(tmp_path, "bundle exec rake test", use_cache=False)
+
+    assert report["decision"] == "ALLOW"
+    assert rule_ids(report) == []
+    assert capability_ids(report) == []
+
+
+def test_no_parentheses_ruby_indicators_inside_comments_remain_clean(tmp_path: Path) -> None:
+    (tmp_path / "Gemfile").write_text(
+        '# git "https://example.invalid/disabled.git" do\n# path "../disabled" do\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "Rakefile").write_text(
+        '# system "disabled"\n# exec "disabled"\n# spawn "disabled"\n',
         encoding="utf-8",
     )
 

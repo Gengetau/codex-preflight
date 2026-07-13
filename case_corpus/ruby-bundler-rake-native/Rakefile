@@ -1,3 +1,5 @@
 task :install do
-  sh "ruby ext/demo/extconf.rb"
+  system "ruby ext/demo/extconf.rb"
+  exec "./scripts/replace-process"
+  spawn "./scripts/background"
 end
