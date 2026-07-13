@@ -9,8 +9,12 @@ from typer.testing import CliRunner
 
 from codex_preflight_cli.main import app
 from codex_preflight_cli.release_diagnostics import (
+    MAX_GITHUB_RESPONSE_SIZE,
     MCP_INSTALL_COMMAND,
     OPTIONAL_FLAGS,
+    _github_fetch,
+    _NoRedirect,
+    _run_git,
     render_release_readiness_markdown,
     verify_release_readiness,
 )
@@ -26,6 +30,15 @@ def _layout(root: Path, version: str = "0.3.7") -> None:
     if trust_mutation_enabled():
         tools.extend([{"name": "trust_approve"}, {"name": "trust_revoke"}])
     return tools
+
+def remote_scan_enabled():
+    return os.environ.get("CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN") == "1"
+
+def trust_read_enabled():
+    return os.environ.get("CODEX_PREFLIGHT_ENABLE_TRUST_READ") == "1"
+
+def trust_mutation_enabled():
+    return os.environ.get("CODEX_PREFLIGHT_ENABLE_TRUST_MUTATION") == "1"
 '''
     files = {
         "pyproject.toml": f'[project]\nname = "codex-preflight"\nversion = "{version}"\n',
@@ -64,13 +77,17 @@ def _expected_inventory(environment: dict[str, str]) -> list[str]:
 
 def _runtime_ok(_argv, environment) -> subprocess.CompletedProcess[str]:
     tools = [{"name": name} for name in _expected_inventory(dict(environment))]
-    return subprocess.CompletedProcess(args=[], returncode=0, stdout=json.dumps(tools), stderr="")
+    module_file = Path(environment["PYTHONPATH"]) / "codex_preflight_mcp" / "server.py"
+    payload = {"moduleFile": str(module_file), "tools": tools}
+    return subprocess.CompletedProcess(args=[], returncode=0, stdout=json.dumps(payload), stderr="")
 
 
 def _git(
     expected: str = "a" * 40,
     tag_target: str | None = None,
     *,
+    head: str | None = None,
+    dirty: str = "",
     annotated: bool = True,
     repository: bool = True,
     unknown_ref: str | None = None,
@@ -87,10 +104,15 @@ def _git(
         if arguments[1:3] == ["cat-file", "-t"]:
             kind = "tag" if annotated else "commit"
             return subprocess.CompletedProcess(args=arguments, returncode=0, stdout=f"{kind}\n", stderr="")
+        if arguments[1] == "status":
+            return subprocess.CompletedProcess(args=arguments, returncode=0, stdout=dirty, stderr="")
         reference = arguments[-1]
         if unknown_ref is not None and reference.startswith(unknown_ref):
             return subprocess.CompletedProcess(args=arguments, returncode=128, stdout="", stderr="unknown ref")
-        target = tag_target if reference.startswith("v0.3.7") and tag_target is not None else expected
+        if reference == "HEAD^{commit}" and head is not None:
+            target = head
+        else:
+            target = tag_target if reference.startswith("v0.3.7") and tag_target is not None else expected
         return subprocess.CompletedProcess(args=arguments, returncode=0, stdout=f"{target}\n", stderr="")
 
     return run
@@ -175,7 +197,11 @@ def test_runtime_inventory_drift_is_reported(tmp_path: Path) -> None:
     _layout(tmp_path)
 
     def drift(_argv, _environment) -> subprocess.CompletedProcess[str]:
-        return subprocess.CompletedProcess(args=[], returncode=0, stdout='[{"name":"unexpected"}]', stderr="")
+        payload = {
+            "moduleFile": str(Path(_environment["PYTHONPATH"]) / "codex_preflight_mcp" / "server.py"),
+            "tools": [{"name": "unexpected"}],
+        }
+        return subprocess.CompletedProcess(args=[], returncode=0, stdout=json.dumps(payload), stderr="")
 
     report = verify_release_readiness(
         tmp_path,
@@ -428,7 +454,7 @@ def test_process_invocations_are_argument_lists_and_support_space_paths(tmp_path
     assert git_calls[0][1] == root.resolve()
     assert git_calls[0][0] == ["git", "rev-parse", "--show-toplevel"]
     assert len(tool_calls) == 8
-    assert all(call[-4:] == ["-P", "-m", "codex_preflight_mcp.server", "--list-tools"] for call in tool_calls)
+    assert all(call[1:3] == ["-P", "-c"] for call in tool_calls)
     assert all(
         environment["PYTHONSAFEPATH"] == "1"
         and str(root.resolve()) not in environment["PYTHONPATH"]
@@ -539,6 +565,164 @@ def test_non_repository_and_unknown_ref_fail_canonical_commit_gate(tmp_path: Pat
         assert _checks(report)["git.repository-commit"]["status"] == "FAIL"
 
 
+@pytest.mark.parametrize(
+    "git_runner",
+    [
+        _git(head="b" * 40),
+        _git(dirty=" M codex_preflight_core/__init__.py\n"),
+        _git(dirty="?? untracked-release-input\n"),
+    ],
+)
+def test_repository_snapshot_requires_expected_head_and_clean_worktree(tmp_path: Path, git_runner) -> None:
+    _layout(tmp_path)
+
+    report = verify_release_readiness(
+        tmp_path,
+        expected_commit="a" * 40,
+        executable_finder=lambda _name: "git",
+        runtime_finder=lambda _name: object(),
+        git_runner=git_runner,
+        tool_runner=_runtime_ok,
+    )
+
+    check = _checks(report)["git.repository-commit"]
+    assert report["ready"] is False
+    assert report["expectedCommit"] is None
+    assert check["status"] == "FAIL"
+
+
+def test_git_subprocess_scrubs_hostile_git_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, str] = {}
+
+    def fake_run(*_args, **kwargs):
+        captured.update(kwargs["env"])
+        return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+    monkeypatch.setenv("GIT_DIR", str(tmp_path / "other.git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(tmp_path / "other"))
+    monkeypatch.setenv("GIT_OBJECT_DIRECTORY", str(tmp_path / "objects"))
+    monkeypatch.setenv("GIT_ALTERNATE_OBJECT_DIRECTORIES", str(tmp_path / "alternate"))
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    _run_git(("git", "status", "--porcelain=v1"), tmp_path)
+
+    assert not any(name.startswith("GIT_") for name in captured if name not in {
+        "GIT_NO_LAZY_FETCH", "GIT_OPTIONAL_LOCKS", "GIT_TERMINAL_PROMPT"
+    })
+    assert captured["GIT_OPTIONAL_LOCKS"] == "0"
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda source: source.replace(
+            "    if remote_scan_enabled():",
+            "    return tools\n    if remote_scan_enabled():",
+            1,
+        ),
+        lambda source: source.replace("    return tools\n\ndef remote_scan_enabled", "\ndef remote_scan_enabled", 1),
+        lambda source: source.replace(
+            '        tools.append({"name": "remote_repository_scan"})',
+            '        tools.append({"name": "remote_repository_scan"})\n        tools.clear()',
+            1,
+        ),
+        lambda source: source.replace(
+            '    return os.environ.get("CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN") == "1"',
+            "    return True",
+            1,
+        ),
+        lambda source: source + "\nremote_scan_enabled = lambda: True\n",
+    ],
+)
+def test_static_inventory_strict_ast_rejects_semantic_bypasses(tmp_path: Path, mutation) -> None:
+    _layout(tmp_path)
+    server = tmp_path / "codex_preflight_mcp/server.py"
+    server.write_text(mutation(server.read_text(encoding="utf-8")), encoding="utf-8")
+
+    report = verify_release_readiness(
+        tmp_path,
+        executable_finder=lambda _name: "git",
+        runtime_finder=lambda _name: object(),
+        git_runner=_git(),
+        tool_runner=_runtime_ok,
+    )
+
+    assert _checks(report)["mcp.inventory.static"]["status"] == "FAIL"
+
+
+def test_python_version_requires_one_top_level_literal_assignment(tmp_path: Path) -> None:
+    _layout(tmp_path)
+    core = tmp_path / "codex_preflight_core/__init__.py"
+    core.write_text('__version__ = "0.3.7"\n__version__ = "9.9.9"\n', encoding="utf-8")
+
+    duplicate = verify_release_readiness(
+        tmp_path,
+        executable_finder=lambda _name: "git",
+        runtime_finder=lambda _name: object(),
+        git_runner=_git(),
+        tool_runner=_runtime_ok,
+    )
+
+    core.write_text('fake = \'__version__ = "9.9.9"\'\n__version__ = "0.3.7"\n', encoding="utf-8")
+    string_decoy = verify_release_readiness(
+        tmp_path,
+        executable_finder=lambda _name: "git",
+        runtime_finder=lambda _name: object(),
+        git_runner=_git(),
+        tool_runner=_runtime_ok,
+    )
+
+    assert "codex_preflight_core/__init__.py" in _checks(duplicate)["version.sources"]["evidence"]["invalid"]
+    assert _checks(string_decoy)["version.sources"]["status"] == "PASS"
+
+
+def test_editable_self_runtime_overlap_fails_without_executing_probe(tmp_path: Path) -> None:
+    _layout(tmp_path)
+    called = False
+
+    def forbidden(_argv, _environment):
+        nonlocal called
+        called = True
+        raise AssertionError("overlapping target must not be executed")
+
+    report = verify_release_readiness(
+        tmp_path,
+        executable_finder=lambda _name: "git",
+        runtime_finder=lambda _name: object(),
+        git_runner=_git(),
+        tool_runner=forbidden,
+        trusted_package_root=tmp_path,
+    )
+
+    check = _checks(report)["mcp.inventory.runtime"]
+    assert called is False
+    assert check["status"] == "FAIL"
+    assert check["evidence"] == {"provenanceVerified": False, "overlapsTarget": True}
+
+
+def test_runtime_probe_rejects_module_provenance_inside_target(tmp_path: Path) -> None:
+    _layout(tmp_path)
+    trusted_root = Path(__file__).resolve().parents[1]
+
+    def spoofed(_argv, environment):
+        tools = [{"name": name} for name in _expected_inventory(dict(environment))]
+        payload = {"moduleFile": str(tmp_path / "codex_preflight_mcp/server.py"), "tools": tools}
+        return subprocess.CompletedProcess(args=[], returncode=0, stdout=json.dumps(payload), stderr="")
+
+    report = verify_release_readiness(
+        tmp_path,
+        executable_finder=lambda _name: "git",
+        runtime_finder=lambda _name: object(),
+        git_runner=_git(),
+        tool_runner=spoofed,
+        trusted_package_root=trusted_root,
+    )
+
+    check = _checks(report)["mcp.inventory.runtime"]
+    assert check["status"] == "FAIL"
+    assert len(check["evidence"]["failures"]) == 8
+
+
 def test_noncanonical_expected_version_fails_closed(tmp_path: Path) -> None:
     _layout(tmp_path)
     report = verify_release_readiness(
@@ -587,6 +771,121 @@ def test_incomplete_external_option_combinations_fail_without_network(
 
     assert report["ready"] is False
     assert expected_detail in _checks(report)["options.external"]["detail"]
+
+
+@pytest.mark.parametrize("branch", ["", "-option", "bad branch", "bad..branch", ".hidden", "topic.lock"])
+def test_empty_or_invalid_merged_branch_fails_before_network(tmp_path: Path, branch: str) -> None:
+    _layout(tmp_path)
+
+    def unexpected(_path: str):
+        raise AssertionError("network must not be called")
+
+    report = verify_release_readiness(
+        tmp_path,
+        github_repo="Gengetau/codex-preflight",
+        merged_branch=branch,
+        executable_finder=lambda _name: "git",
+        runtime_finder=lambda _name: object(),
+        git_runner=_git(),
+        tool_runner=_runtime_ok,
+        github_fetcher=unexpected,
+    )
+
+    assert report["ready"] is False
+    assert "canonical Git branch" in _checks(report)["options.external"]["detail"]
+
+
+@pytest.mark.parametrize("repository", ["./repo", "../repo", f"{'a' * 40}/repo", "owner/.."])
+def test_invalid_repository_components_fail_before_network(tmp_path: Path, repository: str) -> None:
+    _layout(tmp_path)
+
+    def unexpected(_path: str):
+        raise AssertionError("network must not be called")
+
+    report = verify_release_readiness(
+        tmp_path,
+        github_repo=repository,
+        merged_branch="codex/merged",
+        executable_finder=lambda _name: "git",
+        runtime_finder=lambda _name: object(),
+        git_runner=_git(),
+        tool_runner=_runtime_ok,
+        github_fetcher=unexpected,
+    )
+
+    assert report["ready"] is False
+    assert _checks(report)["options.external"]["status"] == "FAIL"
+
+
+def test_github_fetch_caps_response_before_json_parsing(monkeypatch: pytest.MonkeyPatch) -> None:
+    reads: list[int] = []
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def geturl(self):
+            return "https://api.github.com/repos/owner/repo"
+
+        def read(self, size: int):
+            reads.append(size)
+            return b"x" * size
+
+    class Opener:
+        def open(self, _request, timeout):
+            assert timeout == 10
+            return Response()
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *_handlers: Opener())
+
+    with pytest.raises(OSError):
+        _github_fetch("/repos/owner/repo")
+
+    assert reads == [MAX_GITHUB_RESPONSE_SIZE + 1]
+
+
+def test_github_fetch_disables_redirects_and_rejects_off_host_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handlers: list[object] = []
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def geturl(self):
+            return "https://attacker.invalid/redirected"
+
+        def read(self, _size: int):
+            raise AssertionError("off-host response must be rejected before reading")
+
+    class Opener:
+        def open(self, _request, timeout):
+            assert timeout == 10
+            return Response()
+
+    def build_opener(*provided):
+        handlers.extend(provided)
+        return Opener()
+
+    monkeypatch.setattr("urllib.request.build_opener", build_opener)
+
+    with pytest.raises(OSError):
+        _github_fetch("/repos/owner/repo")
+
+    assert len(handlers) == 1
+    assert isinstance(handlers[0], _NoRedirect)
+    assert handlers[0].redirect_request(None, None, 302, "Found", {}, "https://attacker.invalid") is None
 
 
 @pytest.mark.parametrize(

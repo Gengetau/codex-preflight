@@ -41,10 +41,13 @@ branches, trust records, cache entries, credentials, artifacts, or repository fi
 installs an optional dependency. A missing MCP runtime is a `SKIP` with the supported remediation:
 `python -m pip install "codex-preflight[mcp]"`. Local verification checks all version sources,
 plugin copies, supported integrations, and all eight exact static and runtime MCP inventories.
-The target checkout is read through bounded no-follow handles and static parsers; it is never added
-to `PYTHONPATH`, imported, or executed. Runtime inventory probes use only the already trusted
-Codex Preflight installation. The target must be the exact Git worktree root, the requested ref
-must resolve to a canonical commit, and a supplied release tag must be annotated.
+The target checkout is read through bounded no-follow handles and strict static parsers, and is never
+added to a runtime probe's `PYTHONPATH`. Runtime probes require a non-editable Codex Preflight
+installation whose resolved module path is outside the target; editable/self overlap fails before a
+probe starts. This proves filesystem separation, not independent provenance for a package built from
+the target. The target must be the exact clean Git worktree root, `HEAD` must equal the
+requested canonical commit, Git environment overrides are discarded, and a supplied release tag
+must be annotated.
 
 External verification is opt-in, bounded to the public GitHub API, and read-only:
 
@@ -64,12 +67,13 @@ remote and repository evidence as untrusted data. A mismatch or unavailable read
 must stop closeout; never move an existing tag to make a diagnostic pass.
 `--merged-branch` requires `--github-repo`; `--github-repo` requires at least `--tag` or
 `--merged-branch`. Repository metadata must positively identify an accessible public repository
-before a branch `404` is accepted as deletion.
+before a branch `404` is accepted as deletion. Repository and branch components are validated before
+network access, redirects are rejected, and every GitHub response is size bounded.
 
 Run optional MCP runtime validation for releases that touch MCP packaging or runtime behavior:
 
 ```bash
-python -m pip install -e ".[dev,mcp]"
+python -m pip install ".[dev,mcp]"
 python -m pytest tests/test_mcp_runtime_smoke.py -q
 codex-preflight-mcp --list-tools
 ```

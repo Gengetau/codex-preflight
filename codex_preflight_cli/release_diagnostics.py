@@ -28,16 +28,20 @@ from codex_preflight_core.repo.safe_path import (
 SCHEMA_VERSION = "release-readiness/v1"
 MCP_INSTALL_COMMAND = 'python -m pip install "codex-preflight[mcp]"'
 MAX_DIAGNOSTIC_FILE_SIZE = 2 * 1024 * 1024
+MAX_GITHUB_RESPONSE_SIZE = 1024 * 1024
 OPTIONAL_FLAGS = (
     "CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN",
     "CODEX_PREFLIGHT_ENABLE_TRUST_READ",
     "CODEX_PREFLIGHT_ENABLE_TRUST_MUTATION",
 )
-_REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+_REPOSITORY_COMPONENT = re.compile(r"^[A-Za-z0-9_.-]+$")
 _RELEASE_VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 _COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
-_VERSION = re.compile(r'^__version__\s*=\s*["\']([^"\']+)["\']', re.MULTILINE)
 _TRUSTED_PACKAGE_ROOT = Path(__file__).resolve().parents[1]
+_RUNTIME_PROBE = (
+    "import json; import codex_preflight_mcp.server as server; "
+    "print(json.dumps({'moduleFile': server.__file__, 'tools': server.tool_definitions()}))"
+)
 
 
 @dataclass(frozen=True)
@@ -81,6 +85,7 @@ def verify_release_readiness(
     git_runner: GitRunner | None = None,
     tool_runner: ToolRunner | None = None,
     github_fetcher: GithubFetcher | None = None,
+    trusted_package_root: Path | None = None,
 ) -> dict[str, Any]:
     root = Path(os.path.abspath(root))
     run_git = git_runner or _run_git
@@ -104,7 +109,13 @@ def verify_release_readiness(
     checks.append(_check_version_sources(root, version))
     checks.append(_check_plugin_copy(root))
     checks.append(_check_static_inventories(root))
-    checks.append(_check_runtime_inventories(run_tool))
+    checks.append(
+        _check_runtime_inventories(
+            root,
+            run_tool,
+            trusted_package_root or _TRUSTED_PACKAGE_ROOT,
+        )
+    )
     checks.append(_check_tag(root, tag, version, commit, run_git, git_path is not None))
     option_check = _check_external_options(github_repo, tag, merged_branch)
     checks.append(option_check)
@@ -252,6 +263,14 @@ def _check_repository_commit(
             ("git", "rev-parse", "--verify", "--end-of-options", f"{requested}^{{commit}}"),
             root,
         )
+        head = runner(
+            ("git", "rev-parse", "--verify", "--end-of-options", "HEAD^{commit}"),
+            root,
+        )
+        status = runner(
+            ("git", "status", "--porcelain=v1", "--untracked-files=all"),
+            root,
+        )
     except (OSError, subprocess.SubprocessError) as error:
         return None, ReleaseCheck(
             "git.repository-commit",
@@ -265,19 +284,35 @@ def _check_repository_commit(
         same_root = os.path.normcase(str(exact_root)) == os.path.normcase(str(root))
     except (OSError, SafePathError, ValueError):
         same_root = False
-    if top.returncode != 0 or resolved.returncode != 0 or not same_root or not _COMMIT_SHA.fullmatch(commit):
+    head_commit = head.stdout.strip().lower()
+    clean = status.returncode == 0 and not status.stdout
+    if (
+        top.returncode != 0
+        or resolved.returncode != 0
+        or head.returncode != 0
+        or not same_root
+        or not _COMMIT_SHA.fullmatch(commit)
+        or not _COMMIT_SHA.fullmatch(head_commit)
+        or head_commit != commit
+        or not clean
+    ):
         return None, ReleaseCheck(
             "git.repository-commit",
             "FAIL",
-            "The target is not the exact Git worktree root or the requested commit/ref is unresolved.",
-            remediation,
-            {"requested": requested, "canonicalCommit": None},
+            "The target must be the exact clean Git worktree at the requested commit/ref.",
+            "Check out the expected commit, remove tracked and untracked changes, and retry from the worktree root.",
+            {
+                "requested": requested,
+                "canonicalCommit": commit if _COMMIT_SHA.fullmatch(commit) else None,
+                "headCommit": head_commit if _COMMIT_SHA.fullmatch(head_commit) else None,
+                "clean": clean,
+            },
         )
     return commit, ReleaseCheck(
         "git.repository-commit",
         "PASS",
-        "The exact Git worktree root and requested commit/ref resolved canonically.",
-        evidence={"canonicalCommit": commit},
+        "The exact Git worktree is clean and HEAD equals the requested canonical commit.",
+        evidence={"canonicalCommit": commit, "headCommit": head_commit, "clean": True},
     )
 
 
@@ -388,22 +423,54 @@ def _check_static_inventories(root: Path) -> ReleaseCheck:
     return ReleaseCheck("mcp.inventory.static", "PASS", "All eight static MCP inventories match exactly.")
 
 
-def _check_runtime_inventories(runner: ToolRunner) -> ReleaseCheck:
+def _check_runtime_inventories(
+    target_root: Path,
+    runner: ToolRunner,
+    trusted_package_root: Path,
+) -> ReleaseCheck:
+    remediation = (
+        "Install Codex Preflight non-editably outside the target checkout and invoke release verification "
+        "from that separate installation."
+    )
+    try:
+        trusted_root = trusted_package_root.resolve(strict=True)
+        target = target_root.resolve(strict=True)
+    except OSError:
+        return ReleaseCheck(
+            "mcp.inventory.runtime",
+            "FAIL",
+            "The trusted runtime package root could not be resolved.",
+            remediation,
+        )
+    if _path_is_within(trusted_root, target):
+        return ReleaseCheck(
+            "mcp.inventory.runtime",
+            "FAIL",
+            "The runtime package overlaps the target checkout, so no runtime probe was executed.",
+            remediation,
+            {"provenanceVerified": False, "overlapsTarget": True},
+        )
     mismatches: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
+    module_files: set[str] = set()
     for flags, expected in _inventory_matrix():
-        environment = dict(os.environ)
+        environment = {
+            name: value
+            for name, value in os.environ.items()
+            if not name.upper().startswith("PYTHON")
+        }
         for name in OPTIONAL_FLAGS:
             environment.pop(name, None)
         for name, enabled in zip(OPTIONAL_FLAGS, flags, strict=True):
             if enabled:
                 environment[name] = "1"
         environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        environment["PYTHONNOUSERSITE"] = "1"
         environment["PYTHONSAFEPATH"] = "1"
-        environment["PYTHONPATH"] = str(_TRUSTED_PACKAGE_ROOT)
+        environment["PYTHONPATH"] = str(trusted_root)
         try:
             result = runner(
-                (sys.executable, "-P", "-m", "codex_preflight_mcp.server", "--list-tools"),
+                (sys.executable, "-P", "-c", _RUNTIME_PROBE),
                 environment,
             )
         except (OSError, subprocess.SubprocessError) as error:
@@ -413,20 +480,43 @@ def _check_runtime_inventories(runner: ToolRunner) -> ReleaseCheck:
             failures.append({"flags": list(flags), "exitCode": result.returncode})
             continue
         try:
-            actual = [item["name"] for item in json.loads(result.stdout)]
-        except (json.JSONDecodeError, KeyError, TypeError):
+            payload = json.loads(result.stdout)
+            module_file = Path(payload["moduleFile"]).resolve(strict=True)
+            tools = payload["tools"]
+            actual = [item["name"] for item in tools]
+            provenance_valid = _path_is_within(module_file, trusted_root) and not _path_is_within(
+                module_file,
+                target,
+            )
+        except (json.JSONDecodeError, KeyError, OSError, TypeError):
             actual = []
+            provenance_valid = False
+            module_file = None
+        if not provenance_valid:
+            failures.append({"flags": list(flags), "error": "untrusted-module-provenance"})
+            continue
+        module_files.add(str(module_file))
         if actual != expected:
             mismatches.append({"flags": list(flags), "expected": expected, "actual": actual})
     if failures or mismatches:
         return ReleaseCheck(
             "mcp.inventory.runtime",
             "FAIL",
-            "One or more runtime MCP inventory probes failed or drifted.",
-            "Run `python -m codex_preflight_mcp.server --list-tools` for each supported authority combination.",
+            "One or more runtime MCP inventory probes failed, drifted, or used untrusted module provenance.",
+            remediation,
             {"failures": failures, "mismatches": mismatches},
         )
-    return ReleaseCheck("mcp.inventory.runtime", "PASS", "All eight runtime MCP inventories match exactly.")
+    return ReleaseCheck(
+        "mcp.inventory.runtime",
+        "PASS",
+        "All eight runtime MCP inventories match with verified module provenance outside the target.",
+        evidence={
+            "provenanceVerified": True,
+            "overlapsTarget": False,
+            "runtimePackageRoot": str(trusted_root),
+            "moduleFiles": sorted(module_files),
+        },
+    )
 
 
 def _parse_target_inventory_groups(source: str) -> dict[str, tuple[str, ...]]:
@@ -437,52 +527,130 @@ def _parse_target_inventory_groups(source: str) -> dict[str, tuple[str, ...]]:
     ]
     if len(functions) != 1:
         raise ValueError("tool_definitions must be unique")
+    if _top_level_binding_count(module, "tool_definitions") != 1:
+        raise ValueError("tool_definitions must not be rebound")
     function = functions[0]
-    groups: dict[str, tuple[str, ...]] = {}
-    conditional_names = {
-        "remote_scan_enabled": "remote",
-        "trust_read_enabled": "trust_read",
-        "trust_mutation_enabled": "trust_mutation",
-    }
-    for statement in function.body:
-        if isinstance(statement, ast.Assign):
-            if len(statement.targets) != 1 or not isinstance(statement.targets[0], ast.Name):
-                raise ValueError("unexpected inventory assignment")
-            if statement.targets[0].id != "tools" or "base" in groups:
-                raise ValueError("unexpected inventory assignment")
-            groups["base"] = _inventory_names(statement.value)
-        elif isinstance(statement, ast.If):
-            if not isinstance(statement.test, ast.Call) or statement.test.args or statement.test.keywords:
-                raise ValueError("dynamic inventory condition")
-            if not isinstance(statement.test.func, ast.Name):
-                raise ValueError("dynamic inventory condition")
-            group = conditional_names.get(statement.test.func.id)
-            if group is None or group in groups or statement.orelse:
-                raise ValueError("unexpected inventory condition")
-            groups[group] = _inventory_names(statement)
-        elif isinstance(statement, ast.Return):
-            if not isinstance(statement.value, ast.Name) or statement.value.id != "tools":
-                raise ValueError("unexpected inventory return")
-        else:
-            raise ValueError("unexpected inventory statement")
-    if set(groups) != {"base", "remote", "trust_read", "trust_mutation"}:
-        raise ValueError("incomplete inventory groups")
+    if isinstance(function, ast.AsyncFunctionDef) or function.decorator_list or function.args.args:
+        raise ValueError("unexpected tool_definitions signature")
+    if function.args.posonlyargs or function.args.kwonlyargs or function.args.vararg or function.args.kwarg:
+        raise ValueError("unexpected tool_definitions signature")
+    if len(function.body) != 5:
+        raise ValueError("tool_definitions must contain exactly five ordered statements")
+
+    assignment, *conditions, returned = function.body
+    if (
+        not isinstance(assignment, ast.Assign)
+        or len(assignment.targets) != 1
+        or not isinstance(assignment.targets[0], ast.Name)
+        or assignment.targets[0].id != "tools"
+    ):
+        raise ValueError("unexpected inventory assignment")
+    if not isinstance(returned, ast.Return) or not isinstance(returned.value, ast.Name):
+        raise ValueError("tool_definitions must end with return tools")
+    if returned.value.id != "tools":
+        raise ValueError("tool_definitions must end with return tools")
+
+    groups = {"base": _inventory_collection_names(assignment.value)}
+    expected_conditions = (
+        ("remote_scan_enabled", "remote", "append"),
+        ("trust_read_enabled", "trust_read", "append"),
+        ("trust_mutation_enabled", "trust_mutation", "extend"),
+    )
+    for statement, (helper, group, method) in zip(conditions, expected_conditions, strict=True):
+        groups[group] = _parse_inventory_condition(statement, helper, method)
+    for (helper, _group, _method), flag in zip(expected_conditions, OPTIONAL_FLAGS, strict=True):
+        _validate_enablement_helper(module, helper, flag)
     return groups
 
 
-def _inventory_names(node: ast.AST) -> tuple[str, ...]:
-    names: list[str] = []
-    for candidate in ast.walk(node):
-        if not isinstance(candidate, ast.Dict):
-            continue
-        for key, value in zip(candidate.keys, candidate.values, strict=True):
-            if isinstance(key, ast.Constant) and key.value == "name":
-                if not isinstance(value, ast.Constant) or not isinstance(value.value, str):
-                    raise ValueError("dynamic tool name")
-                names.append(value.value)
+def _parse_inventory_condition(statement: ast.stmt, helper: str, method: str) -> tuple[str, ...]:
+    if not isinstance(statement, ast.If) or statement.orelse:
+        raise ValueError("unexpected inventory condition")
+    if not isinstance(statement.test, ast.Call) or statement.test.args or statement.test.keywords:
+        raise ValueError("dynamic inventory condition")
+    if not isinstance(statement.test.func, ast.Name) or statement.test.func.id != helper:
+        raise ValueError("unexpected inventory condition")
+    if len(statement.body) != 1 or not isinstance(statement.body[0], ast.Expr):
+        raise ValueError("unexpected inventory condition body")
+    call = statement.body[0].value
+    if not isinstance(call, ast.Call) or len(call.args) != 1 or call.keywords:
+        raise ValueError("unexpected inventory mutation")
+    if not isinstance(call.func, ast.Attribute) or call.func.attr != method:
+        raise ValueError("unexpected inventory mutation")
+    if not isinstance(call.func.value, ast.Name) or call.func.value.id != "tools":
+        raise ValueError("unexpected inventory mutation")
+    argument = call.args[0]
+    if method == "append":
+        return (_inventory_dict_name(argument),)
+    return _inventory_collection_names(argument)
+
+
+def _inventory_collection_names(node: ast.AST) -> tuple[str, ...]:
+    if not isinstance(node, ast.List):
+        raise ValueError("inventory collection must be a literal list")
+    names = [_inventory_dict_name(item) for item in node.elts]
     if not names or len(names) != len(set(names)):
         raise ValueError("missing or duplicate tool names")
     return tuple(names)
+
+
+def _inventory_dict_name(node: ast.AST) -> str:
+    if not isinstance(node, ast.Dict):
+        raise ValueError("inventory item must be a dictionary literal")
+    _validate_inventory_literal(node)
+    names: list[str] = []
+    for key, value in zip(node.keys, node.values, strict=True):
+        if isinstance(key, ast.Constant) and key.value == "name":
+            if not isinstance(value, ast.Constant) or not isinstance(value.value, str):
+                raise ValueError("dynamic tool name")
+            names.append(value.value)
+    if len(names) != 1:
+        raise ValueError("inventory item must have one literal name")
+    return names[0]
+
+
+def _validate_inventory_literal(node: ast.AST) -> None:
+    if isinstance(node, ast.Constant):
+        return
+    if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+        return
+    if isinstance(node, (ast.List, ast.Tuple)):
+        for item in node.elts:
+            _validate_inventory_literal(item)
+        return
+    if isinstance(node, ast.Dict):
+        for key, value in zip(node.keys, node.values, strict=True):
+            if key is None:
+                raise ValueError("inventory dictionary unpacking is not allowed")
+            _validate_inventory_literal(key)
+            _validate_inventory_literal(value)
+        return
+    raise ValueError("dynamic inventory literal expression")
+
+
+def _validate_enablement_helper(module: ast.Module, name: str, flag: str) -> None:
+    functions = [
+        node
+        for node in module.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name
+    ]
+    if len(functions) != 1:
+        raise ValueError("enablement helper must be unique")
+    if _top_level_binding_count(module, name) != 1:
+        raise ValueError("enablement helper must not be rebound")
+    function = functions[0]
+    if isinstance(function, ast.AsyncFunctionDef):
+        raise ValueError("enablement helper must be synchronous")
+    if function.decorator_list or function.args.args or function.args.posonlyargs or function.args.kwonlyargs:
+        raise ValueError("unexpected enablement helper signature")
+    if function.args.vararg or function.args.kwarg or len(function.body) != 1:
+        raise ValueError("unexpected enablement helper signature")
+    statement = function.body[0]
+    if not isinstance(statement, ast.Return):
+        raise ValueError("enablement helper must contain one return")
+    expected = ast.parse(f'os.environ.get("{flag}") == "1"', mode="eval").body
+    if ast.dump(statement.value, include_attributes=False) != ast.dump(expected, include_attributes=False):
+        raise ValueError("enablement helper semantics drifted")
 
 
 def _check_tag(
@@ -546,12 +714,19 @@ def _check_external_options(
             "--merged-branch requires --github-repo.",
             "Add `--github-repo OWNER/NAME` or remove `--merged-branch`.",
         )
-    if github_repo is not None and not _REPOSITORY.fullmatch(github_repo):
+    if github_repo is not None and not _valid_repository(github_repo):
         return ReleaseCheck(
             "options.external",
             "FAIL",
             "The GitHub repository must use exact owner/name syntax.",
             "Pass a public GitHub repository as `--github-repo OWNER/NAME`.",
+        )
+    if merged_branch is not None and not _valid_branch(merged_branch):
+        return ReleaseCheck(
+            "options.external",
+            "FAIL",
+            "The merged branch must be a non-empty canonical Git branch name.",
+            "Pass the exact merged branch name without ref syntax, whitespace, or invalid Git characters.",
         )
     if github_repo is not None and tag is None and merged_branch is None:
         return ReleaseCheck(
@@ -773,8 +948,14 @@ def _inventory_matrix() -> tuple[tuple[tuple[bool, bool, bool], list[str]], ...]
 
 
 def _run_git(argv: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
-    environment = dict(os.environ)
+    environment = {
+        name: value
+        for name, value in os.environ.items()
+        if not name.upper().startswith("GIT_")
+    }
     environment["GIT_NO_LAZY_FETCH"] = "1"
+    environment["GIT_OPTIONAL_LOCKS"] = "0"
+    environment["GIT_TERMINAL_PROMPT"] = "0"
     return subprocess.run(
         list(argv),
         cwd=cwd,
@@ -797,17 +978,26 @@ def _run_tool(argv: Sequence[str], environment: Mapping[str, str]) -> subprocess
     )
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001, ANN201
+        return None
+
+
 def _github_fetch(path: str) -> tuple[int, Mapping[str, Any] | None]:
     url = f"https://api.github.com{path}"
     request = urllib.request.Request(
         url,
         headers={"Accept": "application/vnd.github+json", "User-Agent": "codex-preflight-release-verify"},
     )
+    opener = urllib.request.build_opener(_NoRedirect())
     try:
-        with urllib.request.urlopen(request, timeout=10) as response:
+        with opener.open(request, timeout=10) as response:
             if urllib.parse.urlparse(response.geturl()).hostname != "api.github.com":
                 raise OSError("unexpected GitHub API redirect")
-            payload = json.loads(response.read().decode("utf-8"))
+            body = response.read(MAX_GITHUB_RESPONSE_SIZE + 1)
+            if len(body) > MAX_GITHUB_RESPONSE_SIZE:
+                raise OSError("GitHub API response exceeded the safety limit")
+            payload = json.loads(body.decode("utf-8"))
             return response.status, payload if isinstance(payload, dict) else None
     except urllib.error.HTTPError as error:
         if error.code == 404:
@@ -822,10 +1012,85 @@ def _read_pyproject_version(path: Path) -> str:
 
 
 def _read_init_version(path: Path) -> str:
-    match = _VERSION.search(_read_text(path))
-    if match is None:
-        raise ValueError("missing version")
-    return match.group(1)
+    module = ast.parse(_read_text(path))
+    bindings = [statement for statement in module.body if _statement_binds_name(statement, "__version__")]
+    if len(bindings) != 1 or not isinstance(bindings[0], ast.Assign):
+        raise ValueError("version must have one top-level assignment")
+    assignment = bindings[0]
+    if len(assignment.targets) != 1 or not isinstance(assignment.targets[0], ast.Name):
+        raise ValueError("version assignment must be simple")
+    value = assignment.value
+    if not isinstance(value, ast.Constant) or not isinstance(value.value, str):
+        raise ValueError("version assignment must be a literal string")
+    return value.value
+
+
+def _valid_repository(value: str) -> bool:
+    parts = value.split("/")
+    if len(parts) != 2:
+        return False
+    owner, repository = parts
+    return (
+        1 <= len(owner) <= 39
+        and 1 <= len(repository) <= 100
+        and owner not in {".", ".."}
+        and repository not in {".", ".."}
+        and _REPOSITORY_COMPONENT.fullmatch(owner) is not None
+        and _REPOSITORY_COMPONENT.fullmatch(repository) is not None
+    )
+
+
+def _valid_branch(value: str) -> bool:
+    if not value or value != value.strip() or len(value) > 255:
+        return False
+    if value.startswith("-"):
+        return False
+    if value in {"@", ".", ".."} or value.startswith(("/", ".")) or value.endswith(("/", ".")):
+        return False
+    if "//" in value or ".." in value or "@{" in value:
+        return False
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        return False
+    if any(character in " ~^:?*[\\" for character in value):
+        return False
+    return all(
+        component and not component.startswith(".") and not component.endswith(".lock")
+        for component in value.split("/")
+    )
+
+
+def _path_is_within(candidate: Path, container: Path) -> bool:
+    try:
+        common = os.path.commonpath((str(candidate), str(container)))
+    except ValueError:
+        return False
+    return os.path.normcase(common) == os.path.normcase(str(container))
+
+
+def _top_level_binding_count(module: ast.Module, name: str) -> int:
+    return sum(_statement_binds_name(statement, name) for statement in module.body)
+
+
+def _statement_binds_name(statement: ast.stmt, name: str) -> bool:
+    if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return statement.name == name
+    if isinstance(statement, ast.Assign):
+        return any(_target_binds_name(target, name) for target in statement.targets)
+    if isinstance(statement, (ast.AnnAssign, ast.AugAssign)):
+        return _target_binds_name(statement.target, name)
+    if isinstance(statement, (ast.Import, ast.ImportFrom)):
+        return any((alias.asname or alias.name.split(".")[0]) == name for alias in statement.names)
+    return False
+
+
+def _target_binds_name(target: ast.AST, name: str) -> bool:
+    if isinstance(target, ast.Name):
+        return target.id == name
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return any(_target_binds_name(item, name) for item in target.elts)
+    if isinstance(target, ast.Starred):
+        return _target_binds_name(target.value, name)
+    return False
 
 
 def _read_manifest_version(path: Path) -> str:

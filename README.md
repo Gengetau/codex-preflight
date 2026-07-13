@@ -143,14 +143,17 @@ you explicitly want bounded, read-only tag, published Release, and branch-cleanu
 JSON output uses the stable `release-readiness/v1` schema. Repository and GitHub evidence remains
 untrusted data.
 
-The target checkout is never added to `PYTHONPATH`, imported, or executed. Target MCP inventories
-are derived with bounded static parsing, while subprocess inventory probes run the already trusted
-Codex Preflight installation with safe-path isolation. Every required target file is opened through
-no-follow handles; symbolic links, reparse points, unsafe hard links, and repository escapes fail
-readiness. The Git root and requested ref must resolve to an exact canonical commit. Tag checks
-require annotated tags; lightweight tags fail. External checks require valid option combinations
-and positive public-repository identification before a branch `404` can mean deletion. Markdown
-output encodes every interpolated value as data.
+The target checkout is never added to a runtime probe's `PYTHONPATH`. Runtime probes are allowed only
+when the active Codex Preflight package resolves outside the target checkout; an editable/self
+installation fails readiness before a probe starts. This proves filesystem separation, not that a
+package built from the target has independent provenance. Invoke the command from a separately
+trusted installation when an independent code-provenance boundary is required.
+Every required target file is opened through no-follow handles; symbolic links, reparse points,
+unsafe hard links, and repository escapes fail readiness. The worktree must be clean, `HEAD` must
+equal the requested canonical commit, and Git environment overrides are discarded. Tag checks
+require annotated tags; lightweight tags fail. External checks reject redirects, cap response bytes,
+validate repository and branch names, and positively identify the public repository before a branch
+`404` can mean deletion. Markdown output encodes every interpolated value as data.
 
 ## Codex Plugin Usage
 
