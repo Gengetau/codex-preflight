@@ -45,9 +45,11 @@ The target checkout is read through bounded no-follow handles and strict static 
 added to a runtime probe's `PYTHONPATH`. Runtime probes require a non-editable Codex Preflight
 installation whose resolved module path is outside the target; editable/self overlap fails before a
 probe starts. This proves filesystem separation, not independent provenance for a package built from
-the target. The target must be the exact clean Git worktree root, `HEAD` must equal the
-requested canonical commit, Git environment overrides are discarded, and a supplied release tag
-must be annotated.
+the target. The target must be the exact Git worktree root and `HEAD` must equal the requested
+canonical commit. Every file consumed by diagnostics is read no-follow and byte-matched against its
+tracked commit blob, so `assume-unchanged` and `skip-worktree` cannot hide drift. Git environment
+overrides are discarded, `git status` and repository fsmonitor hooks are not invoked, and a supplied
+release tag must be annotated.
 
 External verification is opt-in, bounded to the public GitHub API, and read-only:
 

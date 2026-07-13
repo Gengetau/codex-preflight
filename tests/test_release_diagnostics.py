@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -87,7 +90,7 @@ def _git(
     tag_target: str | None = None,
     *,
     head: str | None = None,
-    dirty: str = "",
+    blob_overrides: dict[str, bytes] | None = None,
     annotated: bool = True,
     repository: bool = True,
     unknown_ref: str | None = None,
@@ -104,11 +107,20 @@ def _git(
         if arguments[1:3] == ["cat-file", "-t"]:
             kind = "tag" if annotated else "commit"
             return subprocess.CompletedProcess(args=arguments, returncode=0, stdout=f"{kind}\n", stderr="")
-        if arguments[1] == "status":
-            return subprocess.CompletedProcess(args=arguments, returncode=0, stdout=dirty, stderr="")
         reference = arguments[-1]
         if unknown_ref is not None and reference.startswith(unknown_ref):
             return subprocess.CompletedProcess(args=arguments, returncode=128, stdout="", stderr="unknown ref")
+        if ":" in reference and reference.split(":", 1)[0] == expected:
+            relative_name = reference.split(":", 1)[1]
+            try:
+                data = (blob_overrides or {}).get(relative_name)
+                if data is None:
+                    data = (cwd / relative_name).read_bytes()
+            except OSError:
+                return subprocess.CompletedProcess(args=arguments, returncode=128, stdout="", stderr="missing blob")
+            header = f"blob {len(data)}\0".encode("ascii")
+            object_id = hashlib.sha1(header + data).hexdigest()
+            return subprocess.CompletedProcess(args=arguments, returncode=0, stdout=f"{object_id}\n", stderr="")
         if reference == "HEAD^{commit}" and head is not None:
             target = head
         else:
@@ -453,6 +465,7 @@ def test_process_invocations_are_argument_lists_and_support_space_paths(tmp_path
     assert report["ready"] is True
     assert git_calls[0][1] == root.resolve()
     assert git_calls[0][0] == ["git", "rev-parse", "--show-toplevel"]
+    assert not any(call[0][1] == "status" for call in git_calls)
     assert len(tool_calls) == 8
     assert all(call[1:3] == ["-P", "-c"] for call in tool_calls)
     assert all(
@@ -565,15 +578,7 @@ def test_non_repository_and_unknown_ref_fail_canonical_commit_gate(tmp_path: Pat
         assert _checks(report)["git.repository-commit"]["status"] == "FAIL"
 
 
-@pytest.mark.parametrize(
-    "git_runner",
-    [
-        _git(head="b" * 40),
-        _git(dirty=" M codex_preflight_core/__init__.py\n"),
-        _git(dirty="?? untracked-release-input\n"),
-    ],
-)
-def test_repository_snapshot_requires_expected_head_and_clean_worktree(tmp_path: Path, git_runner) -> None:
+def test_repository_snapshot_requires_expected_head(tmp_path: Path) -> None:
     _layout(tmp_path)
 
     report = verify_release_readiness(
@@ -581,7 +586,7 @@ def test_repository_snapshot_requires_expected_head_and_clean_worktree(tmp_path:
         expected_commit="a" * 40,
         executable_finder=lambda _name: "git",
         runtime_finder=lambda _name: object(),
-        git_runner=git_runner,
+        git_runner=_git(head="b" * 40),
         tool_runner=_runtime_ok,
     )
 
@@ -589,6 +594,132 @@ def test_repository_snapshot_requires_expected_head_and_clean_worktree(tmp_path:
     assert report["ready"] is False
     assert report["expectedCommit"] is None
     assert check["status"] == "FAIL"
+
+
+def test_consumed_file_must_match_expected_commit_blob(tmp_path: Path) -> None:
+    _layout(tmp_path)
+    relative_name = "codex_preflight_core/__init__.py"
+    path = tmp_path / relative_name
+    committed = path.read_bytes()
+    path.write_bytes(committed + b"# hidden worktree change\n")
+
+    report = verify_release_readiness(
+        tmp_path,
+        expected_commit="a" * 40,
+        executable_finder=lambda _name: "git",
+        runtime_finder=lambda _name: object(),
+        git_runner=_git(blob_overrides={relative_name: committed}),
+        tool_runner=_runtime_ok,
+    )
+
+    check = _checks(report)["git.repository-commit"]
+    assert report["ready"] is False
+    assert "mismatchedFiles" in check["evidence"], check
+    assert check["evidence"]["mismatchedFiles"] == [relative_name]
+
+
+def _commit_test_repository(root: Path) -> str:
+    commands = (
+        ("git", "-c", "core.longpaths=true", "init"),
+        ("git", "-c", "core.longpaths=true", "config", "core.longpaths", "true"),
+        ("git", "-c", "core.longpaths=true", "config", "core.autocrlf", "false"),
+        ("git", "-c", "core.longpaths=true", "config", "user.email", "release-test@example.invalid"),
+        ("git", "-c", "core.longpaths=true", "config", "user.name", "Release Test"),
+        ("git", "-c", "core.longpaths=true", "add", "."),
+        ("git", "-c", "core.longpaths=true", "commit", "-m", "fixture"),
+    )
+    for command in commands:
+        subprocess.run(
+            command,
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    return subprocess.run(
+        ("git", "rev-parse", "HEAD"),
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    ).stdout.strip()
+
+
+@pytest.mark.parametrize("index_flag", ("--assume-unchanged", "--skip-worktree"))
+def test_index_hidden_consumed_file_still_fails_commit_binding(
+    tmp_path_factory: pytest.TempPathFactory,
+    index_flag: str,
+) -> None:
+    root = tmp_path_factory.mktemp("git-index")
+    _layout(root)
+    commit = _commit_test_repository(root)
+    relative_name = "codex_preflight_core/__init__.py"
+    subprocess.run(
+        ("git", "update-index", index_flag, relative_name),
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    with (root / relative_name).open("a", encoding="utf-8") as handle:
+        handle.write("# hidden by index flag\n")
+
+    report = verify_release_readiness(
+        root,
+        expected_commit=commit,
+        expected_version="0.3.7",
+        executable_finder=lambda _name: "git",
+        runtime_finder=lambda _name: object(),
+        tool_runner=_runtime_ok,
+    )
+
+    check = _checks(report)["git.repository-commit"]
+    assert report["ready"] is False
+    assert "mismatchedFiles" in check["evidence"], check
+    assert check["evidence"]["mismatchedFiles"] == [relative_name]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX fsmonitor hook sentinel")
+def test_release_verifier_does_not_invoke_repository_fsmonitor_hook(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    root = tmp_path_factory.mktemp("git-fsmonitor")
+    _layout(root)
+    commit = _commit_test_repository(root)
+    sentinel = root / "fsmonitor-invoked"
+    hook = root / "fsmonitor-sentinel.sh"
+    hook.write_text(
+        f"#!/bin/sh\nprintf invoked > {shlex.quote(str(sentinel))}\nprintf '\\n'\n",
+        encoding="utf-8",
+    )
+    hook.chmod(0o755)
+    subprocess.run(
+        ("git", "config", "core.fsmonitor", str(hook)),
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+
+    report = verify_release_readiness(
+        root,
+        expected_commit=commit,
+        expected_version="0.3.7",
+        executable_finder=lambda _name: "git",
+        runtime_finder=lambda _name: object(),
+        tool_runner=_runtime_ok,
+    )
+
+    assert report["ready"] is True
+    assert sentinel.exists() is False
 
 
 def test_git_subprocess_scrubs_hostile_git_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -604,11 +735,12 @@ def test_git_subprocess_scrubs_hostile_git_environment(tmp_path: Path, monkeypat
     monkeypatch.setenv("GIT_ALTERNATE_OBJECT_DIRECTORIES", str(tmp_path / "alternate"))
     monkeypatch.setattr(subprocess, "run", fake_run)
 
-    _run_git(("git", "status", "--porcelain=v1"), tmp_path)
+    _run_git(("git", "rev-parse", "--show-toplevel"), tmp_path)
 
     assert not any(name.startswith("GIT_") for name in captured if name not in {
-        "GIT_NO_LAZY_FETCH", "GIT_OPTIONAL_LOCKS", "GIT_TERMINAL_PROMPT"
+        "GIT_NO_LAZY_FETCH", "GIT_NO_REPLACE_OBJECTS", "GIT_OPTIONAL_LOCKS", "GIT_TERMINAL_PROMPT"
     })
+    assert captured["GIT_NO_REPLACE_OBJECTS"] == "1"
     assert captured["GIT_OPTIONAL_LOCKS"] == "0"
 
 
@@ -632,6 +764,9 @@ def test_git_subprocess_scrubs_hostile_git_environment(tmp_path: Path, monkeypat
             1,
         ),
         lambda source: source + "\nremote_scan_enabled = lambda: True\n",
+        lambda source: source + "\nif True:\n    remote_scan_enabled = lambda: True\n",
+        lambda source: source + "\nif True:\n    tool_definitions = lambda: []\n",
+        lambda source: source + "\nif True:\n    del trust_read_enabled\n",
     ],
 )
 def test_static_inventory_strict_ast_rejects_semantic_bypasses(tmp_path: Path, mutation) -> None:
@@ -663,6 +798,15 @@ def test_python_version_requires_one_top_level_literal_assignment(tmp_path: Path
         tool_runner=_runtime_ok,
     )
 
+    core.write_text('__version__ = "0.3.7"\nif True:\n    __version__ = "9.9.9"\n', encoding="utf-8")
+    nested = verify_release_readiness(
+        tmp_path,
+        executable_finder=lambda _name: "git",
+        runtime_finder=lambda _name: object(),
+        git_runner=_git(),
+        tool_runner=_runtime_ok,
+    )
+
     core.write_text('fake = \'__version__ = "9.9.9"\'\n__version__ = "0.3.7"\n', encoding="utf-8")
     string_decoy = verify_release_readiness(
         tmp_path,
@@ -673,6 +817,7 @@ def test_python_version_requires_one_top_level_literal_assignment(tmp_path: Path
     )
 
     assert "codex_preflight_core/__init__.py" in _checks(duplicate)["version.sources"]["evidence"]["invalid"]
+    assert "codex_preflight_core/__init__.py" in _checks(nested)["version.sources"]["evidence"]["invalid"]
     assert _checks(string_decoy)["version.sources"]["status"] == "PASS"
 
 

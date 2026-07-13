@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import subprocess
@@ -41,12 +42,14 @@ def _runtime_inventory(_argv, environment) -> subprocess.CompletedProcess[str]:
 def _git(argv, cwd) -> subprocess.CompletedProcess[str]:
     if argv[-1] == "--show-toplevel":
         output = str(cwd)
-    elif argv[1] == "status":
-        output = ""
+    elif ":" in argv[-1] and argv[-1].split(":", 1)[0] == HEAD:
+        relative_name = argv[-1].split(":", 1)[1]
+        data = (cwd / relative_name).read_bytes()
+        header = f"blob {len(data)}\0".encode("ascii")
+        output = hashlib.sha1(header + data).hexdigest()
     else:
         output = HEAD
-    stdout = "" if argv[1] == "status" else f"{output}\n"
-    return subprocess.CompletedProcess(args=list(argv), returncode=0, stdout=stdout, stderr="")
+    return subprocess.CompletedProcess(args=list(argv), returncode=0, stdout=f"{output}\n", stderr="")
 
 
 def test_v037_version_sources_plugin_copy_and_release_history_are_aligned() -> None:

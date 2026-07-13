@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import os
 import re
@@ -37,6 +38,19 @@ OPTIONAL_FLAGS = (
 _REPOSITORY_COMPONENT = re.compile(r"^[A-Za-z0-9_.-]+$")
 _RELEASE_VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 _COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
+_GIT_OBJECT_ID = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+_CONSUMED_TARGET_FILES = (
+    "pyproject.toml",
+    "codex_preflight_core/__init__.py",
+    "codex_preflight_mcp/__init__.py",
+    "codex_preflight_mcp/server.py",
+    ".codex-plugin/plugin.json",
+    ".mcp.json",
+    "skills/codex-preflight/SKILL.md",
+    ".agents/plugins/plugins/codex-preflight/.codex-plugin/plugin.json",
+    ".agents/plugins/plugins/codex-preflight/.mcp.json",
+    ".agents/plugins/plugins/codex-preflight/skills/codex-preflight/SKILL.md",
+)
 _TRUSTED_PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 _RUNTIME_PROBE = (
     "import json; import codex_preflight_mcp.server as server; "
@@ -267,10 +281,6 @@ def _check_repository_commit(
             ("git", "rev-parse", "--verify", "--end-of-options", "HEAD^{commit}"),
             root,
         )
-        status = runner(
-            ("git", "status", "--porcelain=v1", "--untracked-files=all"),
-            root,
-        )
     except (OSError, subprocess.SubprocessError) as error:
         return None, ReleaseCheck(
             "git.repository-commit",
@@ -285,7 +295,6 @@ def _check_repository_commit(
     except (OSError, SafePathError, ValueError):
         same_root = False
     head_commit = head.stdout.strip().lower()
-    clean = status.returncode == 0 and not status.stdout
     if (
         top.returncode != 0
         or resolved.returncode != 0
@@ -294,26 +303,68 @@ def _check_repository_commit(
         or not _COMMIT_SHA.fullmatch(commit)
         or not _COMMIT_SHA.fullmatch(head_commit)
         or head_commit != commit
-        or not clean
     ):
         return None, ReleaseCheck(
             "git.repository-commit",
             "FAIL",
-            "The target must be the exact clean Git worktree at the requested commit/ref.",
-            "Check out the expected commit, remove tracked and untracked changes, and retry from the worktree root.",
+            "The target root and HEAD must match the requested commit/ref.",
+            "Check out the expected commit and retry from its worktree root.",
             {
                 "requested": requested,
                 "canonicalCommit": commit if _COMMIT_SHA.fullmatch(commit) else None,
                 "headCommit": head_commit if _COMMIT_SHA.fullmatch(head_commit) else None,
-                "clean": clean,
+            },
+        )
+
+    mismatched: list[str] = []
+    invalid: list[str] = []
+    for relative_name in _CONSUMED_TARGET_FILES:
+        try:
+            result = runner(
+                ("git", "rev-parse", "--verify", "--end-of-options", f"{commit}:{relative_name}"),
+                root,
+            )
+            object_id = result.stdout.strip().lower()
+            data = _read_bytes(root / relative_name)
+        except (OSError, SafePathError, subprocess.SubprocessError):
+            invalid.append(relative_name)
+            continue
+        if result.returncode != 0 or not _GIT_OBJECT_ID.fullmatch(object_id):
+            invalid.append(relative_name)
+            continue
+        if _git_blob_id(data, len(object_id)) != object_id:
+            mismatched.append(relative_name)
+    if invalid or mismatched:
+        return None, ReleaseCheck(
+            "git.repository-commit",
+            "FAIL",
+            "One or more consumed target files do not match the requested commit blobs.",
+            "Restore every consumed target file from the expected commit and retry.",
+            {
+                "requested": requested,
+                "canonicalCommit": commit,
+                "headCommit": head_commit,
+                "invalidFiles": sorted(invalid),
+                "mismatchedFiles": sorted(mismatched),
             },
         )
     return commit, ReleaseCheck(
         "git.repository-commit",
         "PASS",
-        "The exact Git worktree is clean and HEAD equals the requested canonical commit.",
-        evidence={"canonicalCommit": commit, "headCommit": head_commit, "clean": True},
+        "HEAD equals the requested canonical commit and every consumed file matches its commit blob.",
+        evidence={
+            "canonicalCommit": commit,
+            "headCommit": head_commit,
+            "consumedFilesMatchedCommit": True,
+            "consumedFiles": list(_CONSUMED_TARGET_FILES),
+        },
     )
+
+
+def _git_blob_id(data: bytes, object_id_length: int) -> str:
+    algorithm = hashlib.sha1 if object_id_length == 40 else hashlib.sha256
+    header = f"blob {len(data)}\0".encode("ascii")
+    return algorithm(header + data).hexdigest()
 
 
 def _check_optional_mcp(runtime_finder: Callable[[str], object | None]) -> ReleaseCheck:
@@ -527,7 +578,7 @@ def _parse_target_inventory_groups(source: str) -> dict[str, tuple[str, ...]]:
     ]
     if len(functions) != 1:
         raise ValueError("tool_definitions must be unique")
-    if _top_level_binding_count(module, "tool_definitions") != 1:
+    if _recursive_binding_count(module, "tool_definitions") != 1:
         raise ValueError("tool_definitions must not be rebound")
     function = functions[0]
     if isinstance(function, ast.AsyncFunctionDef) or function.decorator_list or function.args.args:
@@ -636,7 +687,7 @@ def _validate_enablement_helper(module: ast.Module, name: str, flag: str) -> Non
     ]
     if len(functions) != 1:
         raise ValueError("enablement helper must be unique")
-    if _top_level_binding_count(module, name) != 1:
+    if _recursive_binding_count(module, name) != 1:
         raise ValueError("enablement helper must not be rebound")
     function = functions[0]
     if isinstance(function, ast.AsyncFunctionDef):
@@ -954,12 +1005,15 @@ def _run_git(argv: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]
         if not name.upper().startswith("GIT_")
     }
     environment["GIT_NO_LAZY_FETCH"] = "1"
+    environment["GIT_NO_REPLACE_OBJECTS"] = "1"
     environment["GIT_OPTIONAL_LOCKS"] = "0"
     environment["GIT_TERMINAL_PROMPT"] = "0"
     return subprocess.run(
         list(argv),
         cwd=cwd,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         capture_output=True,
         check=False,
         timeout=10,
@@ -1013,6 +1067,8 @@ def _read_pyproject_version(path: Path) -> str:
 
 def _read_init_version(path: Path) -> str:
     module = ast.parse(_read_text(path))
+    if _recursive_binding_count(module, "__version__") != 1:
+        raise ValueError("version must have one assignment")
     bindings = [statement for statement in module.body if _statement_binds_name(statement, "__version__")]
     if len(bindings) != 1 or not isinstance(bindings[0], ast.Assign):
         raise ValueError("version must have one top-level assignment")
@@ -1067,8 +1123,16 @@ def _path_is_within(candidate: Path, container: Path) -> bool:
     return os.path.normcase(common) == os.path.normcase(str(container))
 
 
-def _top_level_binding_count(module: ast.Module, name: str) -> int:
-    return sum(_statement_binds_name(statement, name) for statement in module.body)
+def _recursive_binding_count(module: ast.Module, name: str) -> int:
+    count = 0
+    for node in ast.walk(module):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == name:
+            count += 1
+        elif isinstance(node, ast.Name) and node.id == name and isinstance(node.ctx, (ast.Store, ast.Del)):
+            count += 1
+        elif isinstance(node, ast.alias) and (node.asname or node.name.split(".")[0]) == name:
+            count += 1
+    return count
 
 
 def _statement_binds_name(statement: ast.stmt, name: str) -> bool:

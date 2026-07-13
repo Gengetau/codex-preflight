@@ -149,9 +149,11 @@ installation fails readiness before a probe starts. This proves filesystem separ
 package built from the target has independent provenance. Invoke the command from a separately
 trusted installation when an independent code-provenance boundary is required.
 Every required target file is opened through no-follow handles; symbolic links, reparse points,
-unsafe hard links, and repository escapes fail readiness. The worktree must be clean, `HEAD` must
-equal the requested canonical commit, and Git environment overrides are discarded. Tag checks
-require annotated tags; lightweight tags fail. External checks reject redirects, cap response bytes,
+unsafe hard links, and repository escapes fail readiness. `HEAD` must equal the requested canonical
+commit, and every file actually consumed by diagnostics must byte-match its tracked commit blob;
+index hints such as `assume-unchanged` and `skip-worktree` cannot hide drift. Git environment
+overrides are discarded, and the verifier does not call `git status` or repository fsmonitor hooks.
+Tag checks require annotated tags; lightweight tags fail. External checks reject redirects, cap response bytes,
 validate repository and branch names, and positively identify the public repository before a branch
 `404` can mean deletion. Markdown output encodes every interpolated value as data.
 
