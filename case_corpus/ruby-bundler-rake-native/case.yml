@@ -1,0 +1,15 @@
+id: ruby-bundler-rake-native
+title: Ruby Bundler sources, Rake command, and native extension
+category: ecosystem-ruby
+command: bundle exec rake install
+expectedDecision: WARN
+expectedRules:
+  - RUBY_BUNDLER_GIT_SOURCE
+  - RUBY_BUNDLER_LOCAL_PATH_SOURCE
+  - RUBY_BUNDLER_LOCAL_PATH_SOURCE
+  - RUBY_RAKE_COMMAND_EXEC
+  - RUBY_GEMSPEC_EXTENSION
+  - RUBY_INSTALL_HOOK
+  - RUBY_NATIVE_EXTENSION
+description: Synthetic Ruby fixture with git and local Bundler sources, a command-running Rake task, a lifecycle hook, and native extension metadata.
+safetyNote: Contains inert static Ruby and Bundler text only; Ruby, Bundler, Rake, extconf, compilers, hooks, and task commands are never executed.

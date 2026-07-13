@@ -13,6 +13,8 @@ from codex_preflight_core.command.classifier import CommandClassification, split
 from codex_preflight_core.command.scope import CommandScope
 from codex_preflight_core.reachability.graph import Capability, ExecutionEdge, ExecutionGraph, ExecutionNode
 from codex_preflight_core.repo.collector import FIXTURE_MARKER, SKIP_DIRS
+from codex_preflight_core.rules.base import Rule
+from codex_preflight_core.rules.ruby import RubyEcosystemRule
 from codex_preflight_core.rules.rust_go import RustGoEcosystemRule
 from codex_preflight_core.scanner.finding import Severity
 from codex_preflight_core.scanner.safe_reader import MAX_FILE_SIZE, read_text_safely
@@ -83,12 +85,23 @@ class ReachabilityResolver:
                     0,
                     "lifecycle script invokes local script",
                 )
+        if _is_bundle_install(self.command):
+            self._resolve_ruby(parent, include_bundle=True, include_rake=False, include_extensions=True)
 
     def _resolve_build(self, parent: ExecutionNode) -> None:
         for segment in split_shell_segments(self.command):
             parts = [part.strip("\"'") for part in shell.split_words(segment)]
             script_name = _package_script_name(parts)
-            if script_name:
+            ruby_mode = _ruby_command_mode(parts)
+            if ruby_mode:
+                include_bundle, include_rake = ruby_mode
+                self._resolve_ruby(
+                    parent,
+                    include_bundle=include_bundle,
+                    include_rake=include_rake,
+                    include_extensions=False,
+                )
+            elif script_name:
                 for package_file in self._walk_files({"package.json"}):
                     for name, command in self._package_scripts(package_file, {script_name}):
                         label = f"{package_file.as_posix()} scripts.{name}"
@@ -140,12 +153,36 @@ class ReachabilityResolver:
             self._add_edge(parent, node, "go command reads Go project metadata and source")
             self._add_rule_capabilities(relative)
 
-    def _add_rule_capabilities(self, relative: Path) -> None:
+    def _resolve_ruby(
+        self,
+        parent: ExecutionNode,
+        *,
+        include_bundle: bool,
+        include_rake: bool,
+        include_extensions: bool,
+    ) -> None:
+        ruby_files: list[Path] = []
+        if include_bundle:
+            ruby_files.extend(self._walk_files({"Gemfile", "Gemfile.lock", "gems.locked"}))
+            ruby_files.extend(self._walk_suffix(".gemspec"))
+        if include_rake:
+            ruby_files.extend(self._walk_files({"Rakefile"}))
+        if include_extensions:
+            ruby_files.extend(self._walk_files({"extconf.rb"}))
+        for relative in sorted(set(ruby_files), key=lambda item: item.as_posix()):
+            if not self._has_node_budget(relative, relative.as_posix()):
+                return
+            node = self._add_node("file", relative.as_posix(), file=relative, language="ruby")
+            self._add_edge(parent, node, "Ruby command reads Bundler or Rake project metadata")
+            self._add_rule_capabilities(relative, RubyEcosystemRule())
+
+    def _add_rule_capabilities(self, relative: Path, rule: Rule | None = None) -> None:
         text = self._read(relative)
         if text is None:
             self.graph.uncertainties.append(uncertainty.parse_uncertain("Could not read ecosystem file.", relative))
             return
-        for finding in RustGoEcosystemRule().scan(self.root, relative, text):
+        scanner = rule or RustGoEcosystemRule()
+        for finding in scanner.scan(self.root, relative, text):
             self.graph.capabilities.append(
                 Capability(
                     rule_id=finding.rule_id,
@@ -497,6 +534,23 @@ def _package_script_name(parts: list[str]) -> str | None:
     return None
 
 
+def _is_bundle_install(command: str) -> bool:
+    for segment in split_shell_segments(command):
+        parts = [part.strip("\"'").lower() for part in shell.split_words(segment)]
+        if len(parts) >= 2 and parts[0] in {"bundle", "bundler"} and parts[1] == "install":
+            return True
+    return False
+
+
+def _ruby_command_mode(parts: list[str]) -> tuple[bool, bool] | None:
+    lowered = [part.lower() for part in parts]
+    if lowered and lowered[0] == "rake":
+        return False, True
+    if len(lowered) >= 3 and lowered[0] in {"bundle", "bundler"} and lowered[1:3] == ["exec", "rake"]:
+        return True, True
+    return None
+
+
 def _node_module_candidates(target_path: Path) -> list[Path]:
     if target_path.suffix:
         return [target_path]
@@ -514,6 +568,10 @@ def _language_for(relative: Path) -> str | None:
         return "go"
     if relative.name in {"Cargo.toml", "Cargo.lock", "build.rs"} or relative.as_posix() == ".cargo/config.toml":
         return "rust"
+    if relative.name in {"Gemfile", "Gemfile.lock", "gems.locked", "Rakefile", "extconf.rb"}:
+        return "ruby"
+    if relative.suffix == ".gemspec":
+        return "ruby"
     if suffix == ".py":
         return "python"
     if suffix in shell.SHELL_EXTENSIONS:

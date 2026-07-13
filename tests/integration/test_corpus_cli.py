@@ -94,6 +94,19 @@ EXPECTED_CASES = {
         ],
     ),
     "rust-clean-minimal": ("ALLOW", []),
+    "ruby-bundler-rake-native": (
+        "WARN",
+        [
+            "RUBY_BUNDLER_GIT_SOURCE",
+            "RUBY_BUNDLER_LOCAL_PATH_SOURCE",
+            "RUBY_BUNDLER_LOCAL_PATH_SOURCE",
+            "RUBY_RAKE_COMMAND_EXEC",
+            "RUBY_GEMSPEC_EXTENSION",
+            "RUBY_INSTALL_HOOK",
+            "RUBY_NATIVE_EXTENSION",
+        ],
+    ),
+    "ruby-clean-minimal": ("ALLOW", []),
     "safe-node-package": ("ALLOW", []),
     "shell-source-indirection": ("ASK_USER", ["SHELL_SOURCE_INDIRECTION"]),
     "wide-fanout-exceeded": (
@@ -140,12 +153,14 @@ def test_corpus_scan_json_passes_all_expectations() -> None:
         "go-commented-replace-block",
         "go-commented-replace-single-line",
         "rust-clean-minimal",
+        "ruby-clean-minimal",
     } <= negative_ids
 
 
 def test_clean_ecosystem_corpus_controls_include_representative_sources() -> None:
     assert (CASE_ROOT / "rust-clean-minimal" / "src" / "lib.rs").read_text(encoding="utf-8")
     assert (CASE_ROOT / "go-clean-minimal" / "clean.go").read_text(encoding="utf-8")
+    assert (CASE_ROOT / "ruby-clean-minimal" / "lib" / "demo.rb").read_text(encoding="utf-8")
 
 
 def test_corpus_scan_single_case_markdown() -> None:

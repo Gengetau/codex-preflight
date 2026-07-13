@@ -1,3 +1,4 @@
+import re
 import shlex
 from dataclasses import dataclass
 
@@ -71,6 +72,8 @@ def _classify_single(command: str) -> CommandClassification:
         return CommandClassification(command, CommandScope.DEPENDENCY_INSTALL, "Poetry dependency install.")
     if first == "uv" and second in {"sync", "pip"}:
         return CommandClassification(command, CommandScope.DEPENDENCY_INSTALL, "uv dependency install.")
+    if first in {"bundle", "bundler"} and second == "install":
+        return CommandClassification(command, CommandScope.DEPENDENCY_INSTALL, "Bundler dependency install.")
 
     if first == "docker":
         return CommandClassification(command, CommandScope.DOCKER, "Docker command.")
@@ -84,12 +87,17 @@ def _classify_single(command: str) -> CommandClassification:
         return CommandClassification(command, CommandScope.TEST, "Cargo test command.")
     if first == "go" and second == "test":
         return CommandClassification(command, CommandScope.TEST, "Go test command.")
+    ruby_task = _ruby_rake_task(parts)
+    if ruby_task and _ruby_task_is_test(ruby_task):
+        return CommandClassification(command, CommandScope.TEST, "Rake test task command.")
     if first in {"npm", "pnpm", "yarn"} and second == "test":
         return CommandClassification(command, CommandScope.TEST, "Package test script command.")
     if first == "cargo" and second == "build":
         return CommandClassification(command, CommandScope.BUILD, "Cargo build command.")
     if first == "go" and second in {"build", "generate"}:
         return CommandClassification(command, CommandScope.BUILD, "Go build or generate command.")
+    if ruby_task:
+        return CommandClassification(command, CommandScope.BUILD, "Rake task command.")
     if first in {"npm", "pnpm", "yarn"} and second in {"start", "build"}:
         return CommandClassification(command, CommandScope.BUILD, "Package script command.")
     if first in {"npm", "pnpm", "yarn"} and second == "run":
@@ -136,6 +144,19 @@ def split_shell_segments(command: str) -> list[str]:
         index += 1
     _append_segment(segments, current)
     return segments
+
+
+def _ruby_rake_task(parts: list[str]) -> str | None:
+    if parts and parts[0] == "rake":
+        return parts[1] if len(parts) > 1 else "default"
+    if len(parts) >= 3 and parts[0] in {"bundle", "bundler"} and parts[1:3] == ["exec", "rake"]:
+        return parts[3] if len(parts) > 3 else "default"
+    return None
+
+
+def _ruby_task_is_test(task: str) -> bool:
+    segments = re.split(r"[:/]", task)
+    return any(segment in {"spec", "test", "tests"} for segment in segments)
 
 
 _split_shell_segments = split_shell_segments

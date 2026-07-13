@@ -37,10 +37,17 @@ The corpus includes Rust and Go ecosystem calibration fixtures:
 - `go-commented-replace-single-line`
 - `go-generation-testmain-cgo`
 - `go-replace-block`
+- `ruby-bundler-rake-native`
+- `ruby-clean-minimal`
 
 The clean Rust fixture includes a minimal Cargo library target, and the clean Go fixture includes a
 minimal ordinary Go source file. Commented single-line and block-form replacements have separate
 public negative controls.
+
+The Ruby positive fixture covers Bundler git/local sources, a command-running Rake task, gemspec
+extension and lifecycle declarations, and `extconf.rb`. The clean Ruby fixture contains ordinary
+Bundler metadata, a non-command-running Rake task, a gemspec, and representative library source.
+Corpus scans never run Ruby, Bundler, Rake, lifecycle hooks, extconf, compilers, or package tasks.
 
 The scanner compares the actual decision and rule IDs with the expected values. JSON retains the
 top-level `cases` array and adds deterministic `groups` by category. Markdown shows category,
@@ -52,7 +59,7 @@ Safety rules:
 - Corpus scans only read files.
 - Tests must not run package installs, setup scripts, Docker, shell scripts, MCP servers, or GitHub
   workflows from the fixtures.
-- Tests must not run Cargo, Go, build scripts, generators, compilers, package managers, or test
-  hooks from the fixtures.
+- Tests must not run Cargo, Go, Ruby, Bundler, Rake, build scripts, generators, extconf, compilers,
+  package managers, lifecycle hooks, or test hooks from the fixtures.
 - URLs use inert documentation domains such as `example.invalid`.
 - Secret fixtures use non-working markers and must not contain real credentials.

@@ -20,11 +20,11 @@ def test_current_version_sources_and_plugin_copies_are_aligned() -> None:
         )
     )
 
-    assert project["project"]["version"] == "0.3.4"
-    assert core_version == "0.3.4"
-    assert mcp_version == "0.3.4"
-    assert root_plugin["version"] == "0.3.4"
-    assert marketplace_plugin["version"] == "0.3.4"
+    assert project["project"]["version"] == "0.3.5"
+    assert core_version == "0.3.5"
+    assert mcp_version == "0.3.5"
+    assert root_plugin["version"] == "0.3.5"
+    assert marketplace_plugin["version"] == "0.3.5"
 
 
 def test_trust_read_docs_cover_authority_migration_audit_and_rollback() -> None:

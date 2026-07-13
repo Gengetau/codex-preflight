@@ -1,0 +1,4 @@
+GEM
+  remote: https://example.invalid/gems/
+  specs:
+    rake (13.2.1)

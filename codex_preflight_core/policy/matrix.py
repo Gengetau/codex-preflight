@@ -169,5 +169,11 @@ POLICY_MATRIX: dict[str, PolicyMatrixEntry] = {
         _warn("RUST_CARGO_ALIAS", "Cargo aliases can hide additional subcommands."),
         _warn("RUST_CARGO_GIT_SOURCE", "Cargo git sources change dependency provenance."),
         _warn("RUST_CARGO_SOURCE_REPLACEMENT", "Cargo source replacement changes dependency resolution."),
+        _warn("RUBY_BUNDLER_GIT_SOURCE", "Bundler git sources change dependency provenance."),
+        _warn("RUBY_BUNDLER_LOCAL_PATH_SOURCE", "Bundler local path sources change dependency resolution."),
+        _warn("RUBY_GEMSPEC_EXTENSION", "Ruby gemspec extensions can run native build configuration."),
+        _warn("RUBY_INSTALL_HOOK", "RubyGems lifecycle hooks execute during package operations."),
+        _warn("RUBY_NATIVE_EXTENSION", "Ruby native extensions can invoke compiler toolchains."),
+        _warn("RUBY_RAKE_COMMAND_EXEC", "Reachable Rake tasks can start repository-declared commands."),
     )
 }
