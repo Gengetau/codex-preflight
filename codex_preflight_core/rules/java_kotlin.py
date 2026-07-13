@@ -2,6 +2,8 @@ import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+from codex_preflight_core.command.classifier import split_shell_segments
+from codex_preflight_core.command.java import parse_java_invocation, split_command_words
 from codex_preflight_core.rules.base import line_number
 from codex_preflight_core.scanner.finding import Finding, Severity
 
@@ -24,17 +26,48 @@ _INCLUDED_BUILD = re.compile(r"\bincludeBuild(?:\s*\(|[ \t]+(?=\r?$))", re.MULTI
 class JavaKotlinEcosystemRule:
     rule_ids = JAVA_KOTLIN_RULE_IDS
 
+    def __init__(self, command: str | None = None) -> None:
+        self.command = command
+
     def scan(self, root: Path, relative_path: Path, text: str) -> list[Finding]:
-        del root
-        if relative_path.name == "pom.xml":
+        maven_targets, init_targets = _command_targets(root, self.command)
+        if relative_path.name == "pom.xml" or relative_path in maven_targets:
             return _scan_pom(relative_path, text)
         if relative_path.name in _GRADLE_FILES:
             return _scan_gradle_file(relative_path, text)
-        if relative_path.name in _INIT_FILES:
+        if relative_path.name in _INIT_FILES or relative_path in init_targets:
             return [_init_script_finding(relative_path)]
         if relative_path.name == "gradle-wrapper.properties":
             return _scan_wrapper_properties(relative_path, text)
         return []
+
+
+def _command_targets(root: Path, command: str | None) -> tuple[set[Path], set[Path]]:
+    maven_targets: set[Path] = set()
+    init_targets: set[Path] = set()
+    if not command:
+        return maven_targets, init_targets
+    for segment in split_shell_segments(command):
+        invocation = parse_java_invocation(split_command_words(segment))
+        if invocation is None:
+            continue
+        raw_targets = invocation.maven_files if invocation.kind == "maven" else invocation.gradle_init_scripts
+        destination = maven_targets if invocation.kind == "maven" else init_targets
+        for raw_target in raw_targets:
+            relative = _relative_command_target(root, raw_target)
+            if relative is not None:
+                destination.add(relative)
+    return maven_targets, init_targets
+
+
+def _relative_command_target(root: Path, raw_target: str) -> Path | None:
+    target = Path(raw_target.replace("\\", "/"))
+    if target.is_absolute():
+        return None
+    try:
+        return (root / target).resolve().relative_to(root.resolve())
+    except (OSError, ValueError):
+        return None
 
 
 def _scan_pom(relative_path: Path, text: str) -> list[Finding]:

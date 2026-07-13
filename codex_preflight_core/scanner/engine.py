@@ -36,11 +36,15 @@ DEFAULT_RULES: tuple[Rule, ...] = (
 def scan_repository(root: Path, rules: tuple[Rule, ...] = DEFAULT_RULES, command: str | None = None) -> list[Finding]:
     root = root.resolve()
     findings: list[Finding] = []
+    effective_rules = tuple(
+        JavaKotlinEcosystemRule(command=command) if isinstance(rule, JavaKotlinEcosystemRule) else rule
+        for rule in rules
+    )
     for relative in collect_critical_files(root, command=command):
         result = read_text_safely(root, relative)
         if result.text is None:
             continue
-        for rule in rules:
+        for rule in effective_rules:
             findings.extend(rule.scan(root, relative, result.text))
     return findings
 

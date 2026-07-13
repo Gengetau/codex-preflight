@@ -1,10 +1,10 @@
 import os
-import shlex
 import stat
 from collections.abc import Callable
 from pathlib import Path
 
 from codex_preflight_core.command.classifier import split_shell_segments
+from codex_preflight_core.command.java import parse_java_invocation, split_command_words
 from codex_preflight_core.repo.safe_path import (
     SafeDirectoryHandle,
     SafePathError,
@@ -332,40 +332,69 @@ def _command_target_files_for_segment(
     reject_unsafe: bool = False,
 ) -> list[Path]:
     _check_budget(budget_check)
-    try:
-        parts = shlex.split(command, posix=False)
-    except ValueError:
-        parts = command.split()
+    parts = split_command_words(command)
     _check_budget(budget_check)
+    invocation = parse_java_invocation(parts)
+    if invocation is not None:
+        raw_targets = (
+            invocation.maven_files if invocation.kind == "maven" else invocation.gradle_init_scripts
+        )
+        targets: list[Path] = []
+        for raw_target in raw_targets:
+            target = _resolve_command_target_file(
+                root,
+                raw_target,
+                budget_check=budget_check,
+                reject_unsafe=reject_unsafe,
+            )
+            if target is not None:
+                targets.append(target)
+        return targets
     if len(parts) < 2 or parts[0].lower() not in COMMAND_TARGET_TOOLS:
         return []
-    target = Path(parts[1].strip("\"'"))
+    target = _resolve_command_target_file(
+        root,
+        parts[1],
+        budget_check=budget_check,
+        reject_unsafe=reject_unsafe,
+    )
+    return [target] if target is not None else []
+
+
+def _resolve_command_target_file(
+    root: Path,
+    raw_target: str,
+    *,
+    budget_check: Callable[[], None] | None,
+    reject_unsafe: bool,
+) -> Path | None:
+    target = Path(raw_target.replace("\\", "/"))
     if target.is_absolute():
-        return []
+        return None
     if reject_unsafe:
         try:
             path = local_absolute_path(root / target)
             relative = path.relative_to(root)
             verify_regular_file_nofollow(path)
         except FileNotFoundError:
-            return []
+            return None
         except ValueError:
-            return []
+            return None
         except SafePathError as error:
             raise CriticalFileCollectionError("A command target file is unsafe.") from error
-        return [Path(relative.as_posix())]
+        return Path(relative.as_posix())
 
     path = (root / target).resolve()
     _check_budget(budget_check)
     try:
         relative = path.relative_to(root)
     except ValueError:
-        return []
+        return None
     if os.path.lexists(path) and not _is_safe_file(root, path, reject_unsafe=False):
-        return []
+        return None
     if _is_safe_file(root, path, reject_unsafe=False):
-        return [Path(relative.as_posix())]
-    return []
+        return Path(relative.as_posix())
+    return None
 
 
 def _check_budget(check: Callable[[], None] | None) -> None:

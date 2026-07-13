@@ -55,8 +55,11 @@ Java and Kotlin ecosystem rule IDs are warning-oriented:
 - `JAVA_GRADLE_WRAPPER_INTEGRITY`
 
 Java/Kotlin scanning recognizes Maven POMs; Gradle Groovy and Kotlin build/settings/init files;
-`buildSrc` and included-build logic; wrapper scripts; and `gradle-wrapper.properties`. Maven and
-Gradle build/test commands add the relevant metadata to the execution graph. A wrapper distribution
-remains clean only when its URL is HTTPS and its SHA-256 checksum is pinned. The scanner does not
+`buildSrc` and included-build logic; wrapper scripts; and `gradle-wrapper.properties`. Files selected
+by Maven `-f`/`--file` or Gradle `-I`/`--init-script` are collected and scanned even when they use
+nonstandard names. Maven and Gradle build/test commands add only relevant metadata to the execution
+graph: system Gradle does not imply repository-root init or wrapper execution, wrapper metadata is
+reachable only through `gradlew`/`gradlew.bat`, and init scripts are reachable only when explicitly
+selected. A wrapper distribution remains clean only when its URL is HTTPS and its SHA-256 checksum is pinned. The scanner does not
 run Java, Kotlin, Maven, Gradle, wrappers, plugins, compilers, tests, package managers, or repository
 code, and it performs no ecosystem-related network access.

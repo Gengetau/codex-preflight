@@ -3,7 +3,7 @@ import tomllib
 from pathlib import Path
 
 from codex_preflight_core import __version__ as core_version
-from codex_preflight_core.preflight import RULESET_VERSION
+from codex_preflight_core.preflight import RULESET_VERSION, run_preflight
 from codex_preflight_mcp import __version__ as mcp_version
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -29,7 +29,7 @@ def test_v036_version_sources_and_ruleset_are_aligned() -> None:
     assert mcp_version == VERSION
     assert root_plugin["version"] == VERSION
     assert marketplace_plugin["version"] == VERSION
-    assert RULESET_VERSION == "2026.07.13"
+    assert RULESET_VERSION == "2026.07.13.1"
 
 
 def test_v036_documentation_names_java_kotlin_coverage_and_static_boundary() -> None:
@@ -51,7 +51,18 @@ def test_v036_corpus_pins_active_and_clean_java_kotlin_surfaces() -> None:
     active = ROOT / "case_corpus/java-kotlin-maven-gradle"
     clean = ROOT / "case_corpus/java-kotlin-clean-minimal"
 
-    assert "<executions>" in (active / "pom.xml").read_text(encoding="utf-8")
+    case = (active / "case.yml").read_text(encoding="utf-8")
+    assert "mvn -f alternate.xml test" in case
+    assert "./gradlew -I config/bootstrap.gradle build" in case
+    assert "<executions>" in (active / "alternate.xml").read_text(encoding="utf-8")
+    assert "beforeSettings" in (active / "config/bootstrap.gradle").read_text(encoding="utf-8")
+    report = run_preflight(
+        active,
+        "mvn -f alternate.xml test && ./gradlew -I config/bootstrap.gradle build",
+        use_cache=False,
+    )
+    graph_files = {node["file"] for node in report["executionGraph"]["nodes"] if node["file"]}
+    assert {"alternate.xml", "config/bootstrap.gradle"} <= graph_files
     assert "includeBuild" in (active / "settings.gradle.kts").read_text(encoding="utf-8")
     assert "distributionSha256Sum" not in (active / "gradle/wrapper/gradle-wrapper.properties").read_text(
         encoding="utf-8"

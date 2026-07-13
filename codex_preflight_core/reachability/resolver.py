@@ -10,6 +10,7 @@ import codex_preflight_core.reachability.python as python
 import codex_preflight_core.reachability.shell as shell
 import codex_preflight_core.reachability.uncertainty as uncertainty
 from codex_preflight_core.command.classifier import CommandClassification, split_shell_segments
+from codex_preflight_core.command.java import JavaInvocation, parse_java_invocation
 from codex_preflight_core.command.scope import CommandScope
 from codex_preflight_core.reachability.graph import Capability, ExecutionEdge, ExecutionGraph, ExecutionNode
 from codex_preflight_core.repo.collector import FIXTURE_MARKER, SKIP_DIRS
@@ -36,6 +37,7 @@ class ReachabilityResolver:
         self.command = command
         self.classification = classification
         self.graph = ExecutionGraph(entry_command=command)
+        self.java_rule = JavaKotlinEcosystemRule(command=command)
         self.visited_files: set[Path] = set()
         self.node_budget_exhausted = False
 
@@ -92,6 +94,7 @@ class ReachabilityResolver:
     def _resolve_build(self, parent: ExecutionNode) -> None:
         for segment in split_shell_segments(self.command):
             parts = [part.strip("\"'") for part in shell.split_words(segment)]
+            java_invocation = parse_java_invocation(parts)
             script_name = _package_script_name(parts)
             ruby_mode = _ruby_command_mode(parts)
             if ruby_mode:
@@ -133,10 +136,10 @@ class ReachabilityResolver:
                 self._resolve_cargo(parent)
             elif parts and parts[0].lower() == "go":
                 self._resolve_go(parent)
-            elif _java_command_kind(parts) == "maven":
-                self._resolve_maven(parent)
-            elif _java_command_kind(parts) == "gradle":
-                self._resolve_gradle(parent)
+            elif java_invocation is not None and java_invocation.kind == "maven":
+                self._resolve_maven(parent, java_invocation)
+            elif java_invocation is not None and java_invocation.kind == "gradle":
+                self._resolve_gradle(parent, java_invocation)
 
     def _resolve_cargo(self, parent: ExecutionNode) -> None:
         cargo_files = [*self._walk_files({"Cargo.toml", "Cargo.lock", "build.rs"}), *self._walk_files({"config.toml"})]
@@ -158,32 +161,57 @@ class ReachabilityResolver:
             self._add_edge(parent, node, "go command reads Go project metadata and source")
             self._add_rule_capabilities(relative)
 
-    def _resolve_maven(self, parent: ExecutionNode) -> None:
-        for relative in self._walk_files({"pom.xml"}):
-            if not self._has_node_budget(relative, relative.as_posix()):
-                return
-            node = self._add_node("file", relative.as_posix(), file=relative, language="java-kotlin")
-            self._add_edge(parent, node, "Maven command reads project and plugin metadata")
-            self._add_rule_capabilities(relative, JavaKotlinEcosystemRule())
+    def _resolve_maven(self, parent: ExecutionNode, invocation: JavaInvocation) -> None:
+        files = (
+            self._command_target_paths(invocation.maven_files)
+            if invocation.maven_files
+            else self._walk_files({"pom.xml"})
+        )
+        for relative in files:
+            self._add_java_file(parent, relative, "Maven command reads project and plugin metadata")
 
-    def _resolve_gradle(self, parent: ExecutionNode) -> None:
-        names = {
-            "build.gradle",
-            "build.gradle.kts",
-            "settings.gradle",
-            "settings.gradle.kts",
-            "init.gradle",
-            "init.gradle.kts",
-            "gradlew",
-            "gradlew.bat",
-            "gradle-wrapper.properties",
-        }
-        for relative in self._walk_files(names):
-            if not self._has_node_budget(relative, relative.as_posix()):
-                return
-            node = self._add_node("file", relative.as_posix(), file=relative, language="java-kotlin")
-            self._add_edge(parent, node, "Gradle command reads build, init, or wrapper metadata")
-            self._add_rule_capabilities(relative, JavaKotlinEcosystemRule())
+    def _resolve_gradle(self, parent: ExecutionNode, invocation: JavaInvocation) -> None:
+        build_files = self._walk_files(
+            {
+                "build.gradle",
+                "build.gradle.kts",
+                "settings.gradle",
+                "settings.gradle.kts",
+            }
+        )
+        for relative in build_files:
+            self._add_java_file(parent, relative, "Gradle command reads build or settings metadata")
+        for relative in self._command_target_paths(invocation.gradle_init_scripts):
+            self._add_java_file(parent, relative, "Gradle -I/--init-script loads an initialization script")
+        if invocation.uses_gradle_wrapper:
+            wrapper = Path(invocation.executable.replace("\\", "/"))
+            wrapper_files = self._command_target_paths(
+                (wrapper.as_posix(), (wrapper.parent / "gradle/wrapper/gradle-wrapper.properties").as_posix())
+            )
+            for relative in wrapper_files:
+                self._add_java_file(parent, relative, "Gradle wrapper command reads wrapper metadata")
+
+    def _command_target_paths(self, raw_targets: tuple[str, ...]) -> list[Path]:
+        targets: set[Path] = set()
+        for raw_target in raw_targets:
+            target = Path(raw_target.replace("\\", "/"))
+            if target.is_absolute():
+                continue
+            try:
+                resolved = (self.root / target).resolve()
+                relative = resolved.relative_to(self.root)
+            except (OSError, ValueError):
+                continue
+            if resolved.is_file():
+                targets.add(relative)
+        return sorted(targets, key=lambda item: item.as_posix())
+
+    def _add_java_file(self, parent: ExecutionNode, relative: Path, reason: str) -> None:
+        if not self._has_node_budget(relative, relative.as_posix()):
+            return
+        node = self._add_node("file", relative.as_posix(), file=relative, language="java-kotlin")
+        self._add_edge(parent, node, reason)
+        self._add_rule_capabilities(relative, self.java_rule)
 
     def _resolve_ruby(
         self,
@@ -580,17 +608,6 @@ def _ruby_command_mode(parts: list[str]) -> tuple[bool, bool] | None:
         return False, True
     if len(lowered) >= 3 and lowered[0] in {"bundle", "bundler"} and lowered[1:3] == ["exec", "rake"]:
         return True, True
-    return None
-
-
-def _java_command_kind(parts: list[str]) -> str | None:
-    if not parts:
-        return None
-    executable = parts[0].lower().replace("\\", "/").rsplit("/", 1)[-1]
-    if executable in {"mvn", "mvnw", "mvnw.cmd"}:
-        return "maven"
-    if executable in {"gradle", "gradlew", "gradlew.bat"}:
-        return "gradle"
     return None
 
 

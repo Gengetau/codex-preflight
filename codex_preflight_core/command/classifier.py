@@ -1,7 +1,7 @@
 import re
-import shlex
 from dataclasses import dataclass
 
+from codex_preflight_core.command.java import parse_java_invocation, split_command_words
 from codex_preflight_core.command.scope import CommandScope
 
 RISK_ORDER = {
@@ -29,10 +29,7 @@ class CommandClassification:
 
 
 def _split(command: str) -> list[str]:
-    try:
-        return shlex.split(command, posix=False)
-    except ValueError:
-        return command.split()
+    return split_command_words(command)
 
 
 def classify_command(command: str) -> CommandClassification:
@@ -166,73 +163,10 @@ def _ruby_task_is_test(task: str) -> bool:
 
 
 def _java_build_tool(parts: list[str]) -> tuple[str | None, str]:
-    if not parts:
+    invocation = parse_java_invocation(parts)
+    if invocation is None:
         return None, ""
-    executable = parts[0].lower().replace("\\", "/").rsplit("/", 1)[-1]
-    if executable in {"mvn", "mvnw", "mvnw.cmd"}:
-        task = _first_java_task(parts[1:], _MAVEN_VALUE_OPTIONS, "package")
-        return "maven", task.lower()
-    if executable in {"gradle", "gradlew", "gradlew.bat"}:
-        task = _first_java_task(parts[1:], _GRADLE_VALUE_OPTIONS, "build")
-        return "gradle", task.lower()
-    return None, ""
-
-
-_MAVEN_VALUE_OPTIONS = {
-    "-f",
-    "--file",
-    "-s",
-    "--settings",
-    "-gs",
-    "--global-settings",
-    "-t",
-    "--toolchains",
-    "-P",
-    "--activate-profiles",
-    "-T",
-    "--threads",
-    "-pl",
-    "--projects",
-    "-rf",
-    "--resume-from",
-}
-
-_GRADLE_VALUE_OPTIONS = {
-    "-p",
-    "--project-dir",
-    "-c",
-    "--settings-file",
-    "-I",
-    "--init-script",
-    "-g",
-    "--gradle-user-home",
-    "--project-cache-dir",
-    "--include-build",
-    "--max-workers",
-    "--priority",
-    "--warning-mode",
-    "--console",
-    "--configuration-cache-problems",
-    "--dependency-verification",
-    "--write-verification-metadata",
-}
-
-
-def _first_java_task(parts: list[str], value_options: set[str], default: str) -> str:
-    index = 0
-    while index < len(parts):
-        part = parts[index]
-        if part == "--":
-            return parts[index + 1] if index + 1 < len(parts) else default
-        option_name = part.split("=", 1)[0]
-        if option_name in value_options:
-            index += 1 if "=" in part else 2
-            continue
-        if part.startswith("-"):
-            index += 1
-            continue
-        return part
-    return default
+    return invocation.kind, invocation.task
 
 
 def _gradle_task_is_test(task: str) -> bool:

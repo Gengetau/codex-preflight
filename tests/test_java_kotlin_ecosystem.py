@@ -1,6 +1,9 @@
 from pathlib import Path
 
+import pytest
+
 from codex_preflight_core.preflight import run_preflight
+from codex_preflight_core.repo.collector import collect_critical_files
 
 
 def rule_ids(report: dict) -> list[str]:
@@ -13,6 +16,10 @@ def capability_ids(report: dict) -> list[str]:
 
 def graph_files(report: dict) -> set[str]:
     return {node["file"] for node in report["executionGraph"]["nodes"] if node["file"]}
+
+
+def capability_files(report: dict) -> set[str]:
+    return {capability["file"] for capability in report["executionGraph"]["capabilities"]}
 
 
 def test_maven_build_reaches_plugin_execution_metadata(tmp_path: Path) -> None:
@@ -52,7 +59,7 @@ def test_gradle_build_reaches_plugin_init_build_logic_and_wrapper_metadata(tmp_p
         encoding="utf-8",
     )
 
-    report = run_preflight(tmp_path, "./gradlew build", use_cache=False)
+    report = run_preflight(tmp_path, "./gradlew -I init.gradle.kts build", use_cache=False)
 
     expected = {
         "JAVA_GRADLE_PLUGIN_REPOSITORY",
@@ -164,3 +171,97 @@ def test_malformed_pom_is_ignored_safely(tmp_path: Path) -> None:
     assert report["decision"] == "ALLOW"
     assert rule_ids(report) == []
     assert capability_ids(report) == []
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["mvn -f alternate.xml test", "mvn --file alternate.xml test", "mvn --file=alternate.xml test"],
+)
+def test_maven_alternate_pom_is_collected_scanned_and_reachable(tmp_path: Path, command: str) -> None:
+    (tmp_path / "alternate.xml").write_text(
+        "<project><modelVersion>4.0.0</modelVersion><build><plugins><plugin>"
+        "<artifactId>exec-maven-plugin</artifactId><executions><execution>"
+        "<goals><goal>exec</goal></goals></execution></executions>"
+        "</plugin></plugins></build></project>",
+        encoding="utf-8",
+    )
+
+    report = run_preflight(tmp_path, command, use_cache=False)
+
+    assert Path("alternate.xml") in collect_critical_files(tmp_path, command=command)
+    assert rule_ids(report) == ["JAVA_MAVEN_PLUGIN_EXECUTION"]
+    assert capability_ids(report) == ["JAVA_MAVEN_PLUGIN_EXECUTION"]
+    assert graph_files(report) == {"alternate.xml"}
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "gradle -I config/bootstrap.gradle test",
+        "gradle --init-script config/bootstrap.gradle test",
+        "gradle --init-script=config/bootstrap.gradle test",
+    ],
+)
+def test_gradle_arbitrary_init_script_is_collected_scanned_and_reachable(
+    tmp_path: Path, command: str
+) -> None:
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "bootstrap.gradle").write_text("beforeSettings { }\n", encoding="utf-8")
+    (tmp_path / "build.gradle").write_text("plugins { id 'java' }\n", encoding="utf-8")
+
+    report = run_preflight(tmp_path, command, use_cache=False)
+
+    assert Path("config/bootstrap.gradle") in collect_critical_files(tmp_path, command=command)
+    assert rule_ids(report) == ["JAVA_GRADLE_INIT_SCRIPT"]
+    assert capability_ids(report) == ["JAVA_GRADLE_INIT_SCRIPT"]
+    assert "config/bootstrap.gradle" in graph_files(report)
+
+
+def test_system_gradle_does_not_reach_repository_init_or_wrapper_files(tmp_path: Path) -> None:
+    (tmp_path / "gradle" / "wrapper").mkdir(parents=True)
+    (tmp_path / "build.gradle").write_text("plugins { id 'java' }\n", encoding="utf-8")
+    (tmp_path / "init.gradle").write_text("beforeSettings { }\n", encoding="utf-8")
+    (tmp_path / "gradlew").write_text("#!/bin/sh\n", encoding="utf-8")
+    (tmp_path / "gradle" / "wrapper" / "gradle-wrapper.properties").write_text(
+        "distributionUrl=http\\://example.invalid/gradle.zip\n", encoding="utf-8"
+    )
+
+    report = run_preflight(tmp_path, "gradle test", use_cache=False)
+
+    assert graph_files(report) == {"build.gradle"}
+    assert capability_files(report) == set()
+
+
+@pytest.mark.parametrize(
+    ("command", "wrapper_name"),
+    [("./gradlew test", "gradlew"), (".\\gradlew.bat test", "gradlew.bat")],
+)
+def test_gradle_wrapper_reaches_only_invoked_wrapper_metadata_not_root_init(
+    tmp_path: Path, command: str, wrapper_name: str
+) -> None:
+    (tmp_path / "gradle" / "wrapper").mkdir(parents=True)
+    (tmp_path / "build.gradle").write_text("plugins { id 'java' }\n", encoding="utf-8")
+    (tmp_path / "init.gradle").write_text("beforeSettings { }\n", encoding="utf-8")
+    (tmp_path / wrapper_name).write_text("#!/bin/sh\n", encoding="utf-8")
+    (tmp_path / "gradle" / "wrapper" / "gradle-wrapper.properties").write_text(
+        "distributionUrl=http\\://example.invalid/gradle.zip\n", encoding="utf-8"
+    )
+
+    report = run_preflight(tmp_path, command, use_cache=False)
+
+    assert {"build.gradle", wrapper_name, "gradle/wrapper/gradle-wrapper.properties"} <= graph_files(report)
+    assert "init.gradle" not in graph_files(report)
+    assert capability_files(report) == {"gradle/wrapper/gradle-wrapper.properties"}
+
+
+def test_explicit_gradle_init_reaches_only_the_selected_init_script(tmp_path: Path) -> None:
+    (tmp_path / "config").mkdir()
+    (tmp_path / "build.gradle").write_text("plugins { id 'java' }\n", encoding="utf-8")
+    (tmp_path / "init.gradle").write_text("beforeSettings { }\n", encoding="utf-8")
+    (tmp_path / "config" / "bootstrap.gradle").write_text("beforeSettings { }\n", encoding="utf-8")
+
+    report = run_preflight(tmp_path, "gradle -I config/bootstrap.gradle test", use_cache=False)
+
+    assert "config/bootstrap.gradle" in graph_files(report)
+    assert "init.gradle" not in graph_files(report)
+    assert capability_files(report) == {"config/bootstrap.gradle"}

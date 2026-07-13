@@ -1,14 +1,14 @@
 id: java-kotlin-maven-gradle
 title: Maven plugin and Gradle build integrity surfaces
 category: ecosystem-java-kotlin
-command: ./gradlew build
+command: mvn -f alternate.xml test && ./gradlew -I config/bootstrap.gradle build
 expectedDecision: WARN
 expectedRules:
-  - JAVA_GRADLE_BUILD_LOGIC
-  - JAVA_GRADLE_WRAPPER_INTEGRITY
-  - JAVA_GRADLE_INIT_SCRIPT
   - JAVA_MAVEN_PLUGIN_EXECUTION
+  - JAVA_GRADLE_BUILD_LOGIC
+  - JAVA_GRADLE_INIT_SCRIPT
+  - JAVA_GRADLE_WRAPPER_INTEGRITY
   - JAVA_GRADLE_PLUGIN_REPOSITORY
   - JAVA_GRADLE_BUILD_LOGIC
-description: Synthetic Maven and Gradle fixture with plugin execution, plugin repositories, init and included build logic, and an unpinned wrapper distribution.
+description: Synthetic Maven and Gradle fixture with an alternate POM, explicitly selected nonstandard init script, plugin repositories, included build logic, and an unpinned wrapper distribution.
 safetyNote: Contains inert static XML, Gradle, wrapper, Java, and Kotlin text only; Maven, Gradle, wrappers, plugins, compilers, tests, and repository code are never executed.
