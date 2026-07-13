@@ -7,7 +7,7 @@ from codex_preflight_core.preflight import RULESET_VERSION
 from codex_preflight_mcp import __version__ as mcp_version
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.3.6"
+VERSION = "0.3.7"
 RUBY_RULE_IDS = {
     "RUBY_BUNDLER_GIT_SOURCE",
     "RUBY_BUNDLER_LOCAL_PATH_SOURCE",

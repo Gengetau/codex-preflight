@@ -10,7 +10,7 @@ from codex_preflight_core.repo.collector import collect_critical_files
 from codex_preflight_mcp import __version__ as mcp_version
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.3.6"
+VERSION = "0.3.7"
 JAVA_KOTLIN_RULE_IDS = {
     "JAVA_MAVEN_PLUGIN_EXECUTION",
     "JAVA_GRADLE_PLUGIN_REPOSITORY",
@@ -46,7 +46,7 @@ def test_v036_documentation_names_java_kotlin_coverage_and_static_boundary() -> 
     assert "Java" in readme and "Kotlin" in readme and "Maven" in readme and "Gradle" in readme
     assert "java-kotlin-maven-gradle" in corpus
     assert "java-kotlin-clean-minimal" in corpus
-    assert history.startswith("# Release History\n\n## v0.3.6")
+    assert "## v0.3.6" in history
     assert "does not run Maven, Gradle, wrappers" in history
 
 

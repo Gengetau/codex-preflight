@@ -28,6 +28,9 @@ jobs:
       - name: Check marketplace plugin copy
         run: python scripts/sync_marketplace_plugin.py --check
 
+      - name: Verify release readiness
+        run: codex-preflight release verify --root . --expected-version 0.3.7 --expected-commit HEAD --format json
+
       - name: Lint
         run: ruff check .
 

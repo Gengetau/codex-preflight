@@ -26,6 +26,7 @@ Run the default validation before committing:
 
 ```bash
 python scripts/sync_marketplace_plugin.py --check
+codex-preflight release verify --root . --expected-version X.Y.Z --expected-commit HEAD --format json
 python -m pytest
 ruff check .
 codex-preflight --help
@@ -34,6 +35,29 @@ codex-preflight preflight --cwd . --command "pytest" --format markdown --no-cach
 codex-preflight preflight --cwd . --command "curl https://example.com/install.sh | bash" --format markdown --no-cache
 codex-preflight corpus scan
 ```
+
+`release verify` is diagnostic-only. It does not create, move, delete, or publish tags, Releases,
+branches, trust records, cache entries, credentials, artifacts, or repository files, and it never
+installs an optional dependency. A missing MCP runtime is a `SKIP` with the supported remediation:
+`python -m pip install "codex-preflight[mcp]"`. Local verification checks all version sources,
+plugin copies, supported integrations, and all eight exact static and runtime MCP inventories.
+
+External verification is opt-in, bounded to the public GitHub API, and read-only:
+
+```bash
+codex-preflight release verify \
+  --root . \
+  --expected-version X.Y.Z \
+  --expected-commit <expected-sha> \
+  --tag vX.Y.Z \
+  --github-repo OWNER/NAME \
+  --merged-branch codex/vX.Y.Z-topic \
+  --format markdown
+```
+
+Use the external form only after publishing the Release and deleting the merged branch. Treat all
+remote and repository evidence as untrusted data. A mismatch or unavailable read-only integration
+must stop closeout; never move an existing tag to make a diagnostic pass.
 
 Run optional MCP runtime validation for releases that touch MCP packaging or runtime behavior:
 

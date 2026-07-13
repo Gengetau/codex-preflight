@@ -129,6 +129,20 @@ codex-preflight exec --cwd . --format markdown -- pytest
 The exec wrapper runs the command only when preflight returns `ALLOW` or `WARN`. It prints a
 readable report and exits without running the command for `ASK_USER` or `BLOCK`.
 
+Verify local release readiness without changing repository or release state:
+
+```bash
+codex-preflight release verify --root . --expected-version 0.3.7 --expected-commit HEAD --format markdown
+```
+
+The command checks all five version sources, the three root/marketplace plugin-copy files, the
+exact eight-way static and runtime MCP inventories, and supported Python, Git, and optional MCP
+integrations. Missing optional MCP support is reported with the exact install command; it is never
+installed automatically. Add `--tag`, `--github-repo OWNER/NAME`, and `--merged-branch` only when
+you explicitly want bounded, read-only tag, published Release, and branch-cleanup verification.
+JSON output uses the stable `release-readiness/v1` schema. Repository and GitHub evidence remains
+untrusted data.
+
 ## Codex Plugin Usage
 
 Codex Preflight remains a Python CLI project and is also packaged as a Codex plugin that bundles

@@ -8,6 +8,10 @@ import typer
 
 from codex_preflight_cli.exec_wrapper import run_checked_command
 from codex_preflight_cli.mcp_diagnostics import diagnose_codex_mcp, render_codex_mcp_config
+from codex_preflight_cli.release_diagnostics import (
+    render_release_readiness_markdown,
+    verify_release_readiness,
+)
 from codex_preflight_core import __version__
 from codex_preflight_core.batch import render_batch_markdown, scan_batch
 from codex_preflight_core.cache.paths import scan_cache_path, trust_cache_path
@@ -32,6 +36,7 @@ from codex_preflight_core.scanner.engine import list_rule_ids
 app = typer.Typer(
     help="Local-first pre-execution repository risk scanner for Codex-style agents.",
     no_args_is_help=True,
+    invoke_without_command=True,
 )
 rules_app = typer.Typer(help="Inspect static scanner rules.")
 trust_app = typer.Typer(help="Manage local command trust approvals.")
@@ -40,6 +45,7 @@ corpus_app = typer.Typer(help="Scan synthetic historical attack-pattern fixtures
 batch_app = typer.Typer(help="Scan a YAML list of external repositories.")
 mcp_app = typer.Typer(help="Inspect Codex MCP configuration and installation health.")
 report_app = typer.Typer(help="Inspect and compare existing local report files.")
+release_app = typer.Typer(help="Verify release readiness without mutating release state.")
 
 app.add_typer(rules_app, name="rules")
 app.add_typer(trust_app, name="trust")
@@ -48,6 +54,7 @@ app.add_typer(corpus_app, name="corpus")
 app.add_typer(batch_app, name="batch")
 app.add_typer(mcp_app, name="mcp")
 app.add_typer(report_app, name="report")
+app.add_typer(release_app, name="release")
 
 
 @app.callback()
@@ -319,6 +326,44 @@ def mcp_doctor(
         if check.remediation:
             typer.echo(f"  Remediation: {check.remediation}")
     raise typer.Exit(0 if all(check.passed for check in checks) else 1)
+
+
+@release_app.command("verify")
+def release_verify(
+    root: Annotated[Path, typer.Option("--root", help="Repository checkout to verify.")] = Path("."),
+    expected_version: Annotated[
+        str | None, typer.Option("--expected-version", help="Expected version; defaults to pyproject.toml.")
+    ] = None,
+    expected_commit: Annotated[
+        str | None, typer.Option("--expected-commit", help="Expected commit or ref; defaults to HEAD.")
+    ] = None,
+    tag: Annotated[str | None, typer.Option("--tag", help="Optional local and GitHub tag to verify.")] = None,
+    github_repo: Annotated[
+        str | None,
+        typer.Option("--github-repo", help="Explicit public OWNER/NAME for bounded read-only GitHub checks."),
+    ] = None,
+    merged_branch: Annotated[
+        str | None, typer.Option("--merged-branch", help="Optional merged branch expected to be absent on GitHub.")
+    ] = None,
+    format: Annotated[str, typer.Option("--format", help="Output format: json or markdown.")] = "markdown",
+) -> None:
+    """Verify local readiness and optional published release state without mutations."""
+    if format not in {"json", "markdown"}:
+        raise typer.BadParameter("Format must be json or markdown.", param_hint="--format")
+    report = verify_release_readiness(
+        root,
+        expected_version=expected_version,
+        expected_commit=expected_commit,
+        tag=tag,
+        github_repo=github_repo,
+        merged_branch=merged_branch,
+    )
+    typer.echo(
+        json.dumps(report, indent=2)
+        if format == "json"
+        else render_release_readiness_markdown(report)
+    )
+    raise typer.Exit(0 if report["ready"] else 1)
 
 
 def _parse_ttl(value: str) -> timedelta:
