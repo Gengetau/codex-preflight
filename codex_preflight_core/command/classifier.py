@@ -51,7 +51,8 @@ def classify_command(command: str) -> CommandClassification:
 def _classify_single(command: str) -> CommandClassification:
     stripped = command.strip()
     lowered = stripped.lower()
-    parts = [part.lower() for part in _split(stripped)]
+    raw_parts = _split(stripped)
+    parts = [part.lower() for part in raw_parts]
     first = parts[0] if parts else ""
     second = parts[1] if len(parts) > 1 else ""
 
@@ -81,7 +82,7 @@ def _classify_single(command: str) -> CommandClassification:
     if first in {"bash", "sh", "powershell", "pwsh", "python", "node"}:
         return CommandClassification(command, CommandScope.SCRIPT_EXECUTION, "Local script execution.")
 
-    java_tool, java_task = _java_build_tool(parts)
+    java_tool, java_task = _java_build_tool(raw_parts)
     if first in {"pytest"} or java_tool == "maven" and java_task == "test":
         return CommandClassification(command, CommandScope.TEST, "Test command.")
     if java_tool == "gradle" and _gradle_task_is_test(java_task):
@@ -167,13 +168,13 @@ def _ruby_task_is_test(task: str) -> bool:
 def _java_build_tool(parts: list[str]) -> tuple[str | None, str]:
     if not parts:
         return None, ""
-    executable = parts[0].replace("\\", "/").rsplit("/", 1)[-1]
+    executable = parts[0].lower().replace("\\", "/").rsplit("/", 1)[-1]
     if executable in {"mvn", "mvnw", "mvnw.cmd"}:
         task = _first_java_task(parts[1:], _MAVEN_VALUE_OPTIONS, "package")
-        return "maven", task
+        return "maven", task.lower()
     if executable in {"gradle", "gradlew", "gradlew.bat"}:
         task = _first_java_task(parts[1:], _GRADLE_VALUE_OPTIONS, "build")
-        return "gradle", task
+        return "gradle", task.lower()
     return None, ""
 
 
@@ -186,8 +187,10 @@ _MAVEN_VALUE_OPTIONS = {
     "--global-settings",
     "-t",
     "--toolchains",
-    "-p",
+    "-P",
     "--activate-profiles",
+    "-T",
+    "--threads",
     "-pl",
     "--projects",
     "-rf",
@@ -199,7 +202,7 @@ _GRADLE_VALUE_OPTIONS = {
     "--project-dir",
     "-c",
     "--settings-file",
-    "-i",
+    "-I",
     "--init-script",
     "-g",
     "--gradle-user-home",
