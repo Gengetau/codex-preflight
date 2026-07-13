@@ -5,6 +5,7 @@ from codex_preflight_core.rules.agent_instructions import AgentInstructionRule
 from codex_preflight_core.rules.base import Rule
 from codex_preflight_core.rules.docker import DockerRule
 from codex_preflight_core.rules.github_actions import GitHubActionsRule
+from codex_preflight_core.rules.java_kotlin import JavaKotlinEcosystemRule
 from codex_preflight_core.rules.mcp_config import McpConfigRule
 from codex_preflight_core.rules.package_json import PackageJsonRule
 from codex_preflight_core.rules.python_setup import PythonSetupRule
@@ -28,6 +29,7 @@ DEFAULT_RULES: tuple[Rule, ...] = (
     DockerRule(),
     RustGoEcosystemRule(),
     RubyEcosystemRule(),
+    JavaKotlinEcosystemRule(),
 )
 
 

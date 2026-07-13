@@ -14,6 +14,7 @@ from codex_preflight_core.command.scope import CommandScope
 from codex_preflight_core.reachability.graph import Capability, ExecutionEdge, ExecutionGraph, ExecutionNode
 from codex_preflight_core.repo.collector import FIXTURE_MARKER, SKIP_DIRS
 from codex_preflight_core.rules.base import Rule
+from codex_preflight_core.rules.java_kotlin import JavaKotlinEcosystemRule
 from codex_preflight_core.rules.ruby import RubyEcosystemRule
 from codex_preflight_core.rules.rust_go import RustGoEcosystemRule
 from codex_preflight_core.scanner.finding import Severity
@@ -132,6 +133,10 @@ class ReachabilityResolver:
                 self._resolve_cargo(parent)
             elif parts and parts[0].lower() == "go":
                 self._resolve_go(parent)
+            elif _java_command_kind(parts) == "maven":
+                self._resolve_maven(parent)
+            elif _java_command_kind(parts) == "gradle":
+                self._resolve_gradle(parent)
 
     def _resolve_cargo(self, parent: ExecutionNode) -> None:
         cargo_files = [*self._walk_files({"Cargo.toml", "Cargo.lock", "build.rs"}), *self._walk_files({"config.toml"})]
@@ -152,6 +157,33 @@ class ReachabilityResolver:
             node = self._add_node("file", relative.as_posix(), file=relative, language="go")
             self._add_edge(parent, node, "go command reads Go project metadata and source")
             self._add_rule_capabilities(relative)
+
+    def _resolve_maven(self, parent: ExecutionNode) -> None:
+        for relative in self._walk_files({"pom.xml"}):
+            if not self._has_node_budget(relative, relative.as_posix()):
+                return
+            node = self._add_node("file", relative.as_posix(), file=relative, language="java-kotlin")
+            self._add_edge(parent, node, "Maven command reads project and plugin metadata")
+            self._add_rule_capabilities(relative, JavaKotlinEcosystemRule())
+
+    def _resolve_gradle(self, parent: ExecutionNode) -> None:
+        names = {
+            "build.gradle",
+            "build.gradle.kts",
+            "settings.gradle",
+            "settings.gradle.kts",
+            "init.gradle",
+            "init.gradle.kts",
+            "gradlew",
+            "gradlew.bat",
+            "gradle-wrapper.properties",
+        }
+        for relative in self._walk_files(names):
+            if not self._has_node_budget(relative, relative.as_posix()):
+                return
+            node = self._add_node("file", relative.as_posix(), file=relative, language="java-kotlin")
+            self._add_edge(parent, node, "Gradle command reads build, init, or wrapper metadata")
+            self._add_rule_capabilities(relative, JavaKotlinEcosystemRule())
 
     def _resolve_ruby(
         self,
@@ -551,6 +583,17 @@ def _ruby_command_mode(parts: list[str]) -> tuple[bool, bool] | None:
     return None
 
 
+def _java_command_kind(parts: list[str]) -> str | None:
+    if not parts:
+        return None
+    executable = parts[0].lower().replace("\\", "/").rsplit("/", 1)[-1]
+    if executable in {"mvn", "mvnw", "mvnw.cmd"}:
+        return "maven"
+    if executable in {"gradle", "gradlew", "gradlew.bat"}:
+        return "gradle"
+    return None
+
+
 def _node_module_candidates(target_path: Path) -> list[Path]:
     if target_path.suffix:
         return [target_path]
@@ -572,6 +615,10 @@ def _language_for(relative: Path) -> str | None:
         return "ruby"
     if relative.suffix == ".gemspec":
         return "ruby"
+    if relative.name == "pom.xml" or relative.name.endswith((".gradle", ".gradle.kts")):
+        return "java-kotlin"
+    if relative.name in {"gradlew", "gradlew.bat", "gradle-wrapper.properties"}:
+        return "java-kotlin"
     if suffix == ".py":
         return "python"
     if suffix in shell.SHELL_EXTENSIONS:

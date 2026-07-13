@@ -1,0 +1,2 @@
+#!/bin/sh
+# Inert corpus wrapper marker. This file is scanned as text and never executed.

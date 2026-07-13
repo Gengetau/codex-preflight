@@ -175,5 +175,10 @@ POLICY_MATRIX: dict[str, PolicyMatrixEntry] = {
         _warn("RUBY_INSTALL_HOOK", "RubyGems lifecycle hooks execute during package operations."),
         _warn("RUBY_NATIVE_EXTENSION", "Ruby native extensions can invoke compiler toolchains."),
         _warn("RUBY_RAKE_COMMAND_EXEC", "Reachable Rake tasks can start repository-declared commands."),
+        _warn("JAVA_MAVEN_PLUGIN_EXECUTION", "Maven lifecycle plugin executions run repository-selected goals."),
+        _warn("JAVA_GRADLE_PLUGIN_REPOSITORY", "Gradle plugin repositories control executable plugin provenance."),
+        _warn("JAVA_GRADLE_INIT_SCRIPT", "Gradle init scripts can alter build behavior before tasks run."),
+        _warn("JAVA_GRADLE_BUILD_LOGIC", "Gradle included build logic can execute during configuration."),
+        _warn("JAVA_GRADLE_WRAPPER_INTEGRITY", "Gradle wrapper distributions require integrity review."),
     )
 }

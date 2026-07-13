@@ -51,13 +51,15 @@ local indirection, surfaces uncertainty, and gives the user a decision with evid
   indicators, and Go module replacements.
 - Static Ruby ecosystem coverage for Bundler git/local sources, gemspec extensions and lifecycle
   hooks, native `extconf.rb` configuration, and command-running Rake tasks.
+- Static Java and Kotlin ecosystem coverage for Maven plugin executions, Gradle plugin
+  repositories, init/build logic, and wrapper distribution integrity indicators.
 - Reachability parsing for common wrappers such as shell `-c`, interpreter flags, `env`,
   package-manager wrappers, PowerShell, `cmd /c`, and Windows-style paths.
 - Cross-file Node.js module reachability for local `require()` and `import` chains.
 - Evidence trust-boundary labels for repository-controlled snippets.
 - Nested monorepo critical file collection.
 - Package lifecycle detection.
-- Shell, Docker, GitHub Actions, MCP, agent instruction, Rust, Go, Ruby, and secret checks.
+- Shell, Docker, GitHub Actions, MCP, agent instruction, Rust, Go, Ruby, Java/Kotlin, and secret checks.
 - Execution graph for reachable local scripts/files.
 - Capability detection for Node.js, Python, shell, and Docker.
 - Uncertainty policy: unknown is not safe.

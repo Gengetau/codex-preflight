@@ -35,6 +35,16 @@ CRITICAL_BASENAMES = {
     "gems.locked",
     "Rakefile",
     "extconf.rb",
+    "pom.xml",
+    "build.gradle",
+    "build.gradle.kts",
+    "settings.gradle",
+    "settings.gradle.kts",
+    "init.gradle",
+    "init.gradle.kts",
+    "gradlew",
+    "gradlew.bat",
+    "gradle-wrapper.properties",
     "Makefile",
     "Dockerfile",
     "docker-compose.yml",
@@ -63,6 +73,8 @@ CRITICAL_PREFIXES = (
     "tools/",
     ".mcp/",
     ".cargo/",
+    "gradle/",
+    "buildSrc/",
 )
 SKIP_DIRS = {".git", "node_modules", "vendor", "target", "dist", "build", "__pycache__", ".venv", "venv"}
 COMMAND_TARGET_TOOLS = {"bash", "sh", "python", "node", "powershell", "pwsh"}

@@ -81,8 +81,11 @@ def _classify_single(command: str) -> CommandClassification:
     if first in {"bash", "sh", "powershell", "pwsh", "python", "node"}:
         return CommandClassification(command, CommandScope.SCRIPT_EXECUTION, "Local script execution.")
 
-    if first in {"pytest"} or first in {"mvn"} and second == "test":
+    java_tool, java_task = _java_build_tool(parts)
+    if first in {"pytest"} or java_tool == "maven" and java_task == "test":
         return CommandClassification(command, CommandScope.TEST, "Test command.")
+    if java_tool == "gradle" and _gradle_task_is_test(java_task):
+        return CommandClassification(command, CommandScope.TEST, "Gradle test task command.")
     if first == "cargo" and second == "test":
         return CommandClassification(command, CommandScope.TEST, "Cargo test command.")
     if first == "go" and second == "test":
@@ -102,7 +105,9 @@ def _classify_single(command: str) -> CommandClassification:
         return CommandClassification(command, CommandScope.BUILD, "Package script command.")
     if first in {"npm", "pnpm", "yarn"} and second == "run":
         return CommandClassification(command, CommandScope.BUILD, "Package script command.")
-    if first in {"make", "gradle"} or first == "mvn" and second in {"package", "compile"}:
+    if java_tool:
+        return CommandClassification(command, CommandScope.BUILD, "Maven or Gradle build command.")
+    if first == "make":
         return CommandClassification(command, CommandScope.BUILD, "Build command.")
 
     if first in {"ls", "dir", "pwd"}:
@@ -157,6 +162,24 @@ def _ruby_rake_task(parts: list[str]) -> str | None:
 def _ruby_task_is_test(task: str) -> bool:
     segments = re.split(r"[:/]", task)
     return any(segment in {"spec", "test", "tests"} for segment in segments)
+
+
+def _java_build_tool(parts: list[str]) -> tuple[str | None, str]:
+    if not parts:
+        return None, ""
+    executable = parts[0].replace("\\", "/").rsplit("/", 1)[-1]
+    if executable in {"mvn", "mvnw", "mvnw.cmd"}:
+        task = next((part for part in parts[1:] if not part.startswith("-")), "package")
+        return "maven", task
+    if executable in {"gradle", "gradlew", "gradlew.bat"}:
+        task = next((part for part in parts[1:] if not part.startswith("-")), "build")
+        return "gradle", task
+    return None, ""
+
+
+def _gradle_task_is_test(task: str) -> bool:
+    segments = re.split(r"[:/]", task)
+    return any(segment in {"check", "test", "tests"} or segment.endswith("test") for segment in segments)
 
 
 _split_shell_segments = split_shell_segments
