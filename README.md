@@ -150,8 +150,9 @@ package built from the target has independent provenance. Invoke the command fro
 trusted installation when an independent code-provenance boundary is required.
 Every required target file is opened through no-follow handles; symbolic links, reparse points,
 unsafe hard links, and repository escapes fail readiness. `HEAD` must equal the requested canonical
-commit, and every file actually consumed by diagnostics must byte-match its tracked commit blob;
-index hints such as `assume-unchanged` and `skip-worktree` cannot hide drift. Git environment
+commit, and every file actually consumed by diagnostics must content-match its tracked commit blob.
+Only the safe built-in CRLF-to-LF checkout conversion is accepted; repository filters are never run.
+Index hints such as `assume-unchanged` and `skip-worktree` cannot hide drift. Git environment
 overrides are discarded, and the verifier does not call `git status` or repository fsmonitor hooks.
 Tag checks require annotated tags; lightweight tags fail. External checks reject redirects, cap response bytes,
 validate repository and branch names, and positively identify the public repository before a branch

@@ -618,6 +618,26 @@ def test_consumed_file_must_match_expected_commit_blob(tmp_path: Path) -> None:
     assert check["evidence"]["mismatchedFiles"] == [relative_name]
 
 
+def test_commit_blob_binding_accepts_only_safe_crlf_checkout_conversion(tmp_path: Path) -> None:
+    _layout(tmp_path)
+    relative_name = "pyproject.toml"
+    path = tmp_path / relative_name
+    committed = path.read_bytes().replace(b"\r\n", b"\n")
+    path.write_bytes(committed.replace(b"\n", b"\r\n"))
+
+    report = verify_release_readiness(
+        tmp_path,
+        expected_commit="a" * 40,
+        executable_finder=lambda _name: "git",
+        runtime_finder=lambda _name: object(),
+        git_runner=_git(blob_overrides={relative_name: committed}),
+        tool_runner=_runtime_ok,
+    )
+
+    assert report["ready"] is True
+    assert _checks(report)["git.repository-commit"]["status"] == "PASS"
+
+
 def _commit_test_repository(root: Path) -> str:
     commands = (
         ("git", "-c", "core.longpaths=true", "init"),

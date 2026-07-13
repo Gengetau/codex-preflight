@@ -46,8 +46,9 @@ added to a runtime probe's `PYTHONPATH`. Runtime probes require a non-editable C
 installation whose resolved module path is outside the target; editable/self overlap fails before a
 probe starts. This proves filesystem separation, not independent provenance for a package built from
 the target. The target must be the exact Git worktree root and `HEAD` must equal the requested
-canonical commit. Every file consumed by diagnostics is read no-follow and byte-matched against its
-tracked commit blob, so `assume-unchanged` and `skip-worktree` cannot hide drift. Git environment
+canonical commit. Every file consumed by diagnostics is read no-follow and content-matched against
+its tracked commit blob, accepting only safe CRLF-to-LF checkout conversion and never running a
+repository filter. Thus `assume-unchanged` and `skip-worktree` cannot hide drift. Git environment
 overrides are discarded, `git status` and repository fsmonitor hooks are not invoked, and a supplied
 release tag must be annotated.
 

@@ -16,7 +16,8 @@ Deterministic release automation and supported-integration diagnostics:
 - Hardened the diagnostic boundary with no-follow target reads, recursive strict AST binding
   contracts, exact `HEAD` plus consumed-file commit-blob binding, scrubbed Git environment overrides,
   and verified runtime module provenance outside the target. The verifier avoids `git status` and
-  repository fsmonitor execution, while blob binding detects index-hidden worktree drift.
+  repository fsmonitor or filter execution; safe CRLF checkout conversion is handled locally, while
+  blob binding detects index-hidden worktree drift.
   Editable/self runtime overlap fails before probes start. Release tags must be annotated;
   GitHub checks reject redirects, cap response bytes, validate ref inputs, and require positive
   repository identification before branch deletion can pass. Markdown interpolations remain inert data.

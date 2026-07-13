@@ -332,7 +332,7 @@ def _check_repository_commit(
         if result.returncode != 0 or not _GIT_OBJECT_ID.fullmatch(object_id):
             invalid.append(relative_name)
             continue
-        if _git_blob_id(data, len(object_id)) != object_id:
+        if not _git_blob_matches(data, object_id):
             mismatched.append(relative_name)
     if invalid or mismatched:
         return None, ReleaseCheck(
@@ -365,6 +365,11 @@ def _git_blob_id(data: bytes, object_id_length: int) -> str:
     algorithm = hashlib.sha1 if object_id_length == 40 else hashlib.sha256
     header = f"blob {len(data)}\0".encode("ascii")
     return algorithm(header + data).hexdigest()
+
+
+def _git_blob_matches(data: bytes, object_id: str) -> bool:
+    candidates = (data, data.replace(b"\r\n", b"\n"))
+    return any(_git_blob_id(candidate, len(object_id)) == object_id for candidate in candidates)
 
 
 def _check_optional_mcp(runtime_finder: Callable[[str], object | None]) -> ReleaseCheck:
