@@ -10,10 +10,17 @@ import codex_preflight_core.reachability.python as python
 import codex_preflight_core.reachability.shell as shell
 import codex_preflight_core.reachability.uncertainty as uncertainty
 from codex_preflight_core.command.classifier import CommandClassification, split_shell_segments
+from codex_preflight_core.command.java import JavaInvocation, parse_java_invocation, split_command_words
 from codex_preflight_core.command.scope import CommandScope
 from codex_preflight_core.reachability.graph import Capability, ExecutionEdge, ExecutionGraph, ExecutionNode
-from codex_preflight_core.repo.collector import FIXTURE_MARKER, SKIP_DIRS
+from codex_preflight_core.repo.collector import (
+    FIXTURE_MARKER,
+    SKIP_DIRS,
+    resolve_command_target_directory,
+    resolve_command_target_file,
+)
 from codex_preflight_core.rules.base import Rule
+from codex_preflight_core.rules.java_kotlin import JavaKotlinEcosystemRule
 from codex_preflight_core.rules.ruby import RubyEcosystemRule
 from codex_preflight_core.rules.rust_go import RustGoEcosystemRule
 from codex_preflight_core.scanner.finding import Severity
@@ -35,6 +42,7 @@ class ReachabilityResolver:
         self.command = command
         self.classification = classification
         self.graph = ExecutionGraph(entry_command=command)
+        self.java_rule = JavaKotlinEcosystemRule(command=command)
         self.visited_files: set[Path] = set()
         self.node_budget_exhausted = False
 
@@ -90,7 +98,8 @@ class ReachabilityResolver:
 
     def _resolve_build(self, parent: ExecutionNode) -> None:
         for segment in split_shell_segments(self.command):
-            parts = [part.strip("\"'") for part in shell.split_words(segment)]
+            parts = split_command_words(segment)
+            java_invocation = parse_java_invocation(parts)
             script_name = _package_script_name(parts)
             ruby_mode = _ruby_command_mode(parts)
             if ruby_mode:
@@ -132,6 +141,10 @@ class ReachabilityResolver:
                 self._resolve_cargo(parent)
             elif parts and parts[0].lower() == "go":
                 self._resolve_go(parent)
+            elif java_invocation is not None and java_invocation.kind == "maven":
+                self._resolve_maven(parent, java_invocation)
+            elif java_invocation is not None and java_invocation.kind == "gradle":
+                self._resolve_gradle(parent, java_invocation)
 
     def _resolve_cargo(self, parent: ExecutionNode) -> None:
         cargo_files = [*self._walk_files({"Cargo.toml", "Cargo.lock", "build.rs"}), *self._walk_files({"config.toml"})]
@@ -152,6 +165,109 @@ class ReachabilityResolver:
             node = self._add_node("file", relative.as_posix(), file=relative, language="go")
             self._add_edge(parent, node, "go command reads Go project metadata and source")
             self._add_rule_capabilities(relative)
+
+    def _resolve_maven(self, parent: ExecutionNode, invocation: JavaInvocation) -> None:
+        files = (
+            self._command_target_paths(invocation.maven_files)
+            if invocation.maven_files
+            else self._walk_files({"pom.xml"})
+        )
+        for relative in files:
+            self._add_java_file(parent, relative, "Maven command reads project and plugin metadata")
+
+    def _resolve_gradle(self, parent: ExecutionNode, invocation: JavaInvocation) -> None:
+        project_base = Path()
+        if invocation.gradle_project_dir is not None:
+            resolved_project_dir = resolve_command_target_directory(
+                self.root, invocation.gradle_project_dir
+            )
+            if resolved_project_dir is None:
+                return
+            project_base = resolved_project_dir
+
+        settings_files = self._command_target_paths(
+            invocation.gradle_settings_files,
+            base=project_base,
+        )
+        if invocation.gradle_settings_files and not settings_files:
+            return
+
+        if invocation.gradle_project_dir is not None or settings_files:
+            build_base = project_base
+            if invocation.gradle_project_dir is None and settings_files:
+                build_base = settings_files[-1].parent
+            build_files = self._scoped_gradle_files(
+                build_base,
+                include_default_settings=not invocation.gradle_settings_files,
+            )
+        else:
+            build_files = self._walk_files(
+                {
+                    "build.gradle",
+                    "build.gradle.kts",
+                    "settings.gradle",
+                    "settings.gradle.kts",
+                }
+            )
+        for relative in build_files:
+            self._add_java_file(parent, relative, "Gradle command reads build or settings metadata")
+        for relative in settings_files:
+            self._add_java_file(parent, relative, "Gradle -c/--settings-file loads selected settings metadata")
+        for relative in self._command_target_paths(invocation.gradle_init_scripts, base=project_base):
+            self._add_java_file(parent, relative, "Gradle -I/--init-script loads an initialization script")
+        if invocation.uses_gradle_wrapper:
+            wrapper = Path(invocation.executable.replace("\\", "/"))
+            wrapper_files = self._command_target_paths(
+                (wrapper.as_posix(), (wrapper.parent / "gradle/wrapper/gradle-wrapper.properties").as_posix())
+            )
+            for relative in wrapper_files:
+                self._add_java_file(parent, relative, "Gradle wrapper command reads wrapper metadata")
+
+    def _command_target_paths(
+        self, raw_targets: tuple[str, ...], *, base: Path = Path()
+    ) -> list[Path]:
+        targets: set[Path] = set()
+        for raw_target in raw_targets:
+            relative = resolve_command_target_file(
+                self.root,
+                raw_target,
+                base=self.root / base,
+            )
+            if relative is not None:
+                targets.add(relative)
+        return sorted(targets, key=lambda item: item.as_posix())
+
+    def _scoped_gradle_files(
+        self, base: Path, *, include_default_settings: bool
+    ) -> list[Path]:
+        names = {"build.gradle", "build.gradle.kts"}
+        if include_default_settings:
+            names.update({"settings.gradle", "settings.gradle.kts"})
+        files: set[Path] = set()
+        for name in names:
+            relative = resolve_command_target_file(
+                self.root,
+                (base / name).as_posix(),
+            )
+            if relative is not None:
+                files.add(relative)
+        build_src = base / "buildSrc"
+        for relative in self._walk_files({"build.gradle", "build.gradle.kts"}):
+            try:
+                relative.relative_to(build_src)
+            except ValueError:
+                continue
+            safe_relative = resolve_command_target_file(self.root, relative.as_posix())
+            if safe_relative is not None:
+                files.add(safe_relative)
+        return sorted(files, key=lambda item: item.as_posix())
+
+    def _add_java_file(self, parent: ExecutionNode, relative: Path, reason: str) -> None:
+        if not self._has_node_budget(relative, relative.as_posix()):
+            return
+        node = self._add_node("file", relative.as_posix(), file=relative, language="java-kotlin")
+        self._add_edge(parent, node, reason)
+        self._add_rule_capabilities(relative, self.java_rule)
 
     def _resolve_ruby(
         self,
@@ -572,6 +688,10 @@ def _language_for(relative: Path) -> str | None:
         return "ruby"
     if relative.suffix == ".gemspec":
         return "ruby"
+    if relative.name == "pom.xml" or relative.name.endswith((".gradle", ".gradle.kts")):
+        return "java-kotlin"
+    if relative.name in {"gradlew", "gradlew.bat", "gradle-wrapper.properties"}:
+        return "java-kotlin"
     if suffix == ".py":
         return "python"
     if suffix in shell.SHELL_EXTENSIONS:

@@ -1,5 +1,21 @@
 # Release History
 
+## v0.3.6
+
+Warning-oriented Java and Kotlin ecosystem coverage:
+
+- Added static findings for Maven plugin executions, Gradle plugin repositories, init scripts,
+  `buildSrc` and included build logic, and insecure or unpinned wrapper distributions.
+- Added deterministic reachability and build/test classification for `mvn`/`mvnw` and
+  `gradle`/`gradlew` command forms without adding runtime authority.
+- Included nonstandard files selected by Maven `-f`/`--file` and Gradle `-I`/`--init-script`, while
+  limiting wrapper and init-script reachability to the command forms that actually load them.
+- Added active and clean Java/Kotlin corpus cases with representative Maven, Gradle, Java, and
+  Kotlin surfaces plus comment/string, malformed-POM, and pinned-wrapper negative controls.
+- Preserved CLI/MCP schemas and all eight optional-authority inventories. Static analysis does not run Maven, Gradle, wrappers,
+  plugins, Java/Kotlin compilers, tests, package managers, or repository code and performs no
+  ecosystem-related network access.
+
 ## v0.3.5
 
 Warning-oriented Ruby ecosystem coverage:

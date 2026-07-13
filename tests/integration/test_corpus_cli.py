@@ -75,6 +75,18 @@ EXPECTED_CASES = {
         ["GO_LOCAL_MODULE_REPLACE", "GO_MODULE_REPLACE"],
     ),
     "go-clean-minimal": ("ALLOW", []),
+    "java-kotlin-maven-gradle": (
+        "WARN",
+        [
+            "JAVA_GRADLE_BUILD_LOGIC",
+            "JAVA_GRADLE_INIT_SCRIPT",
+            "JAVA_MAVEN_PLUGIN_EXECUTION",
+            "JAVA_GRADLE_WRAPPER_INTEGRITY",
+            "JAVA_GRADLE_PLUGIN_REPOSITORY",
+            "JAVA_GRADLE_BUILD_LOGIC",
+        ],
+    ),
+    "java-kotlin-clean-minimal": ("ALLOW", []),
     "leaked-secret-fixture": ("BLOCK", ["SECRET_PRIVATE_KEY"]),
     "node-dynamic-require-uncertain": (
         "ASK_USER",
@@ -154,6 +166,7 @@ def test_corpus_scan_json_passes_all_expectations() -> None:
         "go-commented-replace-single-line",
         "rust-clean-minimal",
         "ruby-clean-minimal",
+        "java-kotlin-clean-minimal",
     } <= negative_ids
 
 
@@ -161,6 +174,12 @@ def test_clean_ecosystem_corpus_controls_include_representative_sources() -> Non
     assert (CASE_ROOT / "rust-clean-minimal" / "src" / "lib.rs").read_text(encoding="utf-8")
     assert (CASE_ROOT / "go-clean-minimal" / "clean.go").read_text(encoding="utf-8")
     assert (CASE_ROOT / "ruby-clean-minimal" / "lib" / "demo.rb").read_text(encoding="utf-8")
+    assert (CASE_ROOT / "java-kotlin-clean-minimal" / "src" / "main" / "java" / "example" / "Clean.java").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        CASE_ROOT / "java-kotlin-clean-minimal" / "src" / "main" / "kotlin" / "example" / "Clean.kt"
+    ).read_text(encoding="utf-8")
 
 
 def test_corpus_scan_single_case_markdown() -> None:

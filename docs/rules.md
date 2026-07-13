@@ -1,8 +1,8 @@
 # Rules
 
 V1 statically inspects package lifecycle scripts, shell patterns, secrets, GitHub Actions, MCP
-configs, agent instructions, Docker files, Makefiles, Rust/Cargo files, Go module/source files, and
-Ruby Bundler/gemspec/Rake/native-extension files.
+configs, agent instructions, Docker files, Makefiles, Rust/Cargo files, Go module/source files,
+Ruby Bundler/gemspec/Rake/native-extension files, and Java/Kotlin Maven/Gradle metadata.
 
 Rule IDs are stable because Codex summaries and golden tests depend on them. High-risk examples
 include `NODE_LIFECYCLE_REMOTE_EXEC`, `SHELL_CURL_PIPE_BASH`, `SECRET_OPENAI_KEY`,
@@ -45,3 +45,21 @@ Ruby scanning recognizes `Gemfile`, `Gemfile.lock`, `gems.locked`, `.gemspec`, `
 extension configuration. Direct Rake commands reach only the Rakefile; `bundle exec rake` also
 reaches Bundler metadata. Findings remain static warnings: the scanner does not run Ruby, Bundler,
 Rake, gem lifecycle hooks, extconf, compilers, package managers, tests, or repository code.
+
+Java and Kotlin ecosystem rule IDs are warning-oriented:
+
+- `JAVA_MAVEN_PLUGIN_EXECUTION`
+- `JAVA_GRADLE_PLUGIN_REPOSITORY`
+- `JAVA_GRADLE_INIT_SCRIPT`
+- `JAVA_GRADLE_BUILD_LOGIC`
+- `JAVA_GRADLE_WRAPPER_INTEGRITY`
+
+Java/Kotlin scanning recognizes Maven POMs; Gradle Groovy and Kotlin build/settings/init files;
+`buildSrc` and included-build logic; wrapper scripts; and `gradle-wrapper.properties`. Files selected
+by Maven `-f`/`--file` or Gradle `-I`/`--init-script` are collected and scanned even when they use
+nonstandard names. Maven and Gradle build/test commands add only relevant metadata to the execution
+graph: system Gradle does not imply repository-root init or wrapper execution, wrapper metadata is
+reachable only through `gradlew`/`gradlew.bat`, and init scripts are reachable only when explicitly
+selected. A wrapper distribution remains clean only when its URL is HTTPS and its SHA-256 checksum is pinned. The scanner does not
+run Java, Kotlin, Maven, Gradle, wrappers, plugins, compilers, tests, package managers, or repository
+code, and it performs no ecosystem-related network access.

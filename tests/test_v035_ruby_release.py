@@ -7,7 +7,7 @@ from codex_preflight_core.preflight import RULESET_VERSION
 from codex_preflight_mcp import __version__ as mcp_version
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.3.5"
+VERSION = "0.3.6"
 RUBY_RULE_IDS = {
     "RUBY_BUNDLER_GIT_SOURCE",
     "RUBY_BUNDLER_LOCAL_PATH_SOURCE",
@@ -30,7 +30,7 @@ def test_v035_version_sources_and_ruleset_are_aligned() -> None:
     assert mcp_version == VERSION
     assert root_plugin["version"] == VERSION
     assert marketplace_plugin["version"] == VERSION
-    assert RULESET_VERSION == "2026.07.12"
+    assert RULESET_VERSION == "2026.07.13.2"
 
 
 def test_v035_user_documentation_names_ruby_coverage_and_static_boundary() -> None:
@@ -45,7 +45,7 @@ def test_v035_user_documentation_names_ruby_coverage_and_static_boundary() -> No
     assert "ruby-bundler-rake-native" in corpus
     assert "ruby-clean-minimal" in corpus
     assert "Ruby, Bundler, Rake" in corpus
-    assert history.startswith("# Release History\n\n## v0.3.5")
+    assert "## v0.3.5" in history
     assert "does not run Ruby, Bundler, Rake" in history
 
 

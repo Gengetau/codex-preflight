@@ -39,6 +39,8 @@ The corpus includes Rust and Go ecosystem calibration fixtures:
 - `go-replace-block`
 - `ruby-bundler-rake-native`
 - `ruby-clean-minimal`
+- `java-kotlin-maven-gradle`
+- `java-kotlin-clean-minimal`
 
 The clean Rust fixture includes a minimal Cargo library target, and the clean Go fixture includes a
 minimal ordinary Go source file. Commented single-line and block-form replacements have separate
@@ -48,6 +50,13 @@ The Ruby positive fixture covers Bundler git/local sources, a command-running Ra
 extension and lifecycle declarations, and `extconf.rb`. The clean Ruby fixture contains ordinary
 Bundler metadata, a non-command-running Rake task, a gemspec, and representative library source.
 Corpus scans never run Ruby, Bundler, Rake, lifecycle hooks, extconf, compilers, or package tasks.
+
+The Java/Kotlin positive fixture covers quoted nonstandard Maven POM and Gradle init-script paths,
+Maven plugin execution, Gradle plugin repositories, `buildSrc` and included build logic, and an
+unpinned non-HTTPS wrapper distribution.
+The clean fixture includes ordinary Maven and Gradle metadata, representative Java/Kotlin source,
+and an HTTPS wrapper distribution with a pinned SHA-256 checksum. Corpus scans never run Maven,
+Gradle, wrappers, plugins, JVM compilers, tests, or repository code.
 
 The scanner compares the actual decision and rule IDs with the expected values. JSON retains the
 top-level `cases` array and adds deterministic `groups` by category. Markdown shows category,
@@ -59,7 +68,7 @@ Safety rules:
 - Corpus scans only read files.
 - Tests must not run package installs, setup scripts, Docker, shell scripts, MCP servers, or GitHub
   workflows from the fixtures.
-- Tests must not run Cargo, Go, Ruby, Bundler, Rake, build scripts, generators, extconf, compilers,
-  package managers, lifecycle hooks, or test hooks from the fixtures.
+- Tests must not run Cargo, Go, Ruby, Bundler, Rake, Maven, Gradle, wrappers, build scripts,
+  generators, extconf, compilers, package managers, lifecycle hooks, or test hooks from the fixtures.
 - URLs use inert documentation domains such as `example.invalid`.
 - Secret fixtures use non-working markers and must not contain real credentials.

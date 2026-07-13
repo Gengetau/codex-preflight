@@ -1,0 +1,3 @@
+beforeSettings {
+    // Static fixture only; selected by -I but never executed by the corpus scan.
+}

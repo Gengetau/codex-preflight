@@ -1,0 +1,9 @@
+id: java-kotlin-clean-minimal
+title: Clean minimal Maven and Gradle project
+category: ecosystem-java-kotlin
+command: ./gradlew test
+expectedDecision: ALLOW
+expectedRules: []
+negativeControl: true
+description: Minimal Maven, Gradle, Java, and Kotlin metadata without plugin executions, custom plugin repositories, init or included build logic, or wrapper integrity gaps.
+safetyNote: Contains inert static XML, Gradle, wrapper, Java, and Kotlin text only; build tools, wrappers, compilers, tests, and repository code are never executed.

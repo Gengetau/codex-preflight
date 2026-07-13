@@ -5,6 +5,7 @@ from codex_preflight_core.rules.agent_instructions import AgentInstructionRule
 from codex_preflight_core.rules.base import Rule
 from codex_preflight_core.rules.docker import DockerRule
 from codex_preflight_core.rules.github_actions import GitHubActionsRule
+from codex_preflight_core.rules.java_kotlin import JavaKotlinEcosystemRule
 from codex_preflight_core.rules.mcp_config import McpConfigRule
 from codex_preflight_core.rules.package_json import PackageJsonRule
 from codex_preflight_core.rules.python_setup import PythonSetupRule
@@ -28,17 +29,22 @@ DEFAULT_RULES: tuple[Rule, ...] = (
     DockerRule(),
     RustGoEcosystemRule(),
     RubyEcosystemRule(),
+    JavaKotlinEcosystemRule(),
 )
 
 
 def scan_repository(root: Path, rules: tuple[Rule, ...] = DEFAULT_RULES, command: str | None = None) -> list[Finding]:
     root = root.resolve()
     findings: list[Finding] = []
+    effective_rules = tuple(
+        JavaKotlinEcosystemRule(command=command) if isinstance(rule, JavaKotlinEcosystemRule) else rule
+        for rule in rules
+    )
     for relative in collect_critical_files(root, command=command):
         result = read_text_safely(root, relative)
         if result.text is None:
             continue
-        for rule in rules:
+        for rule in effective_rules:
             findings.extend(rule.scan(root, relative, result.text))
     return findings
 

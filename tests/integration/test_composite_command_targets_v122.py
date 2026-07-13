@@ -72,6 +72,16 @@ def test_absolute_and_outside_root_command_targets_are_ignored(tmp_path: Path) -
     assert "outside-install.sh" not in collected_paths(tmp_path, "bash ../outside-install.sh")
 
 
+def test_outside_maven_and_gradle_command_targets_are_ignored(tmp_path: Path) -> None:
+    outside_pom = tmp_path.parent / "alternate.xml"
+    outside_init = tmp_path.parent / "bootstrap.gradle"
+    write_file(outside_pom, "<project />\n")
+    write_file(outside_init, "beforeSettings { }\n")
+
+    assert "alternate.xml" not in collected_paths(tmp_path, "mvn -f ../alternate.xml test")
+    assert "bootstrap.gradle" not in collected_paths(tmp_path, "gradle -I ../bootstrap.gradle test")
+
+
 def test_quoted_command_separators_do_not_split() -> None:
     command = 'python -c "print(\'left && right; still quoted\')" && bash install.sh'
 

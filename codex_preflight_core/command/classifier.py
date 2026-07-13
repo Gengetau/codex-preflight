@@ -1,7 +1,7 @@
 import re
-import shlex
 from dataclasses import dataclass
 
+from codex_preflight_core.command.java import parse_java_invocation, split_command_words
 from codex_preflight_core.command.scope import CommandScope
 
 RISK_ORDER = {
@@ -29,10 +29,7 @@ class CommandClassification:
 
 
 def _split(command: str) -> list[str]:
-    try:
-        return shlex.split(command, posix=False)
-    except ValueError:
-        return command.split()
+    return split_command_words(command)
 
 
 def classify_command(command: str) -> CommandClassification:
@@ -51,7 +48,8 @@ def classify_command(command: str) -> CommandClassification:
 def _classify_single(command: str) -> CommandClassification:
     stripped = command.strip()
     lowered = stripped.lower()
-    parts = [part.lower() for part in _split(stripped)]
+    raw_parts = _split(stripped)
+    parts = [part.lower() for part in raw_parts]
     first = parts[0] if parts else ""
     second = parts[1] if len(parts) > 1 else ""
 
@@ -81,8 +79,11 @@ def _classify_single(command: str) -> CommandClassification:
     if first in {"bash", "sh", "powershell", "pwsh", "python", "node"}:
         return CommandClassification(command, CommandScope.SCRIPT_EXECUTION, "Local script execution.")
 
-    if first in {"pytest"} or first in {"mvn"} and second == "test":
+    java_tool, java_task = _java_build_tool(raw_parts)
+    if first in {"pytest"} or java_tool == "maven" and java_task == "test":
         return CommandClassification(command, CommandScope.TEST, "Test command.")
+    if java_tool == "gradle" and _gradle_task_is_test(java_task):
+        return CommandClassification(command, CommandScope.TEST, "Gradle test task command.")
     if first == "cargo" and second == "test":
         return CommandClassification(command, CommandScope.TEST, "Cargo test command.")
     if first == "go" and second == "test":
@@ -102,7 +103,9 @@ def _classify_single(command: str) -> CommandClassification:
         return CommandClassification(command, CommandScope.BUILD, "Package script command.")
     if first in {"npm", "pnpm", "yarn"} and second == "run":
         return CommandClassification(command, CommandScope.BUILD, "Package script command.")
-    if first in {"make", "gradle"} or first == "mvn" and second in {"package", "compile"}:
+    if java_tool:
+        return CommandClassification(command, CommandScope.BUILD, "Maven or Gradle build command.")
+    if first == "make":
         return CommandClassification(command, CommandScope.BUILD, "Build command.")
 
     if first in {"ls", "dir", "pwd"}:
@@ -157,6 +160,18 @@ def _ruby_rake_task(parts: list[str]) -> str | None:
 def _ruby_task_is_test(task: str) -> bool:
     segments = re.split(r"[:/]", task)
     return any(segment in {"spec", "test", "tests"} for segment in segments)
+
+
+def _java_build_tool(parts: list[str]) -> tuple[str | None, str]:
+    invocation = parse_java_invocation(parts)
+    if invocation is None:
+        return None, ""
+    return invocation.kind, invocation.task
+
+
+def _gradle_task_is_test(task: str) -> bool:
+    segments = re.split(r"[:/]", task)
+    return any(segment in {"check", "test", "tests"} or segment.endswith("test") for segment in segments)
 
 
 _split_shell_segments = split_shell_segments

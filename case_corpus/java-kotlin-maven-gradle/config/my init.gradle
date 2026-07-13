@@ -1,0 +1,3 @@
+beforeSettings {
+    // Static quoted-path fixture only; the corpus scan never executes Gradle.
+}
