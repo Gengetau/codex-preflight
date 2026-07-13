@@ -73,7 +73,7 @@ network access, redirects are rejected, and every GitHub response is size bounde
 Run optional MCP runtime validation for releases that touch MCP packaging or runtime behavior:
 
 ```bash
-python -m pip install ".[dev,mcp]"
+python -m pip install -e ".[dev,mcp]"
 python -m pytest tests/test_mcp_runtime_smoke.py -q
 codex-preflight-mcp --list-tools
 ```

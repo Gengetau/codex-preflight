@@ -23,13 +23,18 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
-        run: python -m pip install ".[dev,mcp]"
+        run: python -m pip install -e ".[dev,mcp]"
 
       - name: Check marketplace plugin copy
         run: python scripts/sync_marketplace_plugin.py --check
 
+      - name: Install isolated release verifier
+        run: python -m pip install --target "${{ runner.temp }}/codex-preflight-release-verify" --no-deps .
+
       - name: Verify release readiness
-        run: codex-preflight release verify --root . --expected-version 0.3.7 --expected-commit HEAD --format json
+        env:
+          PYTHONPATH: ${{ runner.temp }}/codex-preflight-release-verify
+        run: python -P -m codex_preflight_cli.main release verify --root . --expected-version 0.3.7 --expected-commit HEAD --format json
 
       - name: Lint
         run: ruff check .
@@ -55,7 +60,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install MCP extras
-        run: python -m pip install ".[dev,mcp]"
+        run: python -m pip install -e ".[dev,mcp]"
 
       - name: List MCP tools
         run: codex-preflight-mcp --list-tools
