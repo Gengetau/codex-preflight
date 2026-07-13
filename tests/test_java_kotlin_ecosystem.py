@@ -110,6 +110,22 @@ def test_gradle_comment_and_string_indicators_remain_clean(tmp_path: Path) -> No
     assert capability_ids(report) == []
 
 
+def test_gradle_dependency_repository_outside_empty_plugin_management_remains_clean(tmp_path: Path) -> None:
+    (tmp_path / "settings.gradle.kts").write_text(
+        "pluginManagement { }\n"
+        "dependencyResolutionManagement {\n"
+        "  repositories { mavenCentral() }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    report = run_preflight(tmp_path, "gradle test", use_cache=False)
+
+    assert report["decision"] == "ALLOW"
+    assert rule_ids(report) == []
+    assert capability_ids(report) == []
+
+
 def test_gradle_common_plugin_repository_and_no_parentheses_included_build_are_detected(tmp_path: Path) -> None:
     (tmp_path / "settings.gradle").write_text(
         "pluginManagement { repositories { mavenCentral() } }\n"

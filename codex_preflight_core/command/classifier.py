@@ -169,12 +169,67 @@ def _java_build_tool(parts: list[str]) -> tuple[str | None, str]:
         return None, ""
     executable = parts[0].replace("\\", "/").rsplit("/", 1)[-1]
     if executable in {"mvn", "mvnw", "mvnw.cmd"}:
-        task = next((part for part in parts[1:] if not part.startswith("-")), "package")
+        task = _first_java_task(parts[1:], _MAVEN_VALUE_OPTIONS, "package")
         return "maven", task
     if executable in {"gradle", "gradlew", "gradlew.bat"}:
-        task = next((part for part in parts[1:] if not part.startswith("-")), "build")
+        task = _first_java_task(parts[1:], _GRADLE_VALUE_OPTIONS, "build")
         return "gradle", task
     return None, ""
+
+
+_MAVEN_VALUE_OPTIONS = {
+    "-f",
+    "--file",
+    "-s",
+    "--settings",
+    "-gs",
+    "--global-settings",
+    "-t",
+    "--toolchains",
+    "-p",
+    "--activate-profiles",
+    "-pl",
+    "--projects",
+    "-rf",
+    "--resume-from",
+}
+
+_GRADLE_VALUE_OPTIONS = {
+    "-p",
+    "--project-dir",
+    "-c",
+    "--settings-file",
+    "-i",
+    "--init-script",
+    "-g",
+    "--gradle-user-home",
+    "--project-cache-dir",
+    "--include-build",
+    "--max-workers",
+    "--priority",
+    "--warning-mode",
+    "--console",
+    "--configuration-cache-problems",
+    "--dependency-verification",
+    "--write-verification-metadata",
+}
+
+
+def _first_java_task(parts: list[str], value_options: set[str], default: str) -> str:
+    index = 0
+    while index < len(parts):
+        part = parts[index]
+        if part == "--":
+            return parts[index + 1] if index + 1 < len(parts) else default
+        option_name = part.split("=", 1)[0]
+        if option_name in value_options:
+            index += 1 if "=" in part else 2
+            continue
+        if part.startswith("-"):
+            index += 1
+            continue
+        return part
+    return default
 
 
 def _gradle_task_is_test(task: str) -> bool:

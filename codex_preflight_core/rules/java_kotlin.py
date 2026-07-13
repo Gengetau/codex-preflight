@@ -83,9 +83,7 @@ def _scan_gradle_file(relative_path: Path, text: str) -> list[Finding]:
     findings: list[Finding] = []
     if (
         relative_path.name in {"settings.gradle", "settings.gradle.kts"}
-        and _PLUGIN_MANAGEMENT.search(code)
-        and _REPOSITORIES.search(code)
-        and _PLUGIN_REPOSITORY.search(code)
+        and _has_plugin_management_repository(code)
     ):
         findings.append(
             _finding(
@@ -113,6 +111,31 @@ def _scan_gradle_file(relative_path: Path, text: str) -> list[Finding]:
             )
         )
     return findings
+
+
+def _has_plugin_management_repository(code: str) -> bool:
+    for plugin_management in _block_bodies(code, _PLUGIN_MANAGEMENT):
+        for repositories in _block_bodies(plugin_management, _REPOSITORIES):
+            if _PLUGIN_REPOSITORY.search(repositories):
+                return True
+    return False
+
+
+def _block_bodies(code: str, opener: re.Pattern[str]) -> list[str]:
+    bodies: list[str] = []
+    for match in opener.finditer(code):
+        opening_brace = match.end() - 1
+        depth = 1
+        index = opening_brace + 1
+        while index < len(code) and depth:
+            if code[index] == "{":
+                depth += 1
+            elif code[index] == "}":
+                depth -= 1
+            index += 1
+        if depth == 0:
+            bodies.append(code[opening_brace + 1 : index - 1])
+    return bodies
 
 
 def _init_script_finding(relative_path: Path) -> Finding:
