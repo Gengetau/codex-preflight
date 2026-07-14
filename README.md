@@ -129,6 +129,47 @@ codex-preflight exec --cwd . --format markdown -- pytest
 The exec wrapper runs the command only when preflight returns `ALLOW` or `WARN`. It prints a
 readable report and exits without running the command for `ASK_USER` or `BLOCK`.
 
+Verify local release readiness without changing repository or release state:
+
+```bash
+codex-preflight release verify --root . --expected-version 0.3.7 --expected-commit HEAD --format markdown
+```
+
+The command checks all five version sources, the three root/marketplace plugin-copy files, the
+exact eight-way static MCP inventories, and supported Python, Git, and optional MCP integrations.
+When the optional MCP runtime is installed, it also checks all eight runtime inventories. When it
+is missing, both the integration and `mcp.inventory.runtime` checks return `SKIP`, the runtime probe
+is not invoked, and the exact install command is reported without installing anything. Add `--tag`,
+`--github-repo OWNER/NAME`, and `--merged-branch` only when
+you explicitly want bounded, read-only tag, published Release, and branch-cleanup verification.
+JSON output uses the stable `release-readiness/v1` schema. Repository and GitHub evidence remains
+untrusted data.
+
+The target checkout is never added to a runtime probe's `PYTHONPATH`. Runtime probes are allowed only
+when the active Codex Preflight package root resolves outside the target checkout; filesystem overlap
+fails readiness before a probe starts. This proves filesystem separation only: it does not determine
+editable-install metadata or prove independent build provenance. Invoke the command from a separately
+trusted installation when an independent code-provenance boundary is required. Each probe replaces
+only the side-effectful trust-service factories with inert in-memory services and then calls the same
+default `create_mcp_server()` path as normal startup. Normal startup and verification therefore use
+one pure shared registration function and the same registration inputs; the probe reads the resulting
+actual FastMCP Tool Manager without opening trust stores or writing registration audit state.
+Every required target file is opened through no-follow handles; symbolic links, reparse points,
+unsafe hard links, and repository escapes fail readiness. `HEAD` must equal the requested canonical
+commit, and every file actually consumed by diagnostics must content-match its tracked commit blob.
+The commit tree entry must be a regular `100644` or `100755` blob; symlink and submodule modes fail
+even when a checkout materializes them as ordinary files. One immutable no-follow byte snapshot is
+verified and then reused by all version, plugin, and inventory parsers. Only the safe built-in
+CRLF-to-LF checkout conversion is accepted; repository filters are never run. Dynamic namespace
+writes such as `globals()` and `exec` fail the strict static version/inventory contract.
+Index hints such as `assume-unchanged` and `skip-worktree` cannot hide drift. Git environment
+overrides are discarded, and the verifier does not call `git status` or repository fsmonitor hooks.
+The discovered Git executable is resolved once to a canonical absolute path outside the target and
+that exact path is used for every Git subprocess.
+Tag checks require annotated tags; lightweight tags fail. External checks reject redirects, cap response bytes,
+validate repository and branch names, and positively identify the public repository before a branch
+`404` can mean deletion. Markdown output encodes every interpolated value as data.
+
 ## Codex Plugin Usage
 
 Codex Preflight remains a Python CLI project and is also packaged as a Codex plugin that bundles

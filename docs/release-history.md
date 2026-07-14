@@ -1,5 +1,35 @@
 # Release History
 
+## v0.3.7
+
+Deterministic release automation and supported-integration diagnostics:
+
+- Added `codex-preflight release verify` with stable `release-readiness/v1` JSON and human-readable
+  Markdown output. The command is non-mutating and suitable for local use and protected CI.
+- Added exact checks for five version sources, three root/marketplace plugin-copy files, all eight
+  supported static MCP authority inventories, and all eight runtime inventories when the optional
+  MCP runtime is installed, without adding an MCP tool or runtime authority.
+- Added supported Python, Git, and optional MCP integration diagnostics. Optional dependencies are
+  never installed automatically; missing MCP support reports the exact supported install command.
+- Added explicit, bounded, read-only helpers for local tag targets, published GitHub Release
+  targets, and merged-branch cleanup. Repository and remote evidence remains untrusted data.
+- Hardened the diagnostic boundary with no-follow target reads, recursive strict AST binding
+  contracts, exact `HEAD` plus consumed-file commit-blob binding, scrubbed Git environment overrides,
+  and verified runtime module provenance outside the target. The verifier avoids `git status` and
+  repository fsmonitor or filter execution; safe CRLF checkout conversion is handled locally, while
+  regular tree modes and an immutable shared byte snapshot prevent symlink-mode, index-hidden, and
+  second-read drift. Dynamic namespace and indirect protected-attribute writes fail closed in version
+  and inventory AST validation. Runtime probes invoke the same default server factory and pure shared
+  registration function as normal startup while substituting only inert service factories; they
+  inspect the actual FastMCP Tool Manager without state writes. A missing optional MCP runtime skips
+  the runtime inventory without invoking a probe, and filesystem overlap fails before probes start.
+  Git runs only through one canonical checkout-external executable. Release tags must be annotated;
+  GitHub checks reject redirects, cap response bytes, validate ref inputs, and require positive
+  repository identification before branch deletion can pass. Markdown interpolations remain inert data.
+- Added clean, drift, stale-state, missing-integration, read-only failure, and Windows/Linux
+  path/process regression coverage while preserving existing CLI, plugin, report, and MCP
+  authority boundaries.
+
 ## v0.3.6
 
 Warning-oriented Java and Kotlin ecosystem coverage:

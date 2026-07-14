@@ -32,7 +32,7 @@ from codex_preflight_mcp.trust_read import TRUST_LIST_SAFETY
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES = ROOT / "examples" / "mcp"
-VERSION = "0.3.6"
+VERSION = "0.3.7"
 PREPARED_EVENT_ID = "123e4567-e89b-42d3-a456-426614174000"
 FINAL_EVENT_ID = "123e4567-e89b-42d3-a456-426614174001"
 RUNTIME_IDENTITY = {

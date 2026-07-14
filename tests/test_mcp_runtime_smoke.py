@@ -47,6 +47,51 @@ def test_fastmcp_runtime_uses_public_tool_names_required_schema_and_error_codes(
     assert "Traceback" not in str(caught.value)
 
 
+def test_normal_server_registration_uses_shared_registry_with_inert_services(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import codex_preflight_mcp.server as server_module
+
+    for name in (
+        "CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN",
+        "CODEX_PREFLIGHT_ENABLE_TRUST_READ",
+        "CODEX_PREFLIGHT_ENABLE_TRUST_MUTATION",
+    ):
+        monkeypatch.setenv(name, "1")
+
+    recorded: list[str] = []
+
+    class InertService:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def record_registration_state(self) -> None:
+            recorded.append(self.name)
+
+    monkeypatch.setattr(
+        server_module,
+        "default_trust_read_service",
+        lambda: InertService("trust-read"),
+    )
+    monkeypatch.setattr(
+        server_module,
+        "default_trust_mutation_service",
+        lambda: InertService("trust-mutation"),
+    )
+
+    server = server_module.create_mcp_server()
+
+    assert [tool.name for tool in server._tool_manager.list_tools()] == [
+        "preflight_check",
+        "corpus_scan",
+        "remote_repository_scan",
+        "trust_list",
+        "trust_approve",
+        "trust_revoke",
+    ]
+    assert recorded == ["trust-read", "trust-mutation"]
+
+
 def test_stdio_initialization_returns_fixed_server_instructions() -> None:
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
