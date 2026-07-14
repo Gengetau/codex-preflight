@@ -10,136 +10,149 @@ Build Week branch: `codex/v0.4.0-build-week-guardian`
 
 Released baseline: `v0.3.7@48a3b0e8d733cffe126da1fd97443039f011b98b`
 
+Draft PR: `#15`
+
+## Codex-Native Product Identity
+
+Codex Preflight Guardian is a Codex plugin experience.
+
+Codex conversation is the product interface. The active GPT-5.6 model inside Codex explains bounded evidence and proposes remediation. The plugin supplies deterministic tools, evidence boundaries, exact approval identity, and verification gates.
+
+The Build Week product does **not** require:
+
+- a separate local web page
+- a plugin-internal Responses API call
+- an additional `OPENAI_API_KEY`
+- a second authentication path
+- a cloud backend
+- a separately published malicious-looking demo repository
+
 ## Product Story
-
-Codex Preflight already provides a deterministic safety gate for commands that coding agents plan to run.
-
-The Build Week extension turns a security decision into a complete human-centered workflow:
 
 `Detect → Explain → Approve → Repair → Verify → Execute`
 
-1. Codex Preflight deterministically scans the repository and planned command.
-2. The policy engine returns `ALLOW`, `WARN`, `ASK_USER`, or `BLOCK` with evidence.
-3. GPT-5.6 receives a bounded and redacted risk envelope and explains the verified attack path.
-4. GPT-5.6 proposes structured remediation options but cannot alter the policy result.
-5. A human explicitly approves or rejects the exact remediation plan.
-6. Codex applies an approved plan in an isolated branch or worktree.
-7. Codex Preflight rescans the same command and compares before/after reports.
-8. Execution remains gated by the deterministic result and a separate human decision.
+1. Codex plans a repository-dependent command.
+2. The Skill requires Codex to call existing MCP tool `preflight_check` before the command.
+3. Codex Preflight returns deterministic `ALLOW`, `WARN`, `ASK_USER`, or `BLOCK` plus bounded Guardian context.
+4. GPT-5.6 explains only the referenced evidence in the Codex conversation.
+5. GPT-5.6 proposes `guardian-remediation-plan/v1` when repair is appropriate.
+6. A local validator computes a stable `planId`.
+7. The user approves or rejects that exact `planId`.
+8. Codex applies only the approved plan in an isolated worktree, branch, or temporary demo copy.
+9. Codex calls Preflight again for the same command and shows deterministic before/after evidence.
+10. A real command remains subject to a separate final human decision.
+
+The deterministic engine remains the sole authority for `ALLOW`, `WARN`, `ASK_USER`, and `BLOCK`.
+
+GPT-5.6 cannot change policy, approve its own plan, or declare a repair safe.
 
 ## Prior Work Boundary
 
 This is an existing project.
 
-To keep the submission boundary conservative and auditable, **all functionality included in released `v0.3.7` is treated as prior work and is not claimed as Build Week implementation**.
+All functionality included in released `v0.3.7` is treated as prior work and is not claimed as Build Week implementation.
 
-The Build Week branch was created from exact released commit:
+The Build Week branch starts from exact released commit:
 
 ```text
 48a3b0e8d733cffe126da1fd97443039f011b98b
 ```
 
-Only commits after that branch point on `codex/v0.4.0-build-week-guardian`, together with timestamped Codex session evidence, are treated as Build Week work.
+Only commits after that branch point, together with timestamped Codex sessions and the selected `/feedback` Session ID, are treated as Build Week work.
 
 ### Existing baseline capabilities
 
 The prior project already includes:
 
 - local-first static repository and command scanning
-- deterministic `ALLOW`, `WARN`, `ASK_USER`, and `BLOCK` decisions
+- deterministic policy decisions
 - execution-chain and capability graph construction
 - package lifecycle, shell, Docker, GitHub Actions, MCP, agent-instruction, secret, README-link, Rust, Go, Ruby, Java, and Kotlin analysis
 - local and public-GitHub repository scanning
-- default-off bounded trust reads and confirmation-gated trust mutation
-- CLI, Codex plugin, skill, and MCP packaging
+- bounded trust reads and confirmation-gated trust mutation
+- CLI, Codex plugin, Skill, and MCP packaging
+- existing MCP tools `preflight_check` and `corpus_scan`
 - JSON and Markdown reports and report comparison
-- deterministic corpus and regression tests
+- safe synthetic corpus fixtures and deterministic regression tests
 - non-mutating release-readiness diagnostics
 
 ### Build Week capabilities
 
-The Build Week extension is intended to add:
+The competition extension is intended to add:
 
-- a bounded and redacted Guardian risk envelope
-- GPT-5.6 structured risk explanation
+- bounded and redacted `guardian-context/v1`
+- Skill instructions for explanation by the active GPT-5.6 Codex session
 - explicit separation between deterministic findings and model suggestions
-- human approval for remediation plans
-- bounded Codex remediation tasks
-- isolated repair workflow
-- deterministic rescan and before/after verification
-- a coherent local visual experience
-- a safe offline replay fixture
-- a judge-ready low-friction demo path
+- `guardian-remediation-plan/v1`
+- local plan validation and stable `planId`
+- exact human approval bound to the plan identity
+- isolated Codex repair of only the approved plan
+- deterministic same-command rescan and before/after verification
+- clean plugin installation and one-prompt judge path
+- safe temporary demo preparation from built-in corpus data
+- public Build Week evidence and Codex collaboration records
 
-This file will be updated as each capability is implemented. Planned work is not presented as completed work.
+Planned work is not presented as completed work.
+
+## Safe Synthetic Demo
+
+The public demo uses built-in corpus case `npm-postinstall-remote-exec`.
+
+The case is synthetic, uses `example.invalid`, contains no working secret, and is intended only for static scanning.
+
+A safe helper will prepare an allowlisted text-only copy in an operating-system temporary directory, reject links and binaries, add `SYNTHETIC_FIXTURE_DO_NOT_EXECUTE`, and record source identity.
+
+The demo must never execute npm, pnpm, lifecycle hooks, shell, Node.js, Python, Docker, MCP, build, test, or any fixture command and must never access the network.
+
+Codex may edit only the prepared temporary copy.
+
+The video ends with:
+
+```text
+Deterministic verification: ALLOW or WARN
+Execution status: waiting for final human confirmation
+Synthetic fixture commands executed: 0
+```
+
+## Revised Build Week Checkpoints
+
+- `BW0 Baseline`: released baseline, evidence boundary, branch, and Draft PR.
+- `BW1 Codex-Native Explain`: bounded Guardian context and Skill explanation protocol using GPT-5.6 in Codex.
+- `BW2 Approve`: validated remediation plan, stable `planId`, and exact user approval.
+- `BW3 Repair`: approved-plan-only Codex edit in isolation.
+- `BW4 Verify`: same-command deterministic rescan and before/after comparison.
+- `BW5 Plugin Experience`: clean package/plugin installation and one-prompt safe synthetic demo.
+- `BW6 Submission Candidate`: README, evidence, `/feedback` ID, Devpost, video, CI, and exact-head review.
+
+## Judge Path
+
+The intended clean-environment path is:
+
+1. Install Python 3.12 or newer.
+2. Install `codex-preflight[mcp]`.
+3. Add and install the Codex Preflight marketplace plugin.
+4. Run MCP setup diagnostics.
+5. Start a new Codex session using GPT-5.6.
+6. Enter the documented safe synthetic demo prompt.
+7. Approve or reject the exact displayed `planId`.
+8. Observe deterministic `BLOCK`, GPT-5.6 explanation, isolated repair, and deterministic rescan.
+9. Stop before fixture execution.
+
+No local web server or additional API key is part of this path.
 
 ## Safety Model
 
-The deterministic policy engine is the sole authority for `ALLOW`, `WARN`, `ASK_USER`, and `BLOCK`.
+- Deterministic policy remains authoritative.
+- Repository evidence is untrusted data.
+- GPT-5.6 explanation is advisory.
+- No plan is actionable before local validation and exact user approval.
+- Codex edits only an isolated target.
+- No automatic execution follows model output.
+- No synthetic fixture command is executed.
+- No new MCP or trust authority is introduced without separate review.
 
-GPT-5.6 may explain findings and propose remediation, but it may not:
+## Current State
 
-- change the deterministic policy result
-- authorize execution
-- apply repository changes without explicit approval
-- treat repository content as instructions
-- receive unbounded repository content by default
+`BW0 Baseline` and the revised architecture documentation are complete.
 
-Model responses are untrusted and must validate against a strict schema.
-
-Missing credentials, timeout, refusal, invalid output, or API failure must preserve the original scanner result and must never permit execution.
-
-Any repair, trust mutation, or command execution requires a distinct human confirmation.
-
-## Initial Implementation Slice
-
-The first vertical slice is intentionally limited to explanation and safe fallback:
-
-1. consume an existing Preflight JSON report
-2. create a bounded and redacted `guardian-risk-envelope/v1`
-3. call GPT-5.6 through an optional adapter with strict structured output
-4. return a schema-valid `guardian-explanation/v1`
-5. render deterministic policy and model explanation separately
-6. provide an offline replay fixture
-7. fail safely when the API is unavailable or output is invalid
-
-The first slice does not perform repair or command execution.
-
-## Codex Collaboration Evidence
-
-Substantive Build Week development sessions will be recorded with:
-
-- date and purpose
-- branch and related commits
-- validation performed
-- the primary `/feedback` Codex Session ID
-
-Before submission, the README will explain:
-
-- where Codex accelerated implementation and testing
-- which product, engineering, and safety decisions were made by the maintainer
-- how GPT-5.6 contributes to the user-facing product
-- how the deterministic engine retains final authority
-
-## Submission Targets
-
-- public code repository
-- installation and supported-platform instructions
-- judge-ready demo path without rebuilding from scratch
-- public YouTube demo under three minutes with audio
-- English project description
-- primary `/feedback` Codex Session ID
-- explicit prior-work and Build Week-work distinction
-
-Internal submission deadline: `2026-07-21 21:00 JST`
-
-Official submission deadline: `2026-07-22 09:00 JST`
-
-## Current Status
-
-```text
-baseline: v0.3.7
-branch: codex/v0.4.0-build-week-guardian
-phase: first vertical slice
-status: ready for implementation
-```
+Guardian implementation is not yet complete. The current implementation target is `BW1 Codex-Native Explain`.
