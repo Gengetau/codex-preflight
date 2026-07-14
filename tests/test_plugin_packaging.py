@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / ".codex-plugin" / "plugin.json"
 SKILL = ROOT / "skills" / "codex-preflight" / "SKILL.md"
 MCP_CONFIG = ROOT / ".mcp.json"
+HOOK_CONFIG = ROOT / "hooks" / "hooks.json"
 
 
 def load_manifest() -> dict:
@@ -55,6 +56,32 @@ def test_manifest_declares_only_real_components() -> None:
     assert not (ROOT / ".app.json").exists()
 
 
+def test_default_plugin_hook_uses_bounded_supported_command_shape() -> None:
+    hooks = json.loads(HOOK_CONFIG.read_text(encoding="utf-8"))
+    groups = hooks["hooks"]["PreToolUse"]
+
+    assert len(groups) == 1
+    assert groups[0]["matcher"] == "^Bash$"
+    assert groups[0]["hooks"] == [
+        {
+            "type": "command",
+            "command": "codex-preflight-hook",
+            "commandWindows": "codex-preflight-hook.exe",
+            "timeout": 30,
+            "statusMessage": "Running Codex Preflight",
+        }
+    ]
+
+
+def test_hook_console_entry_point_is_packaged() -> None:
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+    assert pyproject["project"]["scripts"]["codex-preflight-hook"] == (
+        "codex_preflight_guardian.pre_tool_use:main"
+    )
+    assert "codex_preflight_guardian*" in pyproject["tool"]["setuptools"]["packages"]["find"]["include"]
+
+
 def test_manifest_has_marketplace_ready_presentation_metadata() -> None:
     manifest = load_manifest()
     interface = manifest["interface"]
@@ -72,7 +99,7 @@ def test_manifest_has_marketplace_ready_presentation_metadata() -> None:
 
 
 def test_plugin_files_have_no_placeholders_or_chinese_text() -> None:
-    paths = [MANIFEST, MCP_CONFIG, SKILL, ROOT / "docs" / "plugin.md"]
+    paths = [MANIFEST, MCP_CONFIG, HOOK_CONFIG, SKILL, ROOT / "docs" / "plugin.md"]
     todo_marker = "TO" + "DO"
     for path in paths:
         text = path.read_text(encoding="utf-8")

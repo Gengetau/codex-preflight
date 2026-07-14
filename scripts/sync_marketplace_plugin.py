@@ -32,6 +32,10 @@ def sync_items(root: Path) -> list[SyncItem]:
             source=root / "skills" / PLUGIN_NAME / "SKILL.md",
             destination=marketplace_plugin / "skills" / PLUGIN_NAME / "SKILL.md",
         ),
+        SyncItem(
+            source=root / "hooks" / "hooks.json",
+            destination=marketplace_plugin / "hooks" / "hooks.json",
+        ),
     ]
 
 

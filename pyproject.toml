@@ -32,10 +32,11 @@ mcp = [
 
 [project.scripts]
 codex-preflight = "codex_preflight_cli.main:app"
+codex-preflight-hook = "codex_preflight_guardian.pre_tool_use:main"
 codex-preflight-mcp = "codex_preflight_mcp.server:main"
 
 [tool.setuptools.packages.find]
-include = ["codex_preflight_core*", "codex_preflight_cli*", "codex_preflight_mcp*"]
+include = ["codex_preflight_core*", "codex_preflight_cli*", "codex_preflight_guardian*", "codex_preflight_mcp*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
