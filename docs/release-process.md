@@ -38,16 +38,20 @@ codex-preflight corpus scan
 
 `release verify` is diagnostic-only. It does not create, move, delete, or publish tags, Releases,
 branches, trust records, cache entries, credentials, artifacts, or repository files, and it never
-installs an optional dependency. A missing MCP runtime is a `SKIP` with the supported remediation:
-`python -m pip install "codex-preflight[mcp]"`. Local verification checks all version sources,
-plugin copies, supported integrations, and all eight exact static and runtime MCP inventories.
+installs an optional dependency. A missing MCP runtime makes both the integration check and
+`mcp.inventory.runtime` a `SKIP`; no runtime subprocess is invoked, and the supported remediation is
+`python -m pip install "codex-preflight[mcp]"`. Local verification always checks all version sources,
+plugin copies, supported integrations, and all eight exact static MCP inventories. It checks all
+eight runtime inventories only when the optional MCP runtime is installed.
 The target checkout is read through bounded no-follow handles and strict static parsers, and is never
 added to a runtime probe's `PYTHONPATH`. Runtime probes require a Codex Preflight package root whose
 resolved module path is outside the target; filesystem overlap fails before a probe starts. This
 proves filesystem separation only and does not determine editable-install metadata or independent
-provenance for a package built from the target. Registration-only probes instantiate the actual
-FastMCP server and read its Tool Manager while skipping trust-store construction, recovery, and
-registration audit writes. The target must be the exact Git worktree root and `HEAD` must equal the requested
+provenance for a package built from the target. Runtime probes replace only side-effectful trust
+service factories with inert in-memory services, then invoke the same default `create_mcp_server()`
+path and pure shared registration function as normal startup. They read the actual FastMCP Tool
+Manager without trust-store construction, recovery, or registration audit writes. The target must
+be the exact Git worktree root and `HEAD` must equal the requested
 canonical commit. Every file consumed by diagnostics is read no-follow and content-matched against
 its tracked regular-blob commit entry. Symlink/submodule modes fail even if materialized as files.
 All downstream parsing uses the same immutable verified byte snapshot, eliminating a second-read

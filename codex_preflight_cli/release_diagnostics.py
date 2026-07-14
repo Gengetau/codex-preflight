@@ -47,7 +47,16 @@ _MAPPING_MUTATION_METHODS = frozenset(
 )
 _OS_ENVIRONMENT_MUTATORS = frozenset({"putenv", "unsetenv"})
 _PROTECTED_SERVER_SYMBOLS = frozenset(
-    {"remote_scan_enabled", "tool_definitions", "trust_mutation_enabled", "trust_read_enabled"}
+    {
+        "_record_registration_state",
+        "_register_mcp_tools",
+        "_runtime_services",
+        "create_mcp_server",
+        "remote_scan_enabled",
+        "tool_definitions",
+        "trust_mutation_enabled",
+        "trust_read_enabled",
+    }
 )
 _CONSUMED_TARGET_FILES = (
     "pyproject.toml",
@@ -65,7 +74,9 @@ _TRUSTED_PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 _RUNTIME_PROBE = (
     "import json; import codex_preflight_core as core; import codex_preflight_mcp as package; "
     "import codex_preflight_mcp.server as server; "
-    "mcp = server.create_mcp_server(registration_probe=True); "
+    "inert = type('_ReleaseInventoryService', (), {'record_registration_state': lambda self: None}); "
+    "server.default_trust_read_service = inert; server.default_trust_mutation_service = inert; "
+    "mcp = server.create_mcp_server(); "
     "tools = [{'name': tool.name} for tool in mcp._tool_manager.list_tools()]; "
     "print(json.dumps({'moduleFile': server.__file__, 'tools': tools, "
     "'versions': {'core': core.__version__, 'mcp': package.__version__}}))"
@@ -128,7 +139,8 @@ def verify_release_readiness(
     )
     run_git = _pin_git_runner(git_runner or _run_git, git_executable)
     checks.append(git_check)
-    checks.append(_check_optional_mcp(runtime_finder))
+    mcp_runtime_check = _check_optional_mcp(runtime_finder)
+    checks.append(mcp_runtime_check)
     checks.append(root_check)
     commit, snapshot, commit_check = _check_repository_commit(
         root,
@@ -142,14 +154,17 @@ def verify_release_readiness(
     checks.append(_check_version_sources(snapshot, version))
     checks.append(_check_plugin_copy(snapshot))
     checks.append(_check_static_inventories(snapshot))
-    checks.append(
-        _check_runtime_inventories(
-            root,
-            run_tool,
-            trusted_package_root or _TRUSTED_PACKAGE_ROOT,
-            version,
+    if mcp_runtime_check.status == "PASS":
+        checks.append(
+            _check_runtime_inventories(
+                root,
+                run_tool,
+                trusted_package_root or _TRUSTED_PACKAGE_ROOT,
+                version,
+            )
         )
-    )
+    else:
+        checks.append(_skip_runtime_inventories())
     checks.append(_check_tag(root, tag, version, commit, run_git, git_executable is not None))
     option_check = _check_external_options(github_repo, tag, merged_branch)
     checks.append(option_check)
@@ -471,8 +486,21 @@ def _check_optional_mcp(runtime_finder: Callable[[str], object | None]) -> Relea
     return ReleaseCheck(
         "integration.mcp-runtime",
         "SKIP",
-        "The optional MCP runtime is not installed; static inventory verification still ran.",
+        (
+            "The optional MCP runtime is not installed; static inventory verification still ran "
+            "and runtime probing was skipped."
+        ),
         f"Run `{MCP_INSTALL_COMMAND}` to enable runtime MCP smoke validation. No package was installed automatically.",
+    )
+
+
+def _skip_runtime_inventories() -> ReleaseCheck:
+    return ReleaseCheck(
+        "mcp.inventory.runtime",
+        "SKIP",
+        "Runtime MCP inventory probing was skipped because the optional MCP runtime is not installed.",
+        f"Run `{MCP_INSTALL_COMMAND}` to enable all eight actual FastMCP Tool Manager inventory checks.",
+        {"runtimeAvailable": False, "probeInvoked": False},
     )
 
 

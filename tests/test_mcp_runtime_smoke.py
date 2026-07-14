@@ -47,7 +47,7 @@ def test_fastmcp_runtime_uses_public_tool_names_required_schema_and_error_codes(
     assert "Traceback" not in str(caught.value)
 
 
-def test_registration_probe_reads_real_manager_without_constructing_state_services(
+def test_normal_server_registration_uses_shared_registry_with_inert_services(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import codex_preflight_mcp.server as server_module
@@ -59,13 +59,27 @@ def test_registration_probe_reads_real_manager_without_constructing_state_servic
     ):
         monkeypatch.setenv(name, "1")
 
-    def forbidden_service():
-        raise AssertionError("registration probe must not construct stateful trust services")
+    recorded: list[str] = []
 
-    monkeypatch.setattr(server_module, "default_trust_read_service", forbidden_service)
-    monkeypatch.setattr(server_module, "default_trust_mutation_service", forbidden_service)
+    class InertService:
+        def __init__(self, name: str) -> None:
+            self.name = name
 
-    server = server_module.create_mcp_server(registration_probe=True)
+        def record_registration_state(self) -> None:
+            recorded.append(self.name)
+
+    monkeypatch.setattr(
+        server_module,
+        "default_trust_read_service",
+        lambda: InertService("trust-read"),
+    )
+    monkeypatch.setattr(
+        server_module,
+        "default_trust_mutation_service",
+        lambda: InertService("trust-mutation"),
+    )
+
+    server = server_module.create_mcp_server()
 
     assert [tool.name for tool in server._tool_manager.list_tools()] == [
         "preflight_check",
@@ -75,6 +89,7 @@ def test_registration_probe_reads_real_manager_without_constructing_state_servic
         "trust_approve",
         "trust_revoke",
     ]
+    assert recorded == ["trust-read", "trust-mutation"]
 
 
 def test_stdio_initialization_returns_fixed_server_instructions() -> None:

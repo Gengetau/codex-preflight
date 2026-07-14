@@ -249,7 +249,9 @@ def test_runtime_inventory_drift_is_reported(tmp_path: Path) -> None:
     assert len(check["evidence"]["mismatches"]) == 8
 
 
-def test_runtime_inventory_reads_actual_fastmcp_registry_not_tool_definitions(tmp_path: Path) -> None:
+def test_runtime_inventory_detects_conditional_normal_startup_registration_drift(
+    tmp_path: Path,
+) -> None:
     pytest.importorskip("mcp")
     target = tmp_path / "target"
     trusted_root = tmp_path / "trusted-runtime"
@@ -258,11 +260,24 @@ def test_runtime_inventory_reads_actual_fastmcp_registry_not_tool_definitions(tm
     shutil.copytree(SOURCE_ROOT / "codex_preflight_mcp", trusted_root / "codex_preflight_mcp")
     trusted_server = trusted_root / "codex_preflight_mcp/server.py"
     source = trusted_server.read_text(encoding="utf-8")
-    marker = "    for definition in tool_definitions():\n"
+    signature = (
+        "def create_mcp_server(\n"
+        "    *,\n"
+        "    fastmcp_factory: Callable[..., Any] | None = None,\n"
+        "):"
+    )
+    assert signature in source
+    source = source.replace(
+        signature,
+        signature[:-2] + "    registration_probe: bool = False,\n):",
+        1,
+    )
+    marker = "    _record_registration_state(trust_service, trust_mutation_service)\n"
     injection = (
-        '    @mcp.tool(name="unexpected_registry_tool", description="registry drift sentinel")\n'
-        "    def unexpected_registry_tool() -> dict[str, object]:\n"
-        "        return {}\n\n"
+        "    if not registration_probe:\n"
+        '        @mcp.tool(name="unexpected_registry_tool", description="registry drift sentinel")\n'
+        "        def unexpected_registry_tool() -> dict[str, object]:\n"
+        "            return {}\n\n"
     )
     assert marker in source
     trusted_server.write_text(source.replace(marker, injection + marker, 1), encoding="utf-8")
@@ -481,19 +496,74 @@ def test_lightweight_github_tag_is_rejected(tmp_path: Path) -> None:
 
 def test_missing_optional_integration_is_skipped_with_exact_non_installing_remediation(tmp_path: Path) -> None:
     _layout(tmp_path)
+    called = False
+
+    def forbidden(_argv, _environment):
+        nonlocal called
+        called = True
+        raise AssertionError("missing optional MCP must not invoke the runtime probe")
+
     report = verify_release_readiness(
         tmp_path,
         executable_finder=_git_executable,
         runtime_finder=lambda _name: None,
         git_runner=_git(),
-        tool_runner=_runtime_ok,
+        tool_runner=forbidden,
     )
 
     check = _checks(report)["integration.mcp-runtime"]
+    runtime = _checks(report)["mcp.inventory.runtime"]
+    assert called is False
     assert check["status"] == "SKIP"
     assert MCP_INSTALL_COMMAND in check["remediation"]
     assert "No package was installed automatically" in check["remediation"]
+    assert runtime["status"] == "SKIP"
+    assert runtime["evidence"] == {"runtimeAvailable": False, "probeInvoked": False}
     assert report["ready"] is True
+
+
+def test_isolated_real_subprocess_without_mcp_skips_runtime_inventory(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "target"
+    isolated_root = tmp_path / "isolated-runtime"
+    _layout(target)
+    commit = _commit_test_repository(target)
+    shutil.copytree(SOURCE_ROOT / "codex_preflight_cli", isolated_root / "codex_preflight_cli")
+    shutil.copytree(SOURCE_ROOT / "codex_preflight_core", isolated_root / "codex_preflight_core")
+    script = (
+        "import importlib.util, json, sys; from pathlib import Path; "
+        "from codex_preflight_cli.release_diagnostics import verify_release_readiness; "
+        "assert importlib.util.find_spec('mcp') is None; "
+        "report = verify_release_readiness(Path(sys.argv[1]), expected_version='0.3.7', "
+        "expected_commit=sys.argv[2]); "
+        "checks = {item['id']: item for item in report['checks']}; "
+        "print(json.dumps({'ready': report['ready'], "
+        "'integration': checks['integration.mcp-runtime'], "
+        "'runtime': checks['mcp.inventory.runtime']}))"
+    )
+    environment = {**os.environ, "PYTHONPATH": str(isolated_root), "PYTHONSAFEPATH": "1"}
+
+    result = subprocess.run(
+        (sys.executable, "-S", "-P", "-c", script, str(target), commit),
+        cwd=isolated_root,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=30,
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["ready"] is True
+    assert payload["integration"]["status"] == "SKIP"
+    assert payload["runtime"]["status"] == "SKIP"
+    assert payload["runtime"]["evidence"] == {
+        "runtimeAvailable": False,
+        "probeInvoked": False,
+    }
 
 
 def test_read_only_github_failure_is_sanitized(tmp_path: Path) -> None:

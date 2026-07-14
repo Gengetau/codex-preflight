@@ -136,9 +136,11 @@ codex-preflight release verify --root . --expected-version 0.3.7 --expected-comm
 ```
 
 The command checks all five version sources, the three root/marketplace plugin-copy files, the
-exact eight-way static and runtime MCP inventories, and supported Python, Git, and optional MCP
-integrations. Missing optional MCP support is reported with the exact install command; it is never
-installed automatically. Add `--tag`, `--github-repo OWNER/NAME`, and `--merged-branch` only when
+exact eight-way static MCP inventories, and supported Python, Git, and optional MCP integrations.
+When the optional MCP runtime is installed, it also checks all eight runtime inventories. When it
+is missing, both the integration and `mcp.inventory.runtime` checks return `SKIP`, the runtime probe
+is not invoked, and the exact install command is reported without installing anything. Add `--tag`,
+`--github-repo OWNER/NAME`, and `--merged-branch` only when
 you explicitly want bounded, read-only tag, published Release, and branch-cleanup verification.
 JSON output uses the stable `release-readiness/v1` schema. Repository and GitHub evidence remains
 untrusted data.
@@ -147,9 +149,11 @@ The target checkout is never added to a runtime probe's `PYTHONPATH`. Runtime pr
 when the active Codex Preflight package root resolves outside the target checkout; filesystem overlap
 fails readiness before a probe starts. This proves filesystem separation only: it does not determine
 editable-install metadata or prove independent build provenance. Invoke the command from a separately
-trusted installation when an independent code-provenance boundary is required. Each probe builds the
-actual FastMCP server in registration-only mode and reads its Tool Manager without opening trust stores
-or writing registration audit state.
+trusted installation when an independent code-provenance boundary is required. Each probe replaces
+only the side-effectful trust-service factories with inert in-memory services and then calls the same
+default `create_mcp_server()` path as normal startup. Normal startup and verification therefore use
+one pure shared registration function and the same registration inputs; the probe reads the resulting
+actual FastMCP Tool Manager without opening trust stores or writing registration audit state.
 Every required target file is opened through no-follow handles; symbolic links, reparse points,
 unsafe hard links, and repository escapes fail readiness. `HEAD` must equal the requested canonical
 commit, and every file actually consumed by diagnostics must content-match its tracked commit blob.
