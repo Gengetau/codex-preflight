@@ -112,6 +112,19 @@ def test_legacy_nested_marketplace_plugin_copy_is_absent() -> None:
     assert not any(path.is_file() for path in legacy.rglob("*"))
 
 
+def test_marketplace_docs_cover_two_path_install_and_stale_snapshot_repair() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    plugin_docs = (ROOT / "docs" / "plugin.md").read_text(encoding="utf-8")
+
+    for text in (readme, plugin_docs):
+        assert "--sparse .agents/plugins" in text
+        assert "--sparse plugins/codex-preflight" in text
+
+    assert "path does not exist or is not a directory" in plugin_docs
+    assert "codex plugin marketplace remove codex-preflight" in plugin_docs
+    assert "codex plugin add codex-preflight@codex-preflight" in plugin_docs
+
+
 def test_marketplace_files_have_no_placeholders_or_chinese_text() -> None:
     todo_marker = "TO" + "DO"
     paths = [

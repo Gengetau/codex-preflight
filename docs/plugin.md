@@ -90,6 +90,26 @@ source URL above.
 If Codex reports that the plugin path does not exist, ensure both sparse paths are configured.
 The marketplace manifest alone does not include the plugin directory in a sparse Git checkout.
 
+### Repair an Existing One-Path Marketplace Snapshot
+
+An older snapshot configured with only `.agents/plugins` can leave the plugin card or installed
+cache visible while the details page fails with `path does not exist or is not a directory`. The
+snapshot contains the marketplace manifest but not the repository-root plugin directory referenced
+by `./plugins/codex-preflight`.
+
+Rebuild the configured marketplace through the Codex CLI instead of editing `config.toml` or
+`marketplace.json` by hand:
+
+```bash
+codex plugin remove codex-preflight@codex-preflight
+codex plugin marketplace remove codex-preflight
+codex plugin marketplace add https://github.com/Gengetau/codex-preflight.git --ref master --sparse .agents/plugins --sparse plugins/codex-preflight
+codex plugin add codex-preflight@codex-preflight
+```
+
+Restart Codex or reload the plugin view after reinstalling so the desktop app discards the stale
+marketplace-detail state. Hook review and trust remain separate explicit user decisions.
+
 ### Marketplace Plugin Copy Maintenance
 
 The root plugin package is the source of truth. After changing `.codex-plugin/plugin.json`,

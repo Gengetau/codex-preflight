@@ -247,6 +247,11 @@ Use both sparse paths. `.agents/plugins/marketplace.json` is the marketplace man
 `plugins/codex-preflight` is the plugin root resolved by its `./plugins/codex-preflight` source
 path. `.codex-plugin/plugin.json` alone is not a marketplace root.
 
+An older marketplace configured with only `.agents/plugins` can still show the plugin card or
+retain an installed cache while the details page fails with `path does not exist or is not a
+directory`. Rebuild that marketplace with both sparse paths by following the recovery procedure in
+[`docs/plugin.md`](docs/plugin.md#repair-an-existing-one-path-marketplace-snapshot).
+
 Do not use `git@github.com:Gengetau/codex-preflight.git` unless SSH host keys and credentials are
 configured in the Codex runtime. If SSH fails with "Host key verification failed", use the HTTPS
 source URL above.
