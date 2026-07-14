@@ -724,21 +724,31 @@ class _TrustMutationRuntimeMetadata:
         return getattr(self.delegate, name)
 
 
-def create_mcp_server(*, fastmcp_factory: Callable[..., Any] | None = None):
-    trust_service: TrustReadService | None = None
+def create_mcp_server(
+    *,
+    fastmcp_factory: Callable[..., Any] | None = None,
+    registration_probe: bool = False,
+):
+    trust_service: Any | None = None
     if trust_read_enabled():
-        try:
-            trust_service = default_trust_read_service()
-        except Exception as error:
-            raise _trust_list_internal_error() from error
-    trust_mutation_service: TrustMutationService | None = None
+        if registration_probe:
+            trust_service = object()
+        else:
+            try:
+                trust_service = default_trust_read_service()
+            except Exception as error:
+                raise _trust_list_internal_error() from error
+    trust_mutation_service: Any | None = None
     if trust_mutation_enabled():
-        try:
-            trust_mutation_service = default_trust_mutation_service()
-        except TrustMutationError as error:
-            raise _trust_mutation_error(error) from error
-        except Exception as error:
-            raise _trust_mutation_internal_error() from error
+        if registration_probe:
+            trust_mutation_service = object()
+        else:
+            try:
+                trust_mutation_service = default_trust_mutation_service()
+            except TrustMutationError as error:
+                raise _trust_mutation_error(error) from error
+            except Exception as error:
+                raise _trust_mutation_internal_error() from error
     mcp = create_instruction_capable_fastmcp(
         fastmcp_factory,
         name="codex-preflight",
@@ -853,7 +863,7 @@ def create_mcp_server(*, fastmcp_factory: Callable[..., Any] | None = None):
                     operation,
                 )
 
-    if trust_service is not None:
+    if trust_service is not None and not registration_probe:
         try:
             trust_service.record_registration_state()
         except TrustReadError as error:
@@ -861,7 +871,7 @@ def create_mcp_server(*, fastmcp_factory: Callable[..., Any] | None = None):
         except Exception as error:
             raise _trust_list_internal_error() from error
 
-    if trust_mutation_service is not None:
+    if trust_mutation_service is not None and not registration_probe:
         try:
             trust_mutation_service.record_registration_state()
         except TrustMutationError as error:

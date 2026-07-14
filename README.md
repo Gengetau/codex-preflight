@@ -144,10 +144,12 @@ JSON output uses the stable `release-readiness/v1` schema. Repository and GitHub
 untrusted data.
 
 The target checkout is never added to a runtime probe's `PYTHONPATH`. Runtime probes are allowed only
-when the active Codex Preflight package resolves outside the target checkout; an editable/self
-installation fails readiness before a probe starts. This proves filesystem separation, not that a
-package built from the target has independent provenance. Invoke the command from a separately
-trusted installation when an independent code-provenance boundary is required.
+when the active Codex Preflight package root resolves outside the target checkout; filesystem overlap
+fails readiness before a probe starts. This proves filesystem separation only: it does not determine
+editable-install metadata or prove independent build provenance. Invoke the command from a separately
+trusted installation when an independent code-provenance boundary is required. Each probe builds the
+actual FastMCP server in registration-only mode and reads its Tool Manager without opening trust stores
+or writing registration audit state.
 Every required target file is opened through no-follow handles; symbolic links, reparse points,
 unsafe hard links, and repository escapes fail readiness. `HEAD` must equal the requested canonical
 commit, and every file actually consumed by diagnostics must content-match its tracked commit blob.
@@ -158,6 +160,8 @@ CRLF-to-LF checkout conversion is accepted; repository filters are never run. Dy
 writes such as `globals()` and `exec` fail the strict static version/inventory contract.
 Index hints such as `assume-unchanged` and `skip-worktree` cannot hide drift. Git environment
 overrides are discarded, and the verifier does not call `git status` or repository fsmonitor hooks.
+The discovered Git executable is resolved once to a canonical absolute path outside the target and
+that exact path is used for every Git subprocess.
 Tag checks require annotated tags; lightweight tags fail. External checks reject redirects, cap response bytes,
 validate repository and branch names, and positively identify the public repository before a branch
 `404` can mean deletion. Markdown output encodes every interpolated value as data.

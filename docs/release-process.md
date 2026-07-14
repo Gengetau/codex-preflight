@@ -42,10 +42,12 @@ installs an optional dependency. A missing MCP runtime is a `SKIP` with the supp
 `python -m pip install "codex-preflight[mcp]"`. Local verification checks all version sources,
 plugin copies, supported integrations, and all eight exact static and runtime MCP inventories.
 The target checkout is read through bounded no-follow handles and strict static parsers, and is never
-added to a runtime probe's `PYTHONPATH`. Runtime probes require a non-editable Codex Preflight
-installation whose resolved module path is outside the target; editable/self overlap fails before a
-probe starts. This proves filesystem separation, not independent provenance for a package built from
-the target. The target must be the exact Git worktree root and `HEAD` must equal the requested
+added to a runtime probe's `PYTHONPATH`. Runtime probes require a Codex Preflight package root whose
+resolved module path is outside the target; filesystem overlap fails before a probe starts. This
+proves filesystem separation only and does not determine editable-install metadata or independent
+provenance for a package built from the target. Registration-only probes instantiate the actual
+FastMCP server and read its Tool Manager while skipping trust-store construction, recovery, and
+registration audit writes. The target must be the exact Git worktree root and `HEAD` must equal the requested
 canonical commit. Every file consumed by diagnostics is read no-follow and content-matched against
 its tracked regular-blob commit entry. Symlink/submodule modes fail even if materialized as files.
 All downstream parsing uses the same immutable verified byte snapshot, eliminating a second-read
@@ -53,6 +55,8 @@ window. Only safe CRLF-to-LF conversion is accepted; repository filters never ru
 writes fail the strict AST contract. Thus `assume-unchanged` and `skip-worktree` cannot hide drift. Git environment
 overrides are discarded, `git status` and repository fsmonitor hooks are not invoked, and a supplied
 release tag must be annotated.
+Git discovery is pinned to one canonical absolute executable outside the target checkout; every
+read-only Git plumbing call uses that exact path rather than re-resolving a literal `git`.
 
 External verification is opt-in, bounded to the public GitHub API, and read-only:
 

@@ -4,39 +4,25 @@ import hashlib
 import json
 import shutil
 import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
 from typer.testing import CliRunner
 
 from codex_preflight_cli.main import app
-from codex_preflight_cli.release_diagnostics import OPTIONAL_FLAGS, verify_release_readiness
+from codex_preflight_cli.release_diagnostics import verify_release_readiness
 from codex_preflight_core import __version__ as core_version
 from codex_preflight_mcp import __version__ as mcp_version
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = "0.3.7"
 HEAD = "a" * 40
+SAFE_GIT = str(Path(shutil.which("git") or sys.executable).resolve())
 
 
-def _runtime_inventory(_argv, environment) -> subprocess.CompletedProcess[str]:
-    names = ["preflight_check", "corpus_scan"]
-    if environment.get(OPTIONAL_FLAGS[0]) == "1":
-        names.append("remote_repository_scan")
-    if environment.get(OPTIONAL_FLAGS[1]) == "1":
-        names.append("trust_list")
-    if environment.get(OPTIONAL_FLAGS[2]) == "1":
-        names.extend(("trust_approve", "trust_revoke"))
-    payload = {
-        "moduleFile": str(Path(environment["PYTHONPATH"]) / "codex_preflight_mcp" / "server.py"),
-        "tools": [{"name": name} for name in names],
-    }
-    return subprocess.CompletedProcess(
-        args=[],
-        returncode=0,
-        stdout=json.dumps(payload),
-        stderr="",
-    )
+def _git_executable(_name: str) -> str:
+    return SAFE_GIT
 
 
 def _git(argv, cwd) -> subprocess.CompletedProcess[str]:
@@ -72,19 +58,17 @@ def test_v037_version_sources_plugin_copy_and_release_history_are_aligned() -> N
 
 def test_v037_release_gate_pins_clean_readiness_and_no_new_authority(tmp_path: Path) -> None:
     trusted_root = ROOT.parent / f"trusted-site-packages-{tmp_path.name}"
-    trusted_server = trusted_root / "codex_preflight_mcp/server.py"
-    trusted_server.parent.mkdir(parents=True)
-    trusted_server.write_text("# provenance fixture\n", encoding="utf-8")
+    shutil.copytree(ROOT / "codex_preflight_core", trusted_root / "codex_preflight_core")
+    shutil.copytree(ROOT / "codex_preflight_mcp", trusted_root / "codex_preflight_mcp")
     try:
         report = verify_release_readiness(
             ROOT,
             expected_version=VERSION,
             expected_commit=HEAD,
             python_version=(3, 12),
-            executable_finder=lambda _name: "git",
+            executable_finder=_git_executable,
             runtime_finder=lambda _name: object(),
             git_runner=_git,
-            tool_runner=_runtime_inventory,
             trusted_package_root=trusted_root,
         )
     finally:
@@ -99,6 +83,7 @@ def test_v037_release_gate_pins_clean_readiness_and_no_new_authority(tmp_path: P
     assert checks["mcp.inventory.static"]["status"] == "PASS"
     assert checks["mcp.inventory.runtime"]["status"] == "PASS"
     assert checks["mcp.inventory.runtime"]["evidence"]["provenanceVerified"] is True
+    assert checks["mcp.inventory.runtime"]["evidence"]["registrySource"] == "FastMCP ToolManager"
     assert checks["github.release-target"]["status"] == "SKIP"
     assert checks["github.branch-cleanup"]["status"] == "SKIP"
 
@@ -114,7 +99,8 @@ def test_v037_docs_and_protected_ci_pin_read_only_release_verification() -> None
     assert "--github-repo OWNER/NAME" in process
     assert "--merged-branch" in process
     assert "runtime probe's `PYTHONPATH`" in readme
-    assert "editable/self" in readme and "fails readiness" in readme
+    assert "filesystem separation" in readme
+    assert "non-editable Codex Preflight" not in process
     assert "must be annotated" in process
     assert "positively identify" in process
     assert "--expected-version 0.3.7" in workflow

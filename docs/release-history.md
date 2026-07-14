@@ -18,8 +18,10 @@ Deterministic release automation and supported-integration diagnostics:
   and verified runtime module provenance outside the target. The verifier avoids `git status` and
   repository fsmonitor or filter execution; safe CRLF checkout conversion is handled locally, while
   regular tree modes and an immutable shared byte snapshot prevent symlink-mode, index-hidden, and
-  second-read drift. Dynamic namespace writes fail closed in version and inventory AST validation.
-  Editable/self runtime overlap fails before probes start. Release tags must be annotated;
+  second-read drift. Dynamic namespace and indirect protected-attribute writes fail closed in version
+  and inventory AST validation. Runtime probes inspect the actual FastMCP Tool Manager in a
+  registration-only mode, and filesystem overlap fails before probes start. Git runs only through one
+  canonical checkout-external executable. Release tags must be annotated;
   GitHub checks reject redirects, cap response bytes, validate ref inputs, and require positive
   repository identification before branch deletion can pass. Markdown interpolations remain inert data.
 - Added clean, drift, stale-state, missing-integration, read-only failure, and Windows/Linux

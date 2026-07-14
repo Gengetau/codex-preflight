@@ -4,7 +4,9 @@ import hashlib
 import json
 import os
 import shlex
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -21,6 +23,13 @@ from codex_preflight_cli.release_diagnostics import (
     render_release_readiness_markdown,
     verify_release_readiness,
 )
+
+SOURCE_ROOT = Path(__file__).resolve().parents[1]
+SAFE_GIT = str(Path(shutil.which("git") or sys.executable).resolve())
+
+
+def _git_executable(_name: str) -> str:
+    return SAFE_GIT
 
 
 def _layout(root: Path, version: str = "0.3.7") -> None:
@@ -83,7 +92,11 @@ def _expected_inventory(environment: dict[str, str]) -> list[str]:
 def _runtime_ok(_argv, environment) -> subprocess.CompletedProcess[str]:
     tools = [{"name": name} for name in _expected_inventory(dict(environment))]
     module_file = Path(environment["PYTHONPATH"]) / "codex_preflight_mcp" / "server.py"
-    payload = {"moduleFile": str(module_file), "tools": tools}
+    payload = {
+        "moduleFile": str(module_file),
+        "tools": tools,
+        "versions": {"core": "0.3.7", "mcp": "0.3.7"},
+    }
     return subprocess.CompletedProcess(args=[], returncode=0, stdout=json.dumps(payload), stderr="")
 
 
@@ -148,7 +161,7 @@ def test_clean_readiness_is_deterministic_and_non_mutating(tmp_path: Path) -> No
         "expected_version": "0.3.7",
         "expected_commit": "HEAD",
         "python_version": (3, 12),
-        "executable_finder": lambda _name: "C:\\Program Files\\Git\\git.exe",
+        "executable_finder": _git_executable,
         "runtime_finder": lambda _name: object(),
         "git_runner": _git(),
         "tool_runner": _runtime_ok,
@@ -179,7 +192,7 @@ def test_version_drift_is_reported_with_stable_evidence(tmp_path: Path) -> None:
     report = verify_release_readiness(
         tmp_path,
         expected_version="0.3.7",
-        executable_finder=lambda _name: "git",
+        executable_finder=_git_executable,
         runtime_finder=lambda _name: None,
         git_runner=_git(),
         tool_runner=_runtime_ok,
@@ -198,7 +211,7 @@ def test_marketplace_drift_is_reported_without_syncing(tmp_path: Path) -> None:
 
     report = verify_release_readiness(
         tmp_path,
-        executable_finder=lambda _name: "git",
+        executable_finder=_git_executable,
         runtime_finder=lambda _name: None,
         git_runner=_git(),
         tool_runner=_runtime_ok,
@@ -219,12 +232,13 @@ def test_runtime_inventory_drift_is_reported(tmp_path: Path) -> None:
         payload = {
             "moduleFile": str(Path(_environment["PYTHONPATH"]) / "codex_preflight_mcp" / "server.py"),
             "tools": [{"name": "unexpected"}],
+            "versions": {"core": "0.3.7", "mcp": "0.3.7"},
         }
         return subprocess.CompletedProcess(args=[], returncode=0, stdout=json.dumps(payload), stderr="")
 
     report = verify_release_readiness(
         tmp_path,
-        executable_finder=lambda _name: "git",
+        executable_finder=_git_executable,
         runtime_finder=lambda _name: object(),
         git_runner=_git(),
         tool_runner=drift,
@@ -233,6 +247,66 @@ def test_runtime_inventory_drift_is_reported(tmp_path: Path) -> None:
     check = _checks(report)["mcp.inventory.runtime"]
     assert check["status"] == "FAIL"
     assert len(check["evidence"]["mismatches"]) == 8
+
+
+def test_runtime_inventory_reads_actual_fastmcp_registry_not_tool_definitions(tmp_path: Path) -> None:
+    pytest.importorskip("mcp")
+    target = tmp_path / "target"
+    trusted_root = tmp_path / "trusted-runtime"
+    _layout(target)
+    shutil.copytree(SOURCE_ROOT / "codex_preflight_core", trusted_root / "codex_preflight_core")
+    shutil.copytree(SOURCE_ROOT / "codex_preflight_mcp", trusted_root / "codex_preflight_mcp")
+    trusted_server = trusted_root / "codex_preflight_mcp/server.py"
+    source = trusted_server.read_text(encoding="utf-8")
+    marker = "    for definition in tool_definitions():\n"
+    injection = (
+        '    @mcp.tool(name="unexpected_registry_tool", description="registry drift sentinel")\n'
+        "    def unexpected_registry_tool() -> dict[str, object]:\n"
+        "        return {}\n\n"
+    )
+    assert marker in source
+    trusted_server.write_text(source.replace(marker, injection + marker, 1), encoding="utf-8")
+
+    report = verify_release_readiness(
+        target,
+        executable_finder=_git_executable,
+        runtime_finder=lambda _name: object(),
+        git_runner=_git(),
+        trusted_package_root=trusted_root,
+    )
+
+    check = _checks(report)["mcp.inventory.runtime"]
+    assert check["status"] == "FAIL"
+    assert len(check["evidence"]["mismatches"]) == 8
+    assert all(
+        "unexpected_registry_tool" in mismatch["actual"]
+        for mismatch in check["evidence"]["mismatches"]
+    )
+
+
+def test_runtime_inventory_rejects_trusted_package_version_drift(tmp_path: Path) -> None:
+    _layout(tmp_path)
+
+    def drift(_argv, environment) -> subprocess.CompletedProcess[str]:
+        module_file = Path(environment["PYTHONPATH"]) / "codex_preflight_mcp/server.py"
+        payload = {
+            "moduleFile": str(module_file),
+            "tools": [{"name": name} for name in _expected_inventory(dict(environment))],
+            "versions": {"core": "9.9.9", "mcp": "0.3.7"},
+        }
+        return subprocess.CompletedProcess(args=[], returncode=0, stdout=json.dumps(payload), stderr="")
+
+    report = verify_release_readiness(
+        tmp_path,
+        executable_finder=_git_executable,
+        runtime_finder=lambda _name: object(),
+        git_runner=_git(),
+        tool_runner=drift,
+    )
+
+    check = _checks(report)["mcp.inventory.runtime"]
+    assert check["status"] == "FAIL"
+    assert len(check["evidence"]["versionMismatches"]) == 8
 
 
 def test_static_inventory_drift_is_reported(tmp_path: Path) -> None:
@@ -245,7 +319,7 @@ def test_static_inventory_drift_is_reported(tmp_path: Path) -> None:
 
     report = verify_release_readiness(
         tmp_path,
-        executable_finder=lambda _name: "git",
+        executable_finder=_git_executable,
         runtime_finder=lambda _name: object(),
         git_runner=_git(),
         tool_runner=_runtime_ok,
@@ -262,7 +336,7 @@ def test_wrong_tag_target_fails_without_moving_tag(tmp_path: Path) -> None:
         tmp_path,
         expected_commit="HEAD",
         tag="v0.3.7",
-        executable_finder=lambda _name: "git",
+        executable_finder=_git_executable,
         runtime_finder=lambda _name: object(),
         git_runner=_git(tag_target="b" * 40),
         tool_runner=_runtime_ok,
@@ -279,7 +353,7 @@ def test_tag_name_must_match_expected_version(tmp_path: Path) -> None:
         tmp_path,
         expected_version="0.3.7",
         tag="v0.3.6",
-        executable_finder=lambda _name: "git",
+        executable_finder=_git_executable,
         runtime_finder=lambda _name: object(),
         git_runner=_git(),
         tool_runner=_runtime_ok,
@@ -295,7 +369,7 @@ def test_lightweight_local_tag_is_rejected(tmp_path: Path) -> None:
     report = verify_release_readiness(
         tmp_path,
         tag="v0.3.7",
-        executable_finder=lambda _name: "git",
+        executable_finder=_git_executable,
         runtime_finder=lambda _name: object(),
         git_runner=_git(annotated=False),
         tool_runner=_runtime_ok,
@@ -311,7 +385,7 @@ def test_annotated_local_tag_is_accepted(tmp_path: Path) -> None:
     report = verify_release_readiness(
         tmp_path,
         tag="v0.3.7",
-        executable_finder=lambda _name: "git",
+        executable_finder=_git_executable,
         runtime_finder=lambda _name: object(),
         git_runner=_git(annotated=True),
         tool_runner=_runtime_ok,
@@ -359,7 +433,7 @@ def test_github_release_target_and_branch_cleanup_are_independent(
         tag="v0.3.7",
         github_repo="Gengetau/codex-preflight",
         merged_branch="codex/v0.3.7-release-automation-diagnostics",
-        executable_finder=lambda _name: "git",
+        executable_finder=_git_executable,
         runtime_finder=lambda _name: object(),
         git_runner=_git(),
         tool_runner=_runtime_ok,
@@ -394,7 +468,7 @@ def test_lightweight_github_tag_is_rejected(tmp_path: Path) -> None:
         tmp_path,
         tag="v0.3.7",
         github_repo="Gengetau/codex-preflight",
-        executable_finder=lambda _name: "git",
+        executable_finder=_git_executable,
         runtime_finder=lambda _name: object(),
         git_runner=_git(),
         tool_runner=_runtime_ok,
@@ -409,7 +483,7 @@ def test_missing_optional_integration_is_skipped_with_exact_non_installing_remed
     _layout(tmp_path)
     report = verify_release_readiness(
         tmp_path,
-        executable_finder=lambda _name: "git",
+        executable_finder=_git_executable,
         runtime_finder=lambda _name: None,
         git_runner=_git(),
         tool_runner=_runtime_ok,
@@ -433,7 +507,7 @@ def test_read_only_github_failure_is_sanitized(tmp_path: Path) -> None:
         tag="v0.3.7",
         github_repo="Gengetau/codex-preflight",
         merged_branch="codex/merged",
-        executable_finder=lambda _name: "git",
+        executable_finder=_git_executable,
         runtime_finder=lambda _name: object(),
         git_runner=_git(),
         tool_runner=_runtime_ok,
@@ -463,7 +537,7 @@ def test_process_invocations_are_argument_lists_and_support_space_paths(tmp_path
 
     report = verify_release_readiness(
         root,
-        executable_finder=lambda _name: "C:\\Program Files\\Git\\git.exe",
+        executable_finder=_git_executable,
         runtime_finder=lambda _name: object(),
         git_runner=git_run,
         tool_runner=tool_run,
@@ -471,7 +545,7 @@ def test_process_invocations_are_argument_lists_and_support_space_paths(tmp_path
 
     assert report["ready"] is True
     assert git_calls[0][1] == root.resolve()
-    assert git_calls[0][0] == ["git", "rev-parse", "--show-toplevel"]
+    assert git_calls[0][0] == [SAFE_GIT, "rev-parse", "--show-toplevel"]
     assert not any(call[0][1] == "status" for call in git_calls)
     assert len(tool_calls) == 8
     assert all(call[1:3] == ["-P", "-c"] for call in tool_calls)
@@ -480,6 +554,33 @@ def test_process_invocations_are_argument_lists_and_support_space_paths(tmp_path
         and str(root.resolve()) not in environment["PYTHONPATH"]
         for environment in tool_environments
     )
+
+
+def test_repository_local_git_executable_is_rejected_without_running_sentinel(tmp_path: Path) -> None:
+    root = tmp_path / "target"
+    _layout(root)
+    fake_git = root / ("git.exe" if os.name == "nt" else "git")
+    fake_git.write_text("repository-controlled Git sentinel\n", encoding="utf-8")
+    fake_git.chmod(0o755)
+    sentinel = root / "git-invoked"
+
+    def forbidden_runner(_argv, _cwd):
+        sentinel.write_text("invoked\n", encoding="utf-8")
+        raise AssertionError("repository-local Git must never run")
+
+    report = verify_release_readiness(
+        root,
+        executable_finder=lambda _name: str(fake_git),
+        runtime_finder=lambda _name: object(),
+        git_runner=forbidden_runner,
+        tool_runner=_runtime_ok,
+    )
+
+    check = _checks(report)["integration.git"]
+    assert report["ready"] is False
+    assert check["status"] == "FAIL"
+    assert check["evidence"] == {"insideTarget": True}
+    assert sentinel.exists() is False
 
 
 def test_target_checkout_modules_are_never_imported_or_executed(tmp_path: Path) -> None:
@@ -491,7 +592,7 @@ def test_target_checkout_modules_are_never_imported_or_executed(tmp_path: Path) 
         encoding="utf-8",
     )
     (tmp_path / "codex_preflight_mcp/__init__.py").write_text(
-        '__version__ = "0.3.7"\nraise RuntimeError("target package executed")\n',
+        '__version__ = "0.3.7"\n',
         encoding="utf-8",
     )
     calls: list[tuple[list[str], dict[str, str]]] = []
@@ -502,7 +603,7 @@ def test_target_checkout_modules_are_never_imported_or_executed(tmp_path: Path) 
 
     report = verify_release_readiness(
         tmp_path,
-        executable_finder=lambda _name: "git",
+        executable_finder=_git_executable,
         runtime_finder=lambda _name: object(),
         git_runner=_git(),
         tool_runner=runtime,
@@ -519,15 +620,16 @@ def test_real_runtime_subprocess_ignores_target_checkout_on_cwd(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _layout(tmp_path)
-    (tmp_path / "codex_preflight_mcp/__init__.py").write_text(
-        '__version__ = "0.3.7"\nraise RuntimeError("target package executed")\n',
+    server = tmp_path / "codex_preflight_mcp/server.py"
+    server.write_text(
+        'raise RuntimeError("target server executed")\n' + server.read_text(encoding="utf-8"),
         encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path)
 
     report = verify_release_readiness(
         tmp_path,
-        executable_finder=lambda _name: "git",
+        executable_finder=_git_executable,
         runtime_finder=lambda _name: object(),
         git_runner=_git(),
     )
@@ -551,7 +653,7 @@ def test_symlinked_target_file_is_rejected_without_reading_outside_root(tmp_path
     report = verify_release_readiness(
         root,
         expected_version="0.3.7",
-        executable_finder=lambda _name: "git",
+        executable_finder=_git_executable,
         runtime_finder=lambda _name: object(),
         git_runner=_git(),
         tool_runner=_runtime_ok,
@@ -565,7 +667,7 @@ def test_non_repository_and_unknown_ref_fail_canonical_commit_gate(tmp_path: Pat
     _layout(tmp_path)
     non_repository = verify_release_readiness(
         tmp_path,
-        executable_finder=lambda _name: "git",
+        executable_finder=_git_executable,
         runtime_finder=lambda _name: object(),
         git_runner=_git(repository=False),
         tool_runner=_runtime_ok,
@@ -573,7 +675,7 @@ def test_non_repository_and_unknown_ref_fail_canonical_commit_gate(tmp_path: Pat
     unknown = verify_release_readiness(
         tmp_path,
         expected_commit="missing-ref",
-        executable_finder=lambda _name: "git",
+        executable_finder=_git_executable,
         runtime_finder=lambda _name: object(),
         git_runner=_git(unknown_ref="missing-ref"),
         tool_runner=_runtime_ok,
@@ -591,7 +693,7 @@ def test_repository_snapshot_requires_expected_head(tmp_path: Path) -> None:
     report = verify_release_readiness(
         tmp_path,
         expected_commit="a" * 40,
-        executable_finder=lambda _name: "git",
+        executable_finder=_git_executable,
         runtime_finder=lambda _name: object(),
         git_runner=_git(head="b" * 40),
         tool_runner=_runtime_ok,
@@ -613,7 +715,7 @@ def test_consumed_file_must_match_expected_commit_blob(tmp_path: Path) -> None:
     report = verify_release_readiness(
         tmp_path,
         expected_commit="a" * 40,
-        executable_finder=lambda _name: "git",
+        executable_finder=_git_executable,
         runtime_finder=lambda _name: object(),
         git_runner=_git(blob_overrides={relative_name: committed}),
         tool_runner=_runtime_ok,
@@ -635,7 +737,7 @@ def test_commit_blob_binding_accepts_only_safe_crlf_checkout_conversion(tmp_path
     report = verify_release_readiness(
         tmp_path,
         expected_commit="a" * 40,
-        executable_finder=lambda _name: "git",
+        executable_finder=_git_executable,
         runtime_finder=lambda _name: object(),
         git_runner=_git(blob_overrides={relative_name: committed}),
         tool_runner=_runtime_ok,
@@ -662,7 +764,7 @@ def test_all_content_checks_consume_the_same_verified_immutable_snapshot(tmp_pat
     report = verify_release_readiness(
         tmp_path,
         expected_commit="a" * 40,
-        executable_finder=lambda _name: "git",
+        executable_finder=_git_executable,
         runtime_finder=lambda _name: object(),
         git_runner=mutate_after_server_snapshot,
         tool_runner=_runtime_ok,
@@ -690,7 +792,7 @@ def test_commit_tree_rejects_non_regular_entries_materialized_as_files(
     report = verify_release_readiness(
         tmp_path,
         expected_commit="a" * 40,
-        executable_finder=lambda _name: "git",
+        executable_finder=_git_executable,
         runtime_finder=lambda _name: object(),
         git_runner=_git(
             tree_modes={relative_name: mode},
@@ -760,7 +862,7 @@ def test_index_hidden_consumed_file_still_fails_commit_binding(
         root,
         expected_commit=commit,
         expected_version="0.3.7",
-        executable_finder=lambda _name: "git",
+        executable_finder=_git_executable,
         runtime_finder=lambda _name: object(),
         tool_runner=_runtime_ok,
     )
@@ -799,7 +901,7 @@ def test_release_verifier_does_not_invoke_repository_fsmonitor_hook(
         root,
         expected_commit=commit,
         expected_version="0.3.7",
-        executable_finder=lambda _name: "git",
+        executable_finder=_git_executable,
         runtime_finder=lambda _name: object(),
         tool_runner=_runtime_ok,
     )
@@ -821,7 +923,7 @@ def test_git_subprocess_scrubs_hostile_git_environment(tmp_path: Path, monkeypat
     monkeypatch.setenv("GIT_ALTERNATE_OBJECT_DIRECTORIES", str(tmp_path / "alternate"))
     monkeypatch.setattr(subprocess, "run", fake_run)
 
-    _run_git(("git", "rev-parse", "--show-toplevel"), tmp_path)
+    _run_git((SAFE_GIT, "rev-parse", "--show-toplevel"), tmp_path)
 
     assert not any(name.startswith("GIT_") for name in captured if name not in {
         "GIT_NO_LAZY_FETCH", "GIT_NO_REPLACE_OBJECTS", "GIT_OPTIONAL_LOCKS", "GIT_TERMINAL_PROMPT"
@@ -859,6 +961,15 @@ def test_git_subprocess_scrubs_hostile_git_environment(tmp_path: Path, monkeypat
         lambda source: source + '\nenv = os.environ\nenv.update(CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN="1")\n',
         lambda source: source + '\nos.putenv("CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN", "1")\n',
         lambda source: source + '\nfrom os import environ\nenviron["CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN"] = "1"\n',
+        lambda source: source
+        + '\nimport importlib\nimportlib.import_module(__name__).tool_definitions = lambda: []\n',
+        lambda source: source
+        + '\nimport importlib\nimportlib.import_module(__name__).remote_scan_enabled = lambda: True\n',
+        lambda source: source
+        + (
+            '\nimport importlib\nobject.__setattr__('
+            'importlib.import_module(__name__), "tool_definitions", lambda: [])\n'
+        ),
     ],
 )
 def test_static_inventory_strict_ast_rejects_semantic_bypasses(tmp_path: Path, mutation) -> None:
@@ -868,7 +979,7 @@ def test_static_inventory_strict_ast_rejects_semantic_bypasses(tmp_path: Path, m
 
     report = verify_release_readiness(
         tmp_path,
-        executable_finder=lambda _name: "git",
+        executable_finder=_git_executable,
         runtime_finder=lambda _name: object(),
         git_runner=_git(),
         tool_runner=_runtime_ok,
@@ -884,7 +995,7 @@ def test_python_version_requires_one_top_level_literal_assignment(tmp_path: Path
 
     duplicate = verify_release_readiness(
         tmp_path,
-        executable_finder=lambda _name: "git",
+        executable_finder=_git_executable,
         runtime_finder=lambda _name: object(),
         git_runner=_git(),
         tool_runner=_runtime_ok,
@@ -893,7 +1004,7 @@ def test_python_version_requires_one_top_level_literal_assignment(tmp_path: Path
     core.write_text('__version__ = "0.3.7"\nif True:\n    __version__ = "9.9.9"\n', encoding="utf-8")
     nested = verify_release_readiness(
         tmp_path,
-        executable_finder=lambda _name: "git",
+        executable_finder=_git_executable,
         runtime_finder=lambda _name: object(),
         git_runner=_git(),
         tool_runner=_runtime_ok,
@@ -902,7 +1013,7 @@ def test_python_version_requires_one_top_level_literal_assignment(tmp_path: Path
     core.write_text('fake = \'__version__ = "9.9.9"\'\n__version__ = "0.3.7"\n', encoding="utf-8")
     string_decoy = verify_release_readiness(
         tmp_path,
-        executable_finder=lambda _name: "git",
+        executable_finder=_git_executable,
         runtime_finder=lambda _name: object(),
         git_runner=_git(),
         tool_runner=_runtime_ok,
@@ -919,6 +1030,11 @@ def test_python_version_requires_one_top_level_literal_assignment(tmp_path: Path
         'globals()["__version__"] = "9.9.9"',
         'exec("__version__ = \'9.9.9\'")',
         '__builtins__["exec"]("__version__ = \'9.9.9\'")',
+        'import importlib\nimportlib.import_module(__name__).__version__ = "9.9.9"',
+        (
+            'import importlib\nobject.__setattr__('
+            'importlib.import_module(__name__), "__version__", "9.9.9")'
+        ),
     ),
 )
 def test_python_version_rejects_dynamic_global_writes(tmp_path: Path, dynamic_write: str) -> None:
@@ -929,7 +1045,7 @@ def test_python_version_rejects_dynamic_global_writes(tmp_path: Path, dynamic_wr
 
     report = verify_release_readiness(
         tmp_path,
-        executable_finder=lambda _name: "git",
+        executable_finder=_git_executable,
         runtime_finder=lambda _name: object(),
         git_runner=_git(),
         tool_runner=_runtime_ok,
@@ -949,7 +1065,7 @@ def test_editable_self_runtime_overlap_fails_without_executing_probe(tmp_path: P
 
     report = verify_release_readiness(
         tmp_path,
-        executable_finder=lambda _name: "git",
+        executable_finder=_git_executable,
         runtime_finder=lambda _name: object(),
         git_runner=_git(),
         tool_runner=forbidden,
@@ -973,7 +1089,7 @@ def test_runtime_probe_rejects_module_provenance_inside_target(tmp_path: Path) -
 
     report = verify_release_readiness(
         tmp_path,
-        executable_finder=lambda _name: "git",
+        executable_finder=_git_executable,
         runtime_finder=lambda _name: object(),
         git_runner=_git(),
         tool_runner=spoofed,
@@ -990,7 +1106,7 @@ def test_noncanonical_expected_version_fails_closed(tmp_path: Path) -> None:
     report = verify_release_readiness(
         tmp_path,
         expected_version="0.3.7`\n| injected |",
-        executable_finder=lambda _name: "git",
+        executable_finder=_git_executable,
         runtime_finder=lambda _name: object(),
         git_runner=_git(),
         tool_runner=_runtime_ok,
@@ -1024,7 +1140,7 @@ def test_incomplete_external_option_combinations_fail_without_network(
         tmp_path,
         github_repo=github_repo,
         merged_branch=merged_branch,
-        executable_finder=lambda _name: "git",
+        executable_finder=_git_executable,
         runtime_finder=lambda _name: object(),
         git_runner=_git(),
         tool_runner=_runtime_ok,
@@ -1046,7 +1162,7 @@ def test_empty_or_invalid_merged_branch_fails_before_network(tmp_path: Path, bra
         tmp_path,
         github_repo="Gengetau/codex-preflight",
         merged_branch=branch,
-        executable_finder=lambda _name: "git",
+        executable_finder=_git_executable,
         runtime_finder=lambda _name: object(),
         git_runner=_git(),
         tool_runner=_runtime_ok,
@@ -1068,7 +1184,7 @@ def test_invalid_repository_components_fail_before_network(tmp_path: Path, repos
         tmp_path,
         github_repo=repository,
         merged_branch="codex/merged",
-        executable_finder=lambda _name: "git",
+        executable_finder=_git_executable,
         runtime_finder=lambda _name: object(),
         git_runner=_git(),
         tool_runner=_runtime_ok,
@@ -1172,7 +1288,7 @@ def test_unavailable_repository_cannot_prove_branch_deletion(
         tmp_path,
         github_repo="missing/private",
         merged_branch="codex/merged",
-        executable_finder=lambda _name: "git",
+        executable_finder=_git_executable,
         runtime_finder=lambda _name: object(),
         git_runner=_git(),
         tool_runner=_runtime_ok,

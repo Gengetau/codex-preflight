@@ -46,6 +46,9 @@ _MAPPING_MUTATION_METHODS = frozenset(
     {"__delitem__", "__setitem__", "clear", "pop", "popitem", "setdefault", "update"}
 )
 _OS_ENVIRONMENT_MUTATORS = frozenset({"putenv", "unsetenv"})
+_PROTECTED_SERVER_SYMBOLS = frozenset(
+    {"remote_scan_enabled", "tool_definitions", "trust_mutation_enabled", "trust_read_enabled"}
+)
 _CONSUMED_TARGET_FILES = (
     "pyproject.toml",
     "codex_preflight_core/__init__.py",
@@ -60,8 +63,12 @@ _CONSUMED_TARGET_FILES = (
 )
 _TRUSTED_PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 _RUNTIME_PROBE = (
-    "import json; import codex_preflight_mcp.server as server; "
-    "print(json.dumps({'moduleFile': server.__file__, 'tools': server.tool_definitions()}))"
+    "import json; import codex_preflight_core as core; import codex_preflight_mcp as package; "
+    "import codex_preflight_mcp.server as server; "
+    "mcp = server.create_mcp_server(registration_probe=True); "
+    "tools = [{'name': tool.name} for tool in mcp._tool_manager.list_tools()]; "
+    "print(json.dumps({'moduleFile': server.__file__, 'tools': tools, "
+    "'versions': {'core': core.__version__, 'mcp': package.__version__}}))"
 )
 
 
@@ -110,20 +117,24 @@ def verify_release_readiness(
     trusted_package_root: Path | None = None,
 ) -> dict[str, Any]:
     root = Path(os.path.abspath(root))
-    run_git = git_runner or _run_git
     run_tool = tool_runner or _run_tool
     checks: list[ReleaseCheck] = []
     checks.append(_check_python(python_version))
-    git_path = executable_finder("git")
-    checks.append(_check_git(git_path))
-    checks.append(_check_optional_mcp(runtime_finder))
     root_check = _check_target_root(root)
+    git_executable, git_check = _resolve_git_executable(
+        executable_finder("git"),
+        root,
+        root_safe=root_check.passed,
+    )
+    run_git = _pin_git_runner(git_runner or _run_git, git_executable)
+    checks.append(git_check)
+    checks.append(_check_optional_mcp(runtime_finder))
     checks.append(root_check)
     commit, snapshot, commit_check = _check_repository_commit(
         root,
         expected_commit or "HEAD",
         run_git,
-        git_available=git_path is not None,
+        git_available=git_executable is not None,
         root_safe=root_check.passed,
     )
     checks.append(commit_check)
@@ -136,9 +147,10 @@ def verify_release_readiness(
             root,
             run_tool,
             trusted_package_root or _TRUSTED_PACKAGE_ROOT,
+            version,
         )
     )
-    checks.append(_check_tag(root, tag, version, commit, run_git, git_path is not None))
+    checks.append(_check_tag(root, tag, version, commit, run_git, git_executable is not None))
     option_check = _check_external_options(github_repo, tag, merged_branch)
     checks.append(option_check)
     checks.extend(
@@ -236,10 +248,55 @@ def _check_python(version: tuple[int, int] | None) -> ReleaseCheck:
     )
 
 
-def _check_git(path: str | None) -> ReleaseCheck:
-    if path:
-        return ReleaseCheck("integration.git", "PASS", "Git is available without a shell wrapper.")
-    return ReleaseCheck("integration.git", "FAIL", "Git is not available on PATH.", "Install Git and add it to PATH.")
+def _resolve_git_executable(
+    discovered: str | None,
+    root: Path,
+    *,
+    root_safe: bool,
+) -> tuple[Path | None, ReleaseCheck]:
+    remediation = "Install Git outside the target checkout and expose its executable on PATH."
+    if not discovered:
+        return None, ReleaseCheck("integration.git", "FAIL", "Git is not available on PATH.", remediation)
+    try:
+        candidate = Path(discovered)
+        if not candidate.is_absolute():
+            candidate = Path(os.path.abspath(candidate))
+        executable = candidate.resolve(strict=True)
+        if not executable.is_file() or not os.access(executable, os.X_OK):
+            raise OSError("Git path is not an executable file")
+        target = root.resolve(strict=True) if root_safe else root
+    except (OSError, RuntimeError, ValueError):
+        return None, ReleaseCheck(
+            "integration.git",
+            "FAIL",
+            "The discovered Git executable could not be resolved canonically.",
+            remediation,
+        )
+    if _path_is_within(executable, target):
+        return None, ReleaseCheck(
+            "integration.git",
+            "FAIL",
+            "The discovered Git executable is inside the target checkout and was rejected.",
+            remediation,
+            {"insideTarget": True},
+        )
+    return executable, ReleaseCheck(
+        "integration.git",
+        "PASS",
+        "Git is pinned to one canonical executable outside the target checkout.",
+        evidence={"executable": str(executable), "insideTarget": False},
+    )
+
+
+def _pin_git_runner(runner: GitRunner, executable: Path | None) -> GitRunner:
+    def run(argv: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        if executable is None:
+            raise OSError("Git executable is unavailable")
+        if not argv or argv[0] != "git":
+            raise ValueError("Git command must use the internal placeholder")
+        return runner((str(executable), *argv[1:]), cwd)
+
+    return run
 
 
 def _check_target_root(root: Path) -> ReleaseCheck:
@@ -514,10 +571,11 @@ def _check_runtime_inventories(
     target_root: Path,
     runner: ToolRunner,
     trusted_package_root: Path,
+    expected_version: str,
 ) -> ReleaseCheck:
     remediation = (
-        "Install Codex Preflight non-editably outside the target checkout and invoke release verification "
-        "from that separate installation."
+        "Invoke release verification from a trusted Codex Preflight package root that is filesystem-isolated "
+        "from the target checkout."
     )
     try:
         trusted_root = trusted_package_root.resolve(strict=True)
@@ -538,8 +596,10 @@ def _check_runtime_inventories(
             {"provenanceVerified": False, "overlapsTarget": True},
         )
     mismatches: list[dict[str, Any]] = []
+    version_mismatches: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
     module_files: set[str] = set()
+    runtime_versions: set[tuple[str, str]] = set()
     for flags, expected in _inventory_matrix():
         environment = {
             name: value
@@ -571,6 +631,10 @@ def _check_runtime_inventories(
             module_file = Path(payload["moduleFile"]).resolve(strict=True)
             tools = payload["tools"]
             actual = [item["name"] for item in tools]
+            versions = payload["versions"]
+            actual_versions = {"core": versions["core"], "mcp": versions["mcp"]}
+            if not all(isinstance(value, str) for value in actual_versions.values()):
+                raise TypeError("runtime versions must be strings")
             provenance_valid = _path_is_within(module_file, trusted_root) and not _path_is_within(
                 module_file,
                 target,
@@ -583,32 +647,53 @@ def _check_runtime_inventories(
             failures.append({"flags": list(flags), "error": "untrusted-module-provenance"})
             continue
         module_files.add(str(module_file))
+        runtime_versions.add((actual_versions["core"], actual_versions["mcp"]))
         if actual != expected:
             mismatches.append({"flags": list(flags), "expected": expected, "actual": actual})
-    if failures or mismatches:
+        expected_versions = {"core": expected_version, "mcp": expected_version}
+        if actual_versions != expected_versions:
+            version_mismatches.append(
+                {"flags": list(flags), "expected": expected_versions, "actual": actual_versions}
+            )
+    if failures or mismatches or version_mismatches:
         return ReleaseCheck(
             "mcp.inventory.runtime",
             "FAIL",
-            "One or more runtime MCP inventory probes failed, drifted, or used untrusted module provenance.",
+            "One or more actual FastMCP registry probes failed, drifted, used an unexpected version, "
+            "or used untrusted module provenance.",
             remediation,
-            {"failures": failures, "mismatches": mismatches},
+            {
+                "failures": failures,
+                "mismatches": mismatches,
+                "versionMismatches": version_mismatches,
+            },
         )
     return ReleaseCheck(
         "mcp.inventory.runtime",
         "PASS",
-        "All eight runtime MCP inventories match with verified module provenance outside the target.",
+        "All eight actual FastMCP registries and trusted runtime versions match with verified module "
+        "provenance outside the target.",
         evidence={
             "provenanceVerified": True,
             "overlapsTarget": False,
+            "registrySource": "FastMCP ToolManager",
             "runtimePackageRoot": str(trusted_root),
             "moduleFiles": sorted(module_files),
+            "runtimeVersions": [
+                {"core": core, "mcp": mcp}
+                for core, mcp in sorted(runtime_versions)
+            ],
         },
     )
 
 
 def _parse_target_inventory_groups(source: str) -> dict[str, tuple[str, ...]]:
     module = ast.parse(source)
-    _reject_dynamic_namespace_mutation(module, protect_os=True)
+    _reject_dynamic_namespace_mutation(
+        module,
+        protect_os=True,
+        protected_attributes=_PROTECTED_SERVER_SYMBOLS,
+    )
     functions = [
         node for node in module.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         and node.name == "tool_definitions"
@@ -1036,6 +1121,9 @@ def _inventory_matrix() -> tuple[tuple[tuple[bool, bool, bool], list[str]], ...]
 
 
 def _run_git(argv: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+    arguments = list(argv)
+    if not arguments or not Path(arguments[0]).is_absolute():
+        raise ValueError("Git subprocesses require a pinned absolute executable")
     environment = {
         name: value
         for name, value in os.environ.items()
@@ -1046,7 +1134,7 @@ def _run_git(argv: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]
     environment["GIT_OPTIONAL_LOCKS"] = "0"
     environment["GIT_TERMINAL_PROMPT"] = "0"
     return subprocess.run(
-        list(argv),
+        arguments,
         cwd=cwd,
         text=True,
         encoding="utf-8",
@@ -1104,7 +1192,8 @@ def _read_pyproject_version(data: bytes) -> str:
 
 def _read_init_version(data: bytes) -> str:
     module = ast.parse(data.decode("utf-8"))
-    _reject_dynamic_namespace_mutation(module)
+    _validate_version_module_ast(module)
+    _reject_dynamic_namespace_mutation(module, protected_attributes=frozenset({"__version__"}))
     if _recursive_binding_count(module, "__version__") != 1:
         raise ValueError("version must have one assignment")
     bindings = [statement for statement in module.body if _statement_binds_name(statement, "__version__")]
@@ -1117,6 +1206,40 @@ def _read_init_version(data: bytes) -> str:
     if not isinstance(value, ast.Constant) or not isinstance(value.value, str):
         raise ValueError("version assignment must be a literal string")
     return value.value
+
+
+def _validate_version_module_ast(module: ast.Module) -> None:
+    for statement in module.body:
+        if (
+            isinstance(statement, ast.Expr)
+            and isinstance(statement.value, ast.Constant)
+            and isinstance(statement.value.value, str)
+        ):
+            continue
+        if (
+            not isinstance(statement, ast.Assign)
+            or len(statement.targets) != 1
+            or not isinstance(statement.targets[0], ast.Name)
+        ):
+            raise ValueError("version modules allow only static literal assignments")
+        _validate_static_literal(statement.value)
+
+
+def _validate_static_literal(node: ast.AST) -> None:
+    if isinstance(node, ast.Constant):
+        return
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        for item in node.elts:
+            _validate_static_literal(item)
+        return
+    if isinstance(node, ast.Dict):
+        for key, value in zip(node.keys, node.values, strict=True):
+            if key is None:
+                raise ValueError("literal dictionary unpacking is not allowed")
+            _validate_static_literal(key)
+            _validate_static_literal(value)
+        return
+    raise ValueError("version module assignment must be a static literal")
 
 
 def _valid_repository(value: str) -> bool:
@@ -1177,6 +1300,7 @@ def _reject_dynamic_namespace_mutation(
     module: ast.Module,
     *,
     protect_os: bool = False,
+    protected_attributes: frozenset[str] = frozenset(),
 ) -> None:
     if protect_os:
         os_imports = [
@@ -1198,10 +1322,24 @@ def _reject_dynamic_namespace_mutation(
     for node in ast.walk(module):
         if isinstance(node, ast.Name) and node.id in _DYNAMIC_NAMESPACE_NAMES | {"__builtins__"}:
             raise ValueError("dynamic namespace access is not allowed")
-        if isinstance(node, ast.alias) and node.name == "builtins":
-            raise ValueError("builtins namespace access is not allowed")
+        if isinstance(node, ast.alias) and node.name in {"builtins", "importlib"}:
+            raise ValueError("dynamic module namespace access is not allowed")
+        if (
+            isinstance(node, ast.ImportFrom)
+            and node.module is not None
+            and node.module.split(".", 1)[0] in {"builtins", "importlib"}
+        ):
+            raise ValueError("dynamic module namespace access is not allowed")
         if isinstance(node, ast.Attribute) and node.attr in {"__dict__", "__globals__"}:
             raise ValueError("dynamic namespace attributes are not allowed")
+        if isinstance(node, ast.Attribute) and node.attr in {"__delattr__", "__setattr__"}:
+            raise ValueError("dynamic attribute mutation is not allowed")
+        if (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.ctx, (ast.Store, ast.Del))
+            and node.attr in protected_attributes
+        ):
+            raise ValueError("indirect protected-symbol mutation is not allowed")
         if (
             isinstance(node, ast.Attribute)
             and node.attr == "modules"
