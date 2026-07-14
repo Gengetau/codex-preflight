@@ -44,7 +44,7 @@ def test_v037_version_sources_plugin_copy_and_release_history_are_aligned() -> N
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     root_plugin = json.loads((ROOT / ".codex-plugin/plugin.json").read_text(encoding="utf-8"))
     marketplace = json.loads(
-        (ROOT / ".agents/plugins/plugins/codex-preflight/.codex-plugin/plugin.json").read_text(encoding="utf-8")
+        (ROOT / "plugins/codex-preflight/.codex-plugin/plugin.json").read_text(encoding="utf-8")
     )
     history = (ROOT / "docs/release-history.md").read_text(encoding="utf-8")
 

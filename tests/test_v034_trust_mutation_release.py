@@ -127,7 +127,7 @@ def test_v034_version_sources_and_plugin_copies_are_aligned() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     root_plugin = json.loads((ROOT / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8"))
     marketplace_plugin = json.loads(
-        (ROOT / ".agents/plugins/plugins/codex-preflight/.codex-plugin/plugin.json").read_text(encoding="utf-8")
+        (ROOT / "plugins/codex-preflight/.codex-plugin/plugin.json").read_text(encoding="utf-8")
     )
 
     assert project["project"]["version"] == VERSION
@@ -140,11 +140,15 @@ def test_v034_version_sources_and_plugin_copies_are_aligned() -> None:
 def test_bundled_plugin_configuration_leaves_all_optional_authorities_off() -> None:
     for path in (
         ROOT / ".mcp.json",
-        ROOT / ".agents/plugins/plugins/codex-preflight/.mcp.json",
+        ROOT / "plugins/codex-preflight/.mcp.json",
     ):
         config = json.loads(path.read_text(encoding="utf-8"))
-        server = config["codex-preflight"]
-        assert server == {"command": "codex-preflight-mcp", "args": []}
+        server = config["mcpServers"]["codex-preflight"]
+        assert server == {
+            "command": "node",
+            "args": ["./scripts/launch-mcp.mjs"],
+            "cwd": ".",
+        }
         serialized = json.dumps(server)
         for flag in (
             "CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN",

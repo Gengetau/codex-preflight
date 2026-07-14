@@ -47,8 +47,6 @@ def test_all_version_files_match_pyproject() -> None:
     marketplace_manifest = json.loads(
         (
             ROOT
-            / ".agents"
-            / "plugins"
             / "plugins"
             / "codex-preflight"
             / ".codex-plugin"

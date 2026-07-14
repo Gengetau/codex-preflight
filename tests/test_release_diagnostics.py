@@ -61,14 +61,16 @@ def trust_mutation_enabled():
         "codex_preflight_mcp/server.py": inventory_source,
         ".codex-plugin/plugin.json": json.dumps({"name": "codex-preflight", "version": version}),
         ".mcp.json": "{}\n",
+        "scripts/launch-mcp.mjs": "launcher\n",
         "skills/codex-preflight/SKILL.md": "read-only skill\n",
     }
     copies = {
-        ".agents/plugins/plugins/codex-preflight/.codex-plugin/plugin.json": files[
+        "plugins/codex-preflight/.codex-plugin/plugin.json": files[
             ".codex-plugin/plugin.json"
         ],
-        ".agents/plugins/plugins/codex-preflight/.mcp.json": files[".mcp.json"],
-        ".agents/plugins/plugins/codex-preflight/skills/codex-preflight/SKILL.md": files[
+        "plugins/codex-preflight/.mcp.json": files[".mcp.json"],
+        "plugins/codex-preflight/scripts/launch-mcp.mjs": files["scripts/launch-mcp.mjs"],
+        "plugins/codex-preflight/skills/codex-preflight/SKILL.md": files[
             "skills/codex-preflight/SKILL.md"
         ],
     }
@@ -206,7 +208,7 @@ def test_version_drift_is_reported_with_stable_evidence(tmp_path: Path) -> None:
 
 def test_marketplace_drift_is_reported_without_syncing(tmp_path: Path) -> None:
     _layout(tmp_path)
-    copy = tmp_path / ".agents/plugins/plugins/codex-preflight/.mcp.json"
+    copy = tmp_path / "plugins/codex-preflight/.mcp.json"
     copy.write_text('{"stale": true}\n', encoding="utf-8")
 
     report = verify_release_readiness(
@@ -220,7 +222,7 @@ def test_marketplace_drift_is_reported_without_syncing(tmp_path: Path) -> None:
     check = _checks(report)["plugin.copy"]
     assert check["status"] == "FAIL"
     assert check["evidence"]["stale"] == [
-        ".agents/plugins/plugins/codex-preflight/.mcp.json"
+        "plugins/codex-preflight/.mcp.json"
     ]
     assert json.loads(copy.read_text(encoding="utf-8")) == {"stale": True}
 

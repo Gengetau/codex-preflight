@@ -178,16 +178,18 @@ the operational skill and the existing local stdio MCP server configuration.
 The plugin package contains:
 
 - `.codex-plugin/plugin.json`: Codex plugin manifest.
-- `.mcp.json`: direct local stdio server map for `codex-preflight-mcp`.
+- `.mcp.json`: local stdio server map for the bundled cross-platform MCP launcher.
+- `scripts/launch-mcp.mjs`: shell-free launcher that selects an installed Python environment and
+  starts `python -m codex_preflight_mcp.server`.
 - `skills/codex-preflight/SKILL.md`: English skill instructions for when and how Codex should call
   `codex-preflight`.
 - `.agents/plugins/marketplace.json`: Codex marketplace root manifest for the Codex UI
   "Add marketplace" flow.
-- `.agents/plugins/plugins/codex-preflight/`: marketplace-packaged copy of the plugin referenced by
-  the marketplace root.
+- `plugins/codex-preflight/`: marketplace-packaged copy of the plugin referenced relative to the
+  repository marketplace root.
 
 The manifest declares `mcpServers: "./.mcp.json"`. It does not declare an App, remote MCP URL,
-credentials, shell wrapper, or repository-controlled startup arguments.
+credentials, shell command, automatic installer, or repository-controlled startup arguments.
 
 When Codex is about to run a risky command in a local or unfamiliar repository, it should run:
 
@@ -223,21 +225,27 @@ violate the MCP safety contract. `mcp doctor` reports a missing runtime, a prese
 instruction-incompatible runtime, and an instruction-capable runtime as distinct states; it does
 not install or upgrade packages.
 
+The plugin MCP launcher does not depend on the Python console-script directory being present on
+`PATH`. It probes Python without a shell and starts the module directly. If several Python
+environments are installed, set `CODEX_PREFLIGHT_PYTHON` to the executable where
+`codex-preflight[mcp]` is installed. The selected Python package version must match the plugin
+manifest version; a Codex local cachebuster suffix is ignored for this comparison.
+
 Then add this repository through the Codex UI "Add marketplace" flow with:
 
 - Source: `https://github.com/Gengetau/codex-preflight.git`
 - Git ref: `master`
-- Sparse path: `.agents/plugins`
+- Sparse paths: `.agents/plugins` and `plugins/codex-preflight`
 
 The equivalent CLI marketplace command is:
 
 ```bash
-codex plugin marketplace add https://github.com/Gengetau/codex-preflight.git --ref master --sparse .agents/plugins
+codex plugin marketplace add https://github.com/Gengetau/codex-preflight.git --ref master --sparse .agents/plugins --sparse plugins/codex-preflight
 ```
 
-Use the marketplace sparse path, not `.codex-plugin`. `.codex-plugin/plugin.json` is the plugin
-manifest, while `.agents/plugins/marketplace.json` is the marketplace root manifest that the UI
-expects.
+Use both sparse paths. `.agents/plugins/marketplace.json` is the marketplace manifest, while
+`plugins/codex-preflight` is the plugin root resolved by its `./plugins/codex-preflight` source
+path. `.codex-plugin/plugin.json` alone is not a marketplace root.
 
 Do not use `git@github.com:Gengetau/codex-preflight.git` unless SSH host keys and credentials are
 configured in the Codex runtime. If SSH fails with "Host key verification failed", use the HTTPS

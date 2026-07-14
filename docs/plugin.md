@@ -8,13 +8,14 @@ and the explicit Python MCP runtime prerequisite.
 The plugin package files at the repository root are:
 
 - `.codex-plugin/plugin.json`: plugin manifest.
-- `.mcp.json`: bundled direct server map for the local `codex-preflight-mcp` stdio entry point.
+- `.mcp.json`: bundled server map for the local stdio MCP launcher.
+- `scripts/launch-mcp.mjs`: shell-free Python environment discovery and module launcher.
 - `skills/codex-preflight/SKILL.md`: Codex skill instructions.
 
 The Codex marketplace wrapper files are:
 
 - `.agents/plugins/marketplace.json`: marketplace root manifest.
-- `.agents/plugins/plugins/codex-preflight/`: plugin package referenced by the marketplace entry.
+- `plugins/codex-preflight/`: plugin package referenced relative to the repository root.
 
 The manifest declares the real skill directory through `skills: "./skills/"` and the bundled MCP
 configuration through `mcpServers: "./.mcp.json"`. The `.mcp.json` file contains exactly one direct
@@ -22,15 +23,19 @@ stdio server map:
 
 ```json
 {
-  "codex-preflight": {
-    "command": "codex-preflight-mcp",
-    "args": []
+  "mcpServers": {
+    "codex-preflight": {
+      "command": "node",
+      "args": ["./scripts/launch-mcp.mjs"],
+      "cwd": "."
+    }
   }
 }
 ```
 
-The command is launched directly with an argument array. There is no shell wrapper, URL,
-credential, environment-variable value, mutable repository path, or automatic installer.
+The command is launched directly with an argument array. The launcher probes Python without a
+shell and starts `python -m codex_preflight_mcp.server`. There is no shell command, URL,
+credential, mutable repository path, or automatic installer.
 
 ## How Codex Should Use It
 
@@ -73,7 +78,7 @@ To add this repository through the Codex UI "Add marketplace" flow, use:
 
 - Source: `https://github.com/Gengetau/codex-preflight.git`
 - Git ref: `master`
-- Sparse path: `.agents/plugins`
+- Sparse paths: `.agents/plugins` and `plugins/codex-preflight`
 
 Do not use sparse path `.codex-plugin` when adding a marketplace. `.codex-plugin/plugin.json` is
 the plugin manifest. `.agents/plugins/marketplace.json` is the marketplace root manifest.
@@ -82,13 +87,13 @@ Do not use `git@github.com:Gengetau/codex-preflight.git` unless SSH host keys an
 configured in the Codex runtime. If SSH fails with "Host key verification failed", use the HTTPS
 source URL above.
 
-If Codex reports that the marketplace root does not contain a supported manifest, the selected
-sparse path is not a marketplace root. Use `.agents/plugins` for this repository.
+If Codex reports that the plugin path does not exist, ensure both sparse paths are configured.
+The marketplace manifest alone does not include the plugin directory in a sparse Git checkout.
 
 ### Marketplace Plugin Copy Maintenance
 
 The root plugin package is the source of truth. After changing `.codex-plugin/plugin.json`,
-`.mcp.json`, or `skills/codex-preflight/SKILL.md`, run:
+`.mcp.json`, `scripts/launch-mcp.mjs`, or `skills/codex-preflight/SKILL.md`, run:
 
 ```bash
 python scripts/sync_marketplace_plugin.py
@@ -110,12 +115,15 @@ marketplace.
 The bundled plugin configuration depends on the separately installed optional MCP-facing package:
 
 - Package: `codex_preflight_mcp`
-- Entry point: `codex-preflight-mcp`
+- Module entry point: `python -m codex_preflight_mcp.server`
 - Optional dependency extra: `codex-preflight[mcp]`
 - Minimum MCP SDK: `mcp>=1.3.0`
 
-The plugin bundles configuration, not Python wheels. If the executable or optional runtime is
-missing, use these non-mutating commands for setup guidance:
+The plugin bundles configuration and a Node launcher, not Python wheels. The launcher selects a
+Python environment containing both `codex_preflight_mcp` and `mcp`; set
+`CODEX_PREFLIGHT_PYTHON` when automatic discovery should use a specific interpreter. If the
+optional runtime is missing or the Python package version does not match the plugin manifest, use
+these non-mutating commands for setup guidance:
 
 ```bash
 codex-preflight mcp config --client codex

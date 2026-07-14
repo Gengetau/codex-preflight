@@ -4,10 +4,9 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-MARKETPLACE_ROOT = ROOT / ".agents" / "plugins"
-MARKETPLACE = MARKETPLACE_ROOT / "marketplace.json"
+MARKETPLACE = ROOT / ".agents" / "plugins" / "marketplace.json"
 ROOT_PLUGIN = ROOT
-MARKETPLACE_PLUGIN = MARKETPLACE_ROOT / "plugins" / "codex-preflight"
+MARKETPLACE_PLUGIN = ROOT / "plugins" / "codex-preflight"
 SYNC_SCRIPT = ROOT / "scripts" / "sync_marketplace_plugin.py"
 
 
@@ -46,13 +45,14 @@ def test_marketplace_entry_points_to_real_plugin_root() -> None:
     assert source_path.startswith("./")
     assert not source_path.startswith("../")
 
-    plugin_root = MARKETPLACE_ROOT / source_path.removeprefix("./")
+    plugin_root = ROOT / source_path.removeprefix("./")
     plugin_manifest = load_json(plugin_root / ".codex-plugin" / "plugin.json")
 
     assert plugin_root == MARKETPLACE_PLUGIN
     assert plugin_manifest["name"] == "codex-preflight"
     assert (plugin_root / "skills" / "codex-preflight" / "SKILL.md").is_file()
     assert (plugin_root / ".mcp.json").is_file()
+    assert (plugin_root / "scripts" / "launch-mcp.mjs").is_file()
 
 
 def test_marketplace_plugin_package_matches_root_plugin_package() -> None:
@@ -63,6 +63,9 @@ def test_marketplace_plugin_package_matches_root_plugin_package() -> None:
         MARKETPLACE_PLUGIN / "skills" / "codex-preflight" / "SKILL.md"
     ).read_text(encoding="utf-8")
     assert (ROOT_PLUGIN / ".mcp.json").read_bytes() == (MARKETPLACE_PLUGIN / ".mcp.json").read_bytes()
+    assert (ROOT_PLUGIN / "scripts" / "launch-mcp.mjs").read_bytes() == (
+        MARKETPLACE_PLUGIN / "scripts" / "launch-mcp.mjs"
+    ).read_bytes()
 
 
 def test_marketplace_plugin_copy_is_synced_by_helper() -> None:
@@ -90,10 +93,23 @@ def test_marketplace_declares_only_the_real_local_mcp_integration() -> None:
         assert "apps" not in manifest
         assert "hooks" not in manifest
     mcp_config = load_json(MARKETPLACE_PLUGIN / ".mcp.json")
-    assert mcp_config == {"codex-preflight": {"command": "codex-preflight-mcp", "args": []}}
+    assert mcp_config == {
+        "mcpServers": {
+            "codex-preflight": {
+                "command": "node",
+                "args": ["./scripts/launch-mcp.mjs"],
+                "cwd": ".",
+            }
+        }
+    }
     serialized = json.dumps(mcp_config).lower()
     assert not any(token in serialized for token in ("http://", "https://", "bash", "powershell", "cmd /c", "token"))
     assert not (MARKETPLACE_PLUGIN / ".app.json").exists()
+
+
+def test_legacy_nested_marketplace_plugin_copy_is_absent() -> None:
+    legacy = ROOT / ".agents" / "plugins" / "plugins" / "codex-preflight"
+    assert not any(path.is_file() for path in legacy.rglob("*"))
 
 
 def test_marketplace_files_have_no_placeholders_or_chinese_text() -> None:
@@ -102,6 +118,7 @@ def test_marketplace_files_have_no_placeholders_or_chinese_text() -> None:
         MARKETPLACE,
         MARKETPLACE_PLUGIN / ".codex-plugin" / "plugin.json",
         MARKETPLACE_PLUGIN / ".mcp.json",
+        MARKETPLACE_PLUGIN / "scripts" / "launch-mcp.mjs",
         MARKETPLACE_PLUGIN / "skills" / "codex-preflight" / "SKILL.md",
     ]
     for path in paths:

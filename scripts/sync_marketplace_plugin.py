@@ -18,7 +18,7 @@ class SyncItem:
 
 def sync_items(root: Path) -> list[SyncItem]:
     root = root.resolve()
-    marketplace_plugin = root / ".agents" / "plugins" / "plugins" / PLUGIN_NAME
+    marketplace_plugin = root / "plugins" / PLUGIN_NAME
     return [
         SyncItem(
             source=root / ".codex-plugin" / "plugin.json",
@@ -35,6 +35,10 @@ def sync_items(root: Path) -> list[SyncItem]:
         SyncItem(
             source=root / "hooks" / "hooks.json",
             destination=marketplace_plugin / "hooks" / "hooks.json",
+        ),
+        SyncItem(
+            source=root / "scripts" / "launch-mcp.mjs",
+            destination=marketplace_plugin / "scripts" / "launch-mcp.mjs",
         ),
     ]
 
@@ -126,7 +130,7 @@ def _validate_layout(root: Path) -> None:
 
 
 def _validate_destination(root: Path, destination: Path) -> None:
-    marketplace_plugin = (root / ".agents" / "plugins" / "plugins" / PLUGIN_NAME).resolve()
+    marketplace_plugin = (root / "plugins" / PLUGIN_NAME).resolve()
     resolved = destination.resolve()
     if resolved != marketplace_plugin and marketplace_plugin not in resolved.parents:
         raise ValueError(f"destination escapes marketplace plugin copy: {_display(root, destination)}")

@@ -34,11 +34,13 @@ Install the Python prerequisite, then add the repository marketplace:
 
 ```bash
 python -m pip install "codex-preflight[mcp]"
-codex plugin marketplace add https://github.com/Gengetau/codex-preflight.git --ref master --sparse .agents/plugins
+codex plugin marketplace add https://github.com/Gengetau/codex-preflight.git --ref master --sparse .agents/plugins --sparse plugins/codex-preflight
 ```
 
-Start a new Codex session after installing or updating the plugin. The bundled `.mcp.json` launches
-the default-off server and does not grant remote network authority.
+Start a new Codex session after installing or updating the plugin. The bundled `.mcp.json` uses a
+shell-free Node launcher to select the installed Python package and launch the default-off server.
+Set `CODEX_PREFLIGHT_PYTHON` when a specific Python environment should be used. The launcher does
+not install packages or grant remote network authority.
 
 ### Standalone Codex MCP configuration
 

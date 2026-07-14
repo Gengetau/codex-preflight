@@ -1,4 +1,8 @@
 import json
+import os
+import shutil
+import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
@@ -7,6 +11,7 @@ MANIFEST = ROOT / ".codex-plugin" / "plugin.json"
 SKILL = ROOT / "skills" / "codex-preflight" / "SKILL.md"
 MCP_CONFIG = ROOT / ".mcp.json"
 HOOK_CONFIG = ROOT / "hooks" / "hooks.json"
+MCP_LAUNCHER = ROOT / "scripts" / "launch-mcp.mjs"
 
 
 def load_manifest() -> dict:
@@ -51,9 +56,58 @@ def test_manifest_declares_only_real_components() -> None:
     assert "apps" not in manifest
     assert "hooks" not in manifest
     assert json.loads(MCP_CONFIG.read_text(encoding="utf-8")) == {
-        "codex-preflight": {"command": "codex-preflight-mcp", "args": []}
+        "mcpServers": {
+            "codex-preflight": {
+                "command": "node",
+                "args": ["./scripts/launch-mcp.mjs"],
+                "cwd": ".",
+            }
+        }
     }
+    assert MCP_LAUNCHER.is_file()
     assert not (ROOT / ".app.json").exists()
+
+
+def test_mcp_launcher_uses_explicit_python_environment() -> None:
+    node = shutil.which("node")
+    if node is None:
+        return
+
+    env = os.environ.copy()
+    env["CODEX_PREFLIGHT_PYTHON"] = sys.executable
+    result = subprocess.run(
+        [node, str(MCP_LAUNCHER), "--list-tools"],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert '"preflight_check"' in result.stdout
+    assert '"corpus_scan"' in result.stdout
+
+
+def test_mcp_launcher_fails_closed_for_invalid_explicit_python(tmp_path: Path) -> None:
+    node = shutil.which("node")
+    if node is None:
+        return
+
+    env = os.environ.copy()
+    env["CODEX_PREFLIGHT_PYTHON"] = str(tmp_path / "missing-python")
+    result = subprocess.run(
+        [node, str(MCP_LAUNCHER), "--list-tools"],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert "could not find Python with codex-preflight[mcp]==" in result.stderr
 
 
 def test_default_plugin_hook_uses_bounded_supported_command_shape() -> None:
