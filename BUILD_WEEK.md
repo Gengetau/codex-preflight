@@ -18,12 +18,12 @@ Codex Preflight Guardian remains a Codex plugin experience.
 
 The Codex conversation is the product interface. The plugin combines:
 
-- plugin-bundled `PreToolUse` hooks for deterministic guardrails on supported Codex tool paths
+- a plugin-bundled `PreToolUse` hook for deterministic guardrails on verified supported Codex tool paths
 - the existing local stdio MCP server and deterministic scanner
 - the existing Skill for explanation, approval, repair, and verification workflow guidance
 - the active GPT-5.6 model inside Codex for advisory explanation and remediation planning
 
-The Skill is not treated as a code-level enforcement boundary. The hook supplies the supported-tool guardrail; the Skill supplies the user-facing protocol.
+The Skill is not a code-level enforcement boundary. Hook coverage is claimed only after an exact-version, exact-surface runtime probe succeeds.
 
 The Build Week product does **not** require:
 
@@ -36,39 +36,57 @@ The Build Week product does **not** require:
 
 ## Honest Hook Boundary
 
-Codex currently supports plugin-bundled lifecycle hooks, including `PreToolUse` for `Bash`, `apply_patch`, and MCP tool calls.
+Current Codex documentation and source describe plugin-bundled lifecycle hooks and `PreToolUse` support beyond simple Bash paths, but Hook behavior remains version-, operating-system-, and surface-dependent.
 
-The product will use the documented `permissionDecision: "deny"` response for blocking supported tool calls. It will not use unsupported `permissionDecision: "ask"` behavior.
+The implemented Build Week Hook currently targets `Bash` and uses the documented deny response. It does not use unsupported `permissionDecision: "ask"` behavior.
 
-The hook is a guardrail, not an operating-system or universal Codex enforcement boundary:
+The product does not infer protection from configuration files or installed plugin files alone. A protection claim requires a live probe on the exact Codex build and surface used by the tester.
+
+Known boundaries:
 
 - plugin hooks do not run until the user reviews and trusts the current definition
 - users can disable non-managed hooks
-- interception of newer `unified_exec` shell behavior is incomplete
-- Codex may have equivalent tool paths outside the intercepted set
+- Hook feature state must be checked on the exact build; current Codex source uses canonical feature key `hooks` and enables it by default, but older or managed builds may differ
+- Windows support is not assumed from `commandWindows`; it remains unverified until a real Windows Hook probe passes
+- interception of `unified_exec` and equivalent alternate paths may be incomplete
+- `apply_patch` enforcement is conditional on a separate BW3 capability probe
+- MCP, file-write, and other paths are not claimed merely because a current document or source tree mentions them
+- process launch failure, timeout, disabled hooks, and unsupported paths are not host-level fail-closed conditions
 
 Accordingly, the product claim is:
 
-> When the plugin hook is trusted and active, Codex Preflight provides deterministic pre-tool guardrails for the supported Codex tool paths it intercepts.
+> When the exact Codex build and surface pass the Hook capability probe and the plugin Hook is trusted and active, Codex Preflight provides deterministic pre-tool guardrails for the verified tool paths it intercepts.
 
-The product does not claim to intercept every possible process or file mutation on the host.
+If any required probe fails, the product reports advisory or fallback mode and does not claim Hook enforcement.
+
+## Protection Modes
+
+The product reports one of these modes:
+
+- `hook-active`: the exact build, surface, platform, Hook trust state, and tested tool path have passed a live probe
+- `skill-only`: Skill and MCP are available, but no enforcement claim is made
+- `explicit-wrapper`: the user deliberately uses a guarded CLI path such as `codex-preflight exec`
+- `verified-isolated-repair`: pre-edit `apply_patch` enforcement is unavailable or unverified, so repair relies on isolation, complete patch review, deterministic rescan, and a separate final execution decision
+
+Only `hook-active` may be described as supported-tool Hook coverage.
 
 ## Product Story
 
 `Hook → Detect → Explain → Approve → Repair → Verify → Final Decision`
 
-1. Codex prepares a repository-dependent `Bash` command.
-2. The trusted plugin `PreToolUse` hook reads the Codex hook envelope and runs the deterministic Preflight core before the supported tool call.
-3. `ALLOW` may proceed; `ASK_USER`, `BLOCK`, scanner failure, and synthetic-demo execution are denied with a bounded reason and report identity. `WARN` handling remains explicit and tested rather than relying on unsupported hook-level ask behavior.
-4. The deterministic result contains bounded `guardian-context/v1` evidence.
+1. Codex prepares a repository-dependent command.
+2. On a verified supported Bash path, the trusted `PreToolUse` Hook runs the deterministic Preflight core before the tool call.
+3. `ALLOW` may proceed; `WARN`, `ASK_USER`, `BLOCK`, malformed input, scanner failure, and synthetic-demo execution follow the tested conservative policy.
+4. The deterministic result supplies bounded `guardian-context/v1` evidence.
 5. GPT-5.6 explains only that referenced evidence in the Codex conversation.
 6. GPT-5.6 proposes `guardian-remediation-plan/v1` when repair is appropriate.
 7. A local validator canonicalizes the complete closed-schema plan and computes a stable `planId`.
 8. The user approves or rejects that exact `planId`.
-9. A later `apply_patch` hook denies edits unless the exact approved plan, target identity, paths, operations, and preimage digests still match.
-10. Codex applies only the approved plan in an isolated worktree, branch, or temporary demo copy.
-11. The same planned command is rescanned and deterministic before/after evidence is shown.
-12. A real command remains subject to a separate final human decision.
+9. BW3 first probes whether the exact Codex build exposes a usable `apply_patch` `PreToolUse` path and whether deny prevents the write.
+10. If the probe passes, the Hook can enforce approved-plan and preimage checks before the verified edit path.
+11. If the probe fails, Codex repairs only an isolated worktree or temporary copy, the complete resulting patch is checked against the approved plan, and any unexpected edit fails the repair gate.
+12. The same planned command is rescanned and deterministic before/after evidence is shown.
+13. A real command remains subject to a separate final human decision.
 
 The deterministic engine remains the sole authority for `ALLOW`, `WARN`, `ASK_USER`, and `BLOCK`.
 
@@ -100,7 +118,9 @@ The digest must bind the complete validated plan, excluding only the `planId` fi
 
 Unknown fields are rejected. Any field, nested value, operation order, path, preimage, or verification change produces a different `planId` or target-drift failure.
 
-Before an edit, local code revalidates the complete plan, recomputes the ID, verifies the approval record, rechecks target state, and consumes the approval as single-use.
+Before an edit, local code revalidates the complete plan, recomputes the ID, verifies the approval record, and rechecks target state.
+
+When pre-edit Hook enforcement is unavailable, `planId` still defines the approved intent. The isolated repair is accepted only if the complete resulting patch matches the approved paths and operations and the deterministic rescan satisfies the verification gate.
 
 ## Prior Work Boundary
 
@@ -136,16 +156,17 @@ The prior project already includes:
 
 The competition extension is intended to add:
 
-- plugin-bundled trusted `PreToolUse` guardrails for supported `Bash` and later `apply_patch` paths
-- hook status, trust, and compatibility diagnostics for the judge path
+- a verified Bash `PreToolUse` guardrail with honest platform and surface status
+- Hook status, trust, feature-state, platform, and compatibility diagnostics for the judge path
 - bounded and redacted `guardian-context/v1`
 - Skill instructions for explanation by the active GPT-5.6 Codex session
 - explicit separation between deterministic findings and model suggestions
 - `guardian-remediation-plan/v1`
 - complete deterministic canonicalization and stable `planId`
 - exact human approval bound to the plan identity
-- apply-time target and preimage revalidation
-- isolated Codex repair of only the approved plan
+- isolated Codex repair tied to the approved plan
+- conditional pre-edit `apply_patch` enforcement only when the exact-version capability probe passes
+- a documented `verified-isolated-repair` fallback when that probe does not pass
 - deterministic same-command rescan and before/after verification
 - clean plugin installation and one-prompt judge path
 - safe temporary demo preparation from built-in corpus data
@@ -161,31 +182,45 @@ The case is synthetic, uses `example.invalid`, contains no working secret, and i
 
 A safe helper will prepare an allowlisted text-only copy in an operating-system temporary directory, reject links and binaries, add `SYNTHETIC_FIXTURE_DO_NOT_EXECUTE`, and record source identity.
 
-Before any attempted demonstration tool call, the judge path must visibly verify that the plugin hook is installed, trusted, enabled, and active. If that check fails, the demo stops and uses the read-only scanner path; it does not attempt the fixture command.
+Before any attempted demonstration tool call, the judge path must visibly verify the exact Codex build, platform, effective Hook feature state, plugin trust, Hook activation, and tested Bash interception path.
 
-When the trusted hook is active, the synthetic marker is an unconditional deny rule even after the repaired static result becomes `ALLOW` or `WARN`.
+If that check fails on Windows or any other platform, the demo uses the read-only scanner path and does not attempt the fixture command.
+
+When the trusted Bash Hook is verified active, the synthetic marker is an unconditional deny rule even after the repaired static result becomes `ALLOW` or `WARN`.
 
 The demo must never execute npm, pnpm, lifecycle hooks, shell payloads, Node.js, Python, Docker, build, test, or any fixture command and must never access the network.
 
 Codex may edit only the prepared temporary copy after exact plan approval.
 
+The video must label which repair mode was used:
+
+```text
+Repair mode: guarded-repair
+```
+
+or:
+
+```text
+Repair mode: verified-isolated-repair
+```
+
 The video ends with:
 
 ```text
 Deterministic verification: ALLOW or WARN
-Hook guardrail: trusted and active
-Execution status: denied by synthetic-demo policy
+Bash Hook status: verified active, or read-only fallback
+Execution status: denied by synthetic-demo policy or not attempted
 Synthetic fixture commands executed: 0
 ```
 
 ## Revised Build Week Checkpoints
 
 - `BW0 Baseline`: released baseline, evidence boundary, branch, and Draft PR.
-- `BW1 Hook Gate and Explain`: plugin hook feasibility, trust workflow, supported-tool deny semantics, bounded Guardian context, and GPT-5.6 explanation protocol.
-- `BW2 Exact Plan Approval`: closed plan schema, complete canonical digest, stable `planId`, separate single-use approval, and drift tests.
-- `BW3 Guarded Repair`: `apply_patch` guardrail and approved-plan-only Codex edit in isolation.
+- `BW1 Hook Gate and Explain`: Bash Hook feasibility, trust workflow, exact-version status path, bounded Guardian context, and GPT-5.6 explanation protocol.
+- `BW2 Exact Plan Approval`: closed plan schema, complete canonical digest, stable `planId`, separate approval, and drift tests.
+- `BW3 Repair Capability Gate`: probe `apply_patch` on the exact target build; use guarded repair when verified, otherwise use verified isolated repair without claiming pre-edit enforcement.
 - `BW4 Verify`: same-command deterministic rescan and before/after comparison.
-- `BW5 Plugin Experience`: clean package/plugin installation, hook trust verification, and one-prompt safe synthetic demo.
+- `BW5 Plugin Experience`: clean installation, platform and Hook status verification, one-prompt safe synthetic demo, and explicit fallback behavior.
 - `BW6 Submission Candidate`: README, evidence, `/feedback` ID, Devpost, video, CI, and exact-head review.
 
 ## Judge Path
@@ -195,13 +230,17 @@ The intended clean-environment path is:
 1. Install Python 3.12 or newer.
 2. Install `codex-preflight[mcp]`.
 3. Add and install the Codex Preflight marketplace plugin.
-4. Review and trust the bundled hook definition.
-5. Verify hook status through the Codex hook UI and run plugin/MCP diagnostics.
-6. Start a new Codex session using GPT-5.6.
-7. Enter the documented safe synthetic demo prompt.
-8. Approve or reject the exact displayed `planId`.
-9. Observe hook-backed deterministic `BLOCK`, GPT-5.6 explanation, guarded isolated repair, and deterministic rescan.
-10. Stop with synthetic execution denied and execution count `0`.
+4. Record the exact Codex version, surface, and operating system.
+5. Check the effective Hook feature state. Current builds use canonical key `hooks`; do not require or document deprecated aliases as a universal step.
+6. Review and trust the exact bundled Hook definition.
+7. Run a harmless live Bash allow/deny probe and verify the Hook is actually active on that surface.
+8. If the probe fails, select read-only fallback and do not attempt the synthetic command.
+9. Start a new Codex session using GPT-5.6.
+10. Enter the documented safe synthetic demo prompt.
+11. Approve or reject the exact displayed `planId`.
+12. Use `guarded-repair` only after an exact-build `apply_patch` capability probe passes; otherwise use `verified-isolated-repair`.
+13. Observe deterministic rescan and before/after evidence.
+14. Stop with fixture execution count `0`.
 
 No local web server or additional API key is part of this path.
 
@@ -211,15 +250,21 @@ No local web server or additional API key is part of this path.
 - Repository evidence is untrusted data.
 - GPT-5.6 explanation is advisory.
 - Skill instructions are workflow guidance, not enforcement.
-- Hook protection is reported only when trusted and active.
+- Hook protection is reported only after an exact runtime probe.
+- Windows Hook protection is never inferred from packaging or `commandWindows` alone.
+- `apply_patch` enforcement is never inferred from documentation alone.
 - No plan is actionable before complete canonical validation and exact approval.
-- Codex edits only an isolated target.
+- Every repair occurs only in an isolated target.
+- The complete resulting patch must be reviewed against the approved plan.
+- Deterministic same-command rescan is required.
 - No automatic execution follows model output.
 - No synthetic fixture command is executed.
 - No new MCP or trust authority is introduced without separate review.
 
 ## Current State
 
-`BW0 Baseline` and the revised hook-backed architecture documentation are complete.
+`BW0 Baseline` and the hook-backed architecture planning are complete.
 
-Guardian hook and workflow implementation are not yet complete. The current implementation target is `BW1 Hook Gate and Explain`.
+The bounded Bash Hook feasibility implementation exists on the Build Week branch and has passed repository CI, but real host trust and active-status evidence remains a separate runtime gate.
+
+Guardian Context, exact approval, repair modes, and deterministic end-to-end verification are not yet complete.
