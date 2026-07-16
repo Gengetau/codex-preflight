@@ -46,7 +46,6 @@ batch_app = typer.Typer(help="Scan a YAML list of external repositories.")
 mcp_app = typer.Typer(help="Inspect Codex MCP configuration and installation health.")
 report_app = typer.Typer(help="Inspect and compare existing local report files.")
 release_app = typer.Typer(help="Verify release readiness without mutating release state.")
-guardian_app = typer.Typer(help="Run deterministic Guardian verification workflows.")
 
 app.add_typer(rules_app, name="rules")
 app.add_typer(trust_app, name="trust")
@@ -56,7 +55,6 @@ app.add_typer(batch_app, name="batch")
 app.add_typer(mcp_app, name="mcp")
 app.add_typer(report_app, name="report")
 app.add_typer(release_app, name="release")
-app.add_typer(guardian_app, name="guardian")
 
 
 @app.callback()
@@ -366,21 +364,6 @@ def release_verify(
         else render_release_readiness_markdown(report)
     )
     raise typer.Exit(0 if report["ready"] else 1)
-
-
-@guardian_app.command("verify-bw1")
-def guardian_verify_bw1(
-    root: Annotated[Path, typer.Option("--root", help="Repository checkout to verify.")] = Path("."),
-    codex_executable: Annotated[
-        str, typer.Option("--codex-executable", hidden=True, help="Codex executable used by integration tests.")
-    ] = "codex",
-) -> None:
-    """Run the non-mutating BW1 Hook Gate and Explain self-verification harness."""
-    from codex_preflight_guardian.self_verification import EXIT_CODES, verify_bw1
-
-    status, _evidence_dir, _result = verify_bw1(root, codex_executable=codex_executable)
-    typer.echo(status)
-    raise typer.Exit(EXIT_CODES[status])
 
 
 def _parse_ttl(value: str) -> timedelta:
