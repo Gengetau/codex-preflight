@@ -8,7 +8,8 @@
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue)
 
 Local-first, command-aware, pre-execution, execution-chain preflight for Codex-style AI coding
-agents.
+agents. This local-first design keeps default repository analysis and policy decisions on the local
+machine.
 
 Codex Preflight statically scans a repository before risky commands run, analyzes the planned
 command itself, builds a best-effort execution graph of reachable local scripts and files, detects
@@ -47,6 +48,16 @@ agent decision.
 - JSON and Markdown reports and report comparison.
 - Explicit `exec` wrapper for guarded command execution.
 - Codex plugin packaging with a self-contained local Hook and MCP runtime.
+
+## Ecosystem Coverage Notes
+
+Ruby coverage includes Bundler git and local sources, gemspec extensions, native extension setup,
+and command-running Rake tasks. Detection remains static and does not run Bundler, Ruby, Rake, or
+repository code.
+
+Java and Kotlin coverage includes Maven plugin execution, Gradle plugin repositories, init/build
+logic, wrapper distribution integrity, and common test/build task classification. Detection remains
+static and does not run Maven, Gradle, Java, Kotlin, compilers, plugins, or repository code.
 
 ## How It Works
 
@@ -107,6 +118,9 @@ codex-preflight release verify --root . --expected-version 0.3.7 --expected-comm
 The release verifier checks version sources, root and marketplace plugin copies, static and runtime
 MCP inventories, supported Python and Git integrations, commit-bound file identity, and optional
 published release state. Repository and GitHub evidence remains untrusted data.
+
+The target checkout is never added to a runtime probe's `PYTHONPATH`. A trusted runtime package must
+be filesystem-isolated from the target checkout before dynamic inventory verification can run.
 
 ## Codex Plugin Installation
 
@@ -242,9 +256,9 @@ codex-preflight-mcp --list-tools
 ```
 
 The MCP extra requires `mcp>=1.3.0`. `mcp doctor` distinguishes a missing runtime, an
-instruction-incompatible runtime, and an instruction-capable runtime. This fail-closed safety
-contract applies to the standalone Python path; it does not mean the marketplace plugin needs a
-separate Python installation.
+instruction-incompatible runtime, and an instruction-capable runtime. The standalone safety contract
+fails closed when fixed server instructions would be lost. This applies to the standalone Python
+path; it does not mean the marketplace plugin needs a separate Python installation.
 
 Inspect standalone configuration and prerequisites without installing packages:
 
