@@ -114,8 +114,6 @@ def _classify_single(command: str) -> CommandClassification:
         return CommandClassification(command, CommandScope.SAFE_READONLY, "Read-only file command.")
     if first == "git" and second in {"status", "diff", "log", "show"}:
         return CommandClassification(command, CommandScope.SAFE_READONLY, "Read-only git command.")
-    if first == "git" and raw_parts[1:] == ["rev-parse", "--is-inside-work-tree"]:
-        return CommandClassification(command, CommandScope.SAFE_READONLY, "Read-only git command.")
 
     return CommandClassification(command, CommandScope.UNKNOWN_SHELL, "Unknown shell command.")
 
