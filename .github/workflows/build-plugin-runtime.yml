@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - codex/v0.4.0-build-week-guardian
-    paths:
+    paths: &runtime-paths
       - ".github/workflows/build-plugin-runtime.yml"
       - ".codex-plugin/plugin.json"
       - "pyproject.toml"
@@ -19,6 +19,8 @@ on:
       - "scripts/merge_plugin_runtime.py"
       - "scripts/runtime-launcher.mjs"
       - "scripts/sync_marketplace_plugin.py"
+  pull_request:
+    paths: *runtime-paths
   workflow_dispatch:
 
 permissions:
@@ -83,7 +85,7 @@ jobs:
           retention-days: 7
 
   finalize:
-    if: github.repository == 'Gengetau/codex-preflight' && github.ref == 'refs/heads/codex/v0.4.0-build-week-guardian'
+    if: github.event_name == 'push' && github.repository == 'Gengetau/codex-preflight' && github.ref == 'refs/heads/codex/v0.4.0-build-week-guardian'
     needs: build
     runs-on: ubuntu-latest
 
