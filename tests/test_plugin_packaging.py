@@ -155,7 +155,8 @@ def test_hook_console_entry_point_is_packaged() -> None:
     assert pyproject["project"]["scripts"]["codex-preflight-hook"] == (
         "codex_preflight_guardian.pre_tool_use:main"
     )
-    assert "codex_preflight_guardian*" in pyproject["tool"]["setuptools"]["packages"]["find"]["include"]
+    package_patterns = pyproject["tool"]["setuptools"]["packages"]["find"]["include"]
+    assert "codex_preflight_guardian*" in package_patterns
 
 
 def test_manifest_has_marketplace_ready_presentation_metadata() -> None:
