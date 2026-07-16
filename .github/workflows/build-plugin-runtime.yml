@@ -133,16 +133,16 @@ jobs:
           node scripts/launch-mcp.mjs --list-tools
           printf '{}\n' | node scripts/launch-hook.mjs | grep PREFLIGHT_INVALID_INPUT
 
-      - name: Commit generated runtimes
+      - name: Commit generated plugin package
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add runtime plugins/codex-preflight/runtime
+          git add runtime plugins/codex-preflight
           git update-index --chmod=+x runtime/linux-x64/codex-preflight-runtime
           git update-index --chmod=+x plugins/codex-preflight/runtime/linux-x64/codex-preflight-runtime
           if git diff --cached --quiet; then
-            echo "Bundled runtimes are already current."
+            echo "Bundled plugin package is already current."
             exit 0
           fi
           git commit -m "build: refresh bundled plugin runtimes"
