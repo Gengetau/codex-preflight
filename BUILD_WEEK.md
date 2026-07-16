@@ -270,9 +270,10 @@ The Build Week branch contains the bounded Bash `PreToolUse` Hook, additive boun
 `guardian-explanation/v1` protocol that keeps deterministic findings separate from advisory model
 explanation.
 
-BW1 is completed through the real Codex product path: Codex itself performs the harmless live Hook
-probe, calls the existing MCP tool, and renders the deterministic result and advisory explanation in
-the conversation. No separate self-verification CLI, evidence-harness subsystem, or additional MCP
-tool is part of the product.
+BW1 now uses only the real Codex product path: Codex itself performs the harmless live Hook probe,
+calls the existing MCP tool, and renders the deterministic result and advisory explanation in the
+conversation. No separate self-verification CLI, evidence-harness subsystem, or additional MCP tool
+is part of the product.
 
-BW2 approval, repair modes, and later Build Week checkpoints remain out of scope.
+The remaining BW1 gate is to run and capture that real Codex product demonstration on the exact
+target runtime. BW2 approval, repair modes, and later Build Week checkpoints remain out of scope.
