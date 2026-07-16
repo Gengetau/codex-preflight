@@ -22,6 +22,12 @@ on:
   pull_request:
     paths: *runtime-paths
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Commit the verified runtime package to the selected branch
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -91,13 +97,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  finalize:
-    if: >-
-      github.repository == 'Gengetau/codex-preflight' &&
-      ((github.event_name == 'push' && github.ref == 'refs/heads/codex/v0.4.0-build-week-guardian') ||
-      (github.event_name == 'pull_request' &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.head.ref == 'codex/v0.4.0-build-week-guardian'))
+  assemble:
     needs: build
     runs-on: ubuntu-latest
 
@@ -133,7 +133,16 @@ jobs:
           node scripts/launch-mcp.mjs --list-tools
           printf '{}\n' | node scripts/launch-hook.mjs | grep PREFLIGHT_INVALID_INPUT
 
-      - name: Commit generated plugin package
+      - name: Upload assembled plugin package
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-preflight-plugin-${{ env.RUNTIME_SOURCE_COMMIT }}
+          path: plugins/codex-preflight
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Publish verified plugin package
+        if: github.event_name == 'workflow_dispatch' && inputs.publish
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
@@ -154,7 +163,7 @@ jobs:
           exit "$status"
 
       - name: Upload runtime publish diagnostics
-        if: failure()
+        if: failure() && github.event_name == 'workflow_dispatch' && inputs.publish
         uses: actions/upload-artifact@v4
         with:
           name: runtime-publish-diagnostics
