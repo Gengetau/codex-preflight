@@ -118,7 +118,8 @@ def test_marketplace_declares_only_the_real_local_mcp_integration() -> None:
         }
     }
     serialized = json.dumps(mcp_config).lower()
-    assert not any(token in serialized for token in ("http://", "https://", "bash", "powershell", "cmd /c", "token"))
+    forbidden_tokens = ("http://", "https://", "bash", "powershell", "cmd /c", "token")
+    assert not any(token in serialized for token in forbidden_tokens)
     assert not (MARKETPLACE_PLUGIN / ".app.json").exists()
 
 
