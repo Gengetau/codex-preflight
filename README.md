@@ -484,3 +484,29 @@ Run tests:
 ```bash
 pytest
 ```
+
+Run lint:
+
+```bash
+ruff check .
+```
+
+## Release History
+
+See [docs/release-history.md](docs/release-history.md).
+
+## License
+
+Copyright 2026 Gengetau and contributors.
+
+Codex Preflight is licensed under the Apache License 2.0. See [LICENSE](LICENSE) for the complete
+license terms and [NOTICE](NOTICE) for attribution information.
+
+## Limitations
+
+Codex Preflight is static, heuristic, and best-effort. It does not prove a repository is safe, does
+not execute code, and does not replace SAST, dependency audit tools, malware sandboxes, or CVE
+scanners. Dynamic runtime behavior may still evade static analysis. Unknown, dynamic, missing,
+outside-repository, symlink, oversized, binary, or incompletely scanned high-risk paths are
+escalated conservatively. Very large graphs or finding sets may be summarized with explicit
+report-budget uncertainty instead of unbounded detail.
