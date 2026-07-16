@@ -204,19 +204,6 @@ Codex must respect the resulting decision:
 - `ASK_USER`: stop and ask the user.
 - `BLOCK`: do not run the command.
 
-### BW1 Guardian self-verification
-
-Run the deterministic Hook Gate and Explain harness from a clean checkout:
-
-```bash
-codex-preflight guardian verify-bw1
-```
-
-The command prints only `PASS`, `FAIL`, or `UNSUPPORTED`, writes sanitized evidence beneath
-`artifacts/bw1-self-verification/<utc-timestamp>/`, returns exit code `1` for `FAIL`, and returns the
-distinct exit code `3` when a required local Codex runtime capability is unavailable. The synthetic
-corpus command is analyzed as data and is never executed.
-
 Install the Python MCP prerequisite first. Plugin installation does not install packages or modify
 the Python environment:
 
@@ -289,8 +276,7 @@ More details are in [docs/plugin.md](docs/plugin.md).
 ## MCP
 
 The MCP-facing package never executes repository code or planned commands. Evidence and stored
-trust values are marked or described as untrusted data. Server initialization supplies fixed safety
-instructions requiring `ASK_USER` and `BLOCK` decisions to stop automatic execution.
+trust entries are treated as untrusted data and bounded before they are returned.
 
 The default runtime authority remains exactly two tools:
 
@@ -498,29 +484,3 @@ Run tests:
 ```bash
 pytest
 ```
-
-Run lint:
-
-```bash
-ruff check .
-```
-
-## Release History
-
-See [docs/release-history.md](docs/release-history.md).
-
-## License
-
-Copyright 2026 Gengetau and contributors.
-
-Codex Preflight is licensed under the Apache License 2.0. See [LICENSE](LICENSE) for the complete
-license terms and [NOTICE](NOTICE) for attribution information.
-
-## Limitations
-
-Codex Preflight is static, heuristic, and best-effort. It does not prove a repository is safe, does
-not execute code, and does not replace SAST, dependency audit tools, malware sandboxes, or CVE
-scanners. Dynamic runtime behavior may still evade static analysis. Unknown, dynamic, missing,
-outside-repository, symlink, oversized, binary, or incompletely scanned high-risk paths are
-escalated conservatively. Very large graphs or finding sets may be summarized with explicit
-report-budget uncertainty instead of unbounded detail.
