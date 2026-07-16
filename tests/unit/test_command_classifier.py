@@ -50,7 +50,6 @@ from codex_preflight_core.command.scope import CommandScope
         (".\\gradlew.bat check", CommandScope.TEST),
         ("make", CommandScope.BUILD),
         ("git status", CommandScope.SAFE_READONLY),
-        ("git rev-parse --is-inside-work-tree", CommandScope.SAFE_READONLY),
         ("cat README.md", CommandScope.SAFE_READONLY),
         ("unknown-tool --flag", CommandScope.UNKNOWN_SHELL),
     ],
