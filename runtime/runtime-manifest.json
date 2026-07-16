@@ -3,13 +3,13 @@
   "runtimes": {
     "linux-x64": {
       "path": "linux-x64/codex-preflight-runtime",
-      "sha256": "8664649423e0be312aea0dd0fa64d5118c323b34174f6febef09a97116836996"
+      "sha256": "e25f4d321e337e096b470089d1930d5c4ed1167ec9c368585953acd82d67db89"
     },
     "windows-x64": {
       "path": "windows-x64/codex-preflight-runtime.exe",
-      "sha256": "99610c722199327c98c4ff55621250a340eaa42243ad51e0209f5bddb8e46caa"
+      "sha256": "94c34017c59787c8c6032d78a63dd0d39af413999c109996073686e3a9dcb649"
     }
   },
   "schemaVersion": "codex-preflight-runtime/v1",
-  "sourceCommit": "ffa895a4ea81c70911b21a686809e1c5ee9b5ed3"
+  "sourceCommit": "0dfeaff6f4ae373fc790f9ee138f6f8eb1ed906c"
 }
