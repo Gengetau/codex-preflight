@@ -35,7 +35,7 @@ jobs:
       - name: Verify release readiness
         env:
           PYTHONPATH: ${{ runner.temp }}/codex-preflight-release-verify
-        run: python -P -m codex_preflight_cli.main release verify --root . --expected-version 0.3.7 --expected-commit HEAD --format json
+        run: python -P -m codex_preflight_cli.main release verify --root . --expected-version 0.4.0 --expected-commit HEAD --format json
 
       - name: Lint
         run: ruff check .
