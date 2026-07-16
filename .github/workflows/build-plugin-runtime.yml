@@ -146,4 +146,18 @@ jobs:
             exit 0
           fi
           git commit -m "build: refresh bundled plugin runtimes"
-          git push origin "HEAD:${RUNTIME_TARGET_BRANCH}"
+          set +e
+          git push --verbose origin "HEAD:${RUNTIME_TARGET_BRANCH}" > runtime-publish.log 2>&1
+          status=$?
+          set -e
+          cat runtime-publish.log
+          exit "$status"
+
+      - name: Upload runtime publish diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-publish-diagnostics
+          path: runtime-publish.log
+          if-no-files-found: error
+          retention-days: 7
