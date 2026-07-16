@@ -23,7 +23,7 @@ def _runtime_id() -> str:
 
 
 def _source_commit(root: Path) -> str:
-    configured = os.environ.get("GITHUB_SHA")
+    configured = os.environ.get("CODEX_PREFLIGHT_SOURCE_COMMIT") or os.environ.get("GITHUB_SHA")
     if configured:
         return configured
     result = subprocess.run(
