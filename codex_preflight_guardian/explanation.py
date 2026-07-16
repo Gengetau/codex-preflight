@@ -45,14 +45,14 @@ def explanation_schema() -> dict[str, Any]:
         "type": "object",
         "additionalProperties": False,
         "properties": {
-            "schemaVersion": {"const": SCHEMA_VERSION},
+            "schemaVersion": {"type": "string", "const": SCHEMA_VERSION},
             "sourceReportDigest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
             "sourceCommandDigest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
             "deterministicResult": {
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "decision": {"enum": ["ALLOW", "WARN", "ASK_USER", "BLOCK"]},
+                    "decision": {"type": "string", "enum": ["ALLOW", "WARN", "ASK_USER", "BLOCK"]},
                     "statement": {"type": "string", "maxLength": 64},
                 },
                 "required": ["decision", "statement"],

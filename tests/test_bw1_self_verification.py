@@ -33,9 +33,20 @@ def _completed(
     return subprocess.CompletedProcess(args, returncode, stdout, stderr)
 
 
-def _stub_runner(*, fail_open: bool = False, unavailable: bool = False, exit_one: bool = False):
-    def run(args, *, cwd, text, capture_output, check, timeout):
-        assert text is True and capture_output is True and check is False and timeout > 0
+def _stub_runner(
+    *,
+    fail_open: bool = False,
+    unavailable: bool = False,
+    exit_one: bool = False,
+    snapshot_warning: bool = False,
+    no_command_attempt: bool = False,
+    fixture_attempt: bool = False,
+    observed_model: str | None = bw1.GPT_5_6_MODEL,
+    model_unavailable: bool = False,
+):
+    def run(args, *, cwd, text, encoding, errors, capture_output, check, timeout):
+        assert text is True and encoding == "utf-8" and errors == "replace"
+        assert capture_output is True and check is False and timeout > 0
         args = [str(item) for item in args]
         cwd = Path(cwd)
         if args[0] == "git":
@@ -48,19 +59,57 @@ def _stub_runner(*, fail_open: bool = False, unavailable: bool = False, exit_one
         assert args[0] == "codex-stub"
         if args[1:] == ["--version"]:
             return subprocess.CompletedProcess(args, 0, "codex-cli 0.test\n", "")
+        if args[1:] == ["features", "list"]:
+            return subprocess.CompletedProcess(
+                args,
+                0,
+                "hooks stable true\nshell_snapshot stable true\n",
+                "",
+            )
+        if args[1:] == ["exec", "--disable", "shell_snapshot", "--help"]:
+            return subprocess.CompletedProcess(args, 0, "--disable <FEATURE>\n", "")
+        assert args[1:4] == ["exec", "--disable", "shell_snapshot"]
         if unavailable:
-            return _completed(args, 1, [{"type": "error", "message": "authentication required"}])
+            return _completed(
+                args,
+                1,
+                [{"type": "error", "error": {"code": "shell_unavailable", "message": "shell unavailable"}}],
+            )
         if exit_one:
-            return _completed(args, 1, [{"type": "turn.failed", "error": "hook exit code 1"}])
+            return _completed(
+                args,
+                1,
+                [{"type": "turn.failed", "error": "hook exit code 1"}],
+                "Failed to create shell snapshot for powershell: Shell snapshot not supported yet for PowerShell",
+            )
         prompt = args[-1]
         if "Hook capability probe" in prompt:
             command = prompt.split("Attempt exactly this one shell command and no other tool call: ", 1)[1].split(
                 ". Do not replace", 1
             )[0]
+            warning = (
+                "Failed to create shell snapshot for powershell: "
+                "Shell snapshot not supported yet for PowerShell"
+                if snapshot_warning
+                else ""
+            )
+            if no_command_attempt:
+                return _completed(
+                    args,
+                    0,
+                    [
+                        {"type": "thread.started", "thread_id": "stub"},
+                        {"type": "turn.completed", "usage": {}},
+                    ],
+                    warning,
+                )
             if bw1.ALLOW_SENTINEL in command:
                 (cwd / bw1.ALLOW_SENTINEL).write_text(f"{bw1.ALLOW_PROBE}\n", encoding="utf-8")
             elif fail_open:
                 (cwd / bw1.DENY_SENTINEL).write_text(f"{bw1.DENY_PROBE}\n", encoding="utf-8")
+            is_allow = bw1.ALLOW_SENTINEL in command
+            final_status = "completed" if is_allow or fail_open else "failed"
+            final_exit_code = 0 if is_allow or fail_open else 1
             return _completed(
                 args,
                 0,
@@ -68,36 +117,79 @@ def _stub_runner(*, fail_open: bool = False, unavailable: bool = False, exit_one
                     {"type": "thread.started", "thread_id": "stub"},
                     {
                         "type": "item.started",
-                        "item": {"id": "command", "type": "command_execution", "command": command},
+                        "item": {
+                            "id": "command",
+                            "type": "command_execution",
+                            "command": command,
+                            "status": "in_progress",
+                        },
                     },
-                    {"type": "turn.completed", "usage": {}},
-                ],
-            )
-        if "Call the MCP tool preflight_check exactly once" in prompt:
-            supplied_cwd = prompt.split("Use cwd equal to ", 1)[1].split(" and command equal to ", 1)[0]
-            return _completed(
-                args,
-                0,
-                [
-                    {"type": "thread.started", "thread_id": "stub"},
                     {
                         "type": "item.completed",
                         "item": {
-                            "id": "mcp",
-                            "type": "mcp_tool_call",
-                            "tool": "preflight_check",
-                            "arguments": {
-                                "cwd": supplied_cwd,
-                                "command": bw1.PLANNED_COMMAND,
-                                "format": "json",
-                            },
-                            "status": "completed",
+                            "id": "command",
+                            "type": "command_execution",
+                            "command": command,
+                            "status": final_status,
+                            "exit_code": final_exit_code,
                         },
                     },
                     {"type": "turn.completed", "usage": {}},
                 ],
+                warning,
+            )
+        if "Call the MCP tool preflight_check exactly once" in prompt:
+            supplied_cwd = prompt.split("Use cwd equal to ", 1)[1].split(" and command equal to ", 1)[0]
+            events = [
+                {"type": "thread.started", "thread_id": "stub"},
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "id": "mcp",
+                        "type": "mcp_tool_call",
+                        "tool": "preflight_check",
+                        "arguments": {
+                            "cwd": supplied_cwd,
+                            "command": bw1.PLANNED_COMMAND,
+                            "format": "json",
+                        },
+                        "status": "completed",
+                    },
+                },
+            ]
+            if fixture_attempt:
+                events.append(
+                    {
+                        "type": "item.started",
+                        "item": {
+                            "id": "fixture-command",
+                            "type": "command_execution",
+                            "command": bw1.PLANNED_COMMAND,
+                        },
+                    }
+                )
+            events.append({"type": "turn.completed", "usage": {}})
+            return _completed(
+                args,
+                0,
+                events,
             )
         if "--output-schema" in args:
+            assert args[args.index("--model") + 1] == bw1.GPT_5_6_MODEL
+            if model_unavailable:
+                return _completed(
+                    args,
+                    1,
+                    [
+                        {
+                            "type": "turn.failed",
+                            "error": {
+                                "code": "model_not_found",
+                                "message": f"model {bw1.GPT_5_6_MODEL} unavailable",
+                            },
+                        }
+                    ],
+                )
             context = json.loads(prompt.split("Guardian Context:\n", 1)[1])
             decision = context["deterministicDecision"]["decision"]
             explanation = {
@@ -120,7 +212,11 @@ def _stub_runner(*, fail_open: bool = False, unavailable: bool = False, exit_one
                 args,
                 0,
                 [
-                    {"type": "thread.started", "thread_id": "stub"},
+                    {
+                        "type": "thread.started",
+                        "thread_id": "stub",
+                        **({"model": observed_model} if observed_model is not None else {}),
+                    },
                     {"type": "item.completed", "item": {"id": "message", "type": "agent_message", "text": "{}"}},
                     {"type": "turn.completed", "usage": {}},
                 ],
@@ -176,6 +272,8 @@ def test_full_self_verification_passes_with_stub_codex_executable(
 
     assert status == bw1.PASS, json.dumps(result, indent=2)
     assert result["fixtureCommandsExecuted"] == 0
+    assert result["shellSnapshotOverride"]["status"] == "accepted"
+    assert result["shellSnapshotOverride"]["hooksDisabled"] is False
     assert result["exitCode"] == 0
     assert evidence_dir.name == "20260716T010203.456789Z"
     assert (evidence_dir / "result.json").is_file()
@@ -191,7 +289,7 @@ def test_full_self_verification_passes_with_stub_codex_executable(
 @pytest.mark.parametrize(
     ("runner", "expected"),
     [
-        (_stub_runner(unavailable=True), bw1.UNSUPPORTED),
+        (_stub_runner(unavailable=True), bw1.FAIL),
         (_stub_runner(fail_open=True), bw1.FAIL),
         (_stub_runner(exit_one=True), bw1.FAIL),
     ],
@@ -211,6 +309,121 @@ def test_self_verification_distinguishes_unsupported_fail_open_and_exit_one(
 
     assert status == expected
     assert result["exitCode"] == bw1.EXIT_CODES[expected]
+
+
+def test_powershell_snapshot_warning_with_valid_deny_and_allow_evidence_passes(
+    short_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _make_repository(short_root)
+    monkeypatch.setattr(bw1, "_mcp_handshake", _handshake)
+
+    status, _evidence, result = bw1.verify_bw1(
+        root,
+        codex_executable="codex-stub",
+        runner=_stub_runner(snapshot_warning=True),
+        temp_parent=root,
+    )
+
+    assert status == bw1.PASS, json.dumps(result, indent=2)
+    host = next(phase for phase in result["phases"] if phase["name"] == "realHostGate")
+    assert host["details"]["deny"]["commandAttempted"] is True
+    assert host["details"]["allow"]["commandAttempted"] is True
+    assert host["details"]["deny"]["sentinel"]["valid"] is True
+    assert host["details"]["allow"]["sentinel"]["valid"] is True
+
+
+def test_powershell_snapshot_warning_plus_hook_exit_one_fails(
+    short_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _make_repository(short_root)
+    monkeypatch.setattr(bw1, "_mcp_handshake", _handshake)
+
+    status, _evidence, result = bw1.verify_bw1(
+        root,
+        codex_executable="codex-stub",
+        runner=_stub_runner(exit_one=True),
+        temp_parent=root,
+    )
+
+    assert status == bw1.FAIL
+    host = next(phase for phase in result["phases"] if phase["name"] == "realHostGate")
+    assert host["status"] == bw1.FAIL
+    assert host["details"]["deny"]["hookFailure"] is True
+
+
+def test_powershell_snapshot_warning_plus_fail_open_sentinel_fails(
+    short_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _make_repository(short_root)
+    monkeypatch.setattr(bw1, "_mcp_handshake", _handshake)
+
+    status, _evidence, result = bw1.verify_bw1(
+        root,
+        codex_executable="codex-stub",
+        runner=_stub_runner(fail_open=True, snapshot_warning=True),
+        temp_parent=root,
+    )
+
+    assert status == bw1.FAIL
+    host = next(phase for phase in result["phases"] if phase["name"] == "realHostGate")
+    assert host["details"]["deny"]["sentinel"]["present"] is True
+    assert host["details"]["deny"]["sentinel"]["valid"] is False
+
+
+def test_explicit_unavailable_shell_without_command_attempt_is_unsupported(tmp_path: Path) -> None:
+    events = [
+        {
+            "type": "turn.failed",
+            "error": {"code": "shell_unavailable", "message": "shell tool unavailable"},
+        }
+    ]
+    probe = {
+        "returncode": 1,
+        "events": events,
+        "stderr": "",
+        "hookFailure": False,
+    }
+
+    status, details = bw1._evaluate_host_probe(
+        "deny",
+        probe,
+        tmp_path,
+        bw1.DENY_SENTINEL,
+        f"echo {bw1.DENY_PROBE} > {bw1.DENY_SENTINEL}",
+        expected_present=False,
+    )
+
+    assert status == bw1.UNSUPPORTED
+    assert details["commandAttempted"] is False
+
+
+def test_snapshot_warning_only_without_command_attempt_fails(tmp_path: Path) -> None:
+    events = [
+        {"type": "thread.started", "thread_id": "stub"},
+        {"type": "turn.completed", "usage": {}},
+    ]
+    warning = (
+        "Failed to create shell snapshot for powershell: "
+        "Shell snapshot not supported yet for PowerShell"
+    )
+    probe = {
+        "returncode": 0,
+        "events": events,
+        "stderr": warning,
+        "hookFailure": False,
+    }
+
+    status, details = bw1._evaluate_host_probe(
+        "deny",
+        probe,
+        tmp_path,
+        bw1.DENY_SENTINEL,
+        f"echo {bw1.DENY_PROBE} > {bw1.DENY_SENTINEL}",
+        expected_present=False,
+    )
+
+    assert status == bw1.FAIL
+    assert "explicit fatal unavailable-tool event" in details["reason"]
 
 
 def test_missing_runtime_executable_is_unsupported(tmp_path: Path) -> None:
@@ -263,6 +476,87 @@ def test_missing_mcp_context_preserves_unsupported_result(
     assert phases["guardianContextAndExplain"]["status"] == bw1.UNSUPPORTED
 
 
+@pytest.mark.parametrize("observed_model", ["gpt-5.6-terra", "gpt-5.5"])
+def test_guardian_explanation_model_mismatch_is_unsupported(
+    short_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    observed_model: str,
+) -> None:
+    root = _make_repository(short_root)
+    monkeypatch.setattr(bw1, "_mcp_handshake", _handshake)
+
+    status, _evidence, result = bw1.verify_bw1(
+        root,
+        codex_executable="codex-stub",
+        runner=_stub_runner(observed_model=observed_model),
+        temp_parent=root,
+    )
+
+    assert status == bw1.UNSUPPORTED
+    explain = next(phase for phase in result["phases"] if phase["name"] == "guardianContextAndExplain")
+    assert explain["details"]["requestedModel"] == bw1.GPT_5_6_MODEL
+    assert explain["details"]["observedModel"] == observed_model
+
+
+def test_guardian_explanation_unavailable_gpt_5_6_is_unsupported(
+    short_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _make_repository(short_root)
+    monkeypatch.setattr(bw1, "_mcp_handshake", _handshake)
+
+    status, _evidence, result = bw1.verify_bw1(
+        root,
+        codex_executable="codex-stub",
+        runner=_stub_runner(model_unavailable=True),
+        temp_parent=root,
+    )
+
+    assert status == bw1.UNSUPPORTED
+    explain = next(phase for phase in result["phases"] if phase["name"] == "guardianContextAndExplain")
+    assert explain["details"]["requestedModel"] == bw1.GPT_5_6_MODEL
+    assert explain["details"]["observedModel"] is None
+
+
+def test_guardian_explanation_accepts_unemitted_actual_model_after_successful_selection(
+    short_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _make_repository(short_root)
+    monkeypatch.setattr(bw1, "_mcp_handshake", _handshake)
+
+    status, _evidence, result = bw1.verify_bw1(
+        root,
+        codex_executable="codex-stub",
+        runner=_stub_runner(observed_model=None),
+        temp_parent=root,
+    )
+
+    assert status == bw1.PASS
+    explain = next(phase for phase in result["phases"] if phase["name"] == "guardianContextAndExplain")
+    assert explain["details"]["requestedModel"] == bw1.GPT_5_6_MODEL
+    assert explain["details"]["observedModel"] is None
+    assert explain["details"]["modelSelection"] == "accepted-unobserved"
+
+
+def test_fixture_command_attempt_is_derived_from_jsonl_and_fails_gate(
+    short_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _make_repository(short_root)
+    monkeypatch.setattr(bw1, "_mcp_handshake", _handshake)
+
+    status, _evidence, result = bw1.verify_bw1(
+        root,
+        codex_executable="codex-stub",
+        runner=_stub_runner(fixture_attempt=True),
+        temp_parent=root,
+    )
+
+    assert status == bw1.FAIL
+    assert result["fixtureCommandsExecuted"] == 1
+    fixture = next(phase for phase in result["phases"] if phase["name"] == "fixtureCommandExecution")
+    assert fixture["status"] == bw1.FAIL
+    assert fixture["details"]["attempts"][0]["evidenceFile"] == "mcp-codex.jsonl"
+
+
 @pytest.mark.parametrize(
     "text",
     [
@@ -286,6 +580,42 @@ def test_codex_jsonl_accepts_complete_event_stream() -> None:
     )
 
     assert [event["type"] for event in events] == ["thread.started", "item.completed", "turn.completed"]
+
+
+def test_command_execution_lifecycle_is_counted_as_one_attempt() -> None:
+    events = [
+        {
+            "type": "item.started",
+            "item": {
+                "id": "command-1",
+                "type": "command_execution",
+                "command": "echo probe",
+                "status": "in_progress",
+            },
+        },
+        {
+            "type": "item.completed",
+            "item": {
+                "id": "command-1",
+                "type": "command_execution",
+                "command": "echo probe",
+                "status": "completed",
+                "exit_code": 0,
+            },
+        },
+    ]
+
+    attempts = bw1._command_attempts(events)
+
+    assert attempts == [
+        {
+            "id": "command-1",
+            "type": "command_execution",
+            "command": "echo probe",
+            "status": "completed",
+            "exit_code": 0,
+        }
+    ]
 
 
 @pytest.mark.parametrize(

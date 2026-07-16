@@ -41,6 +41,9 @@ DENY_PROBE = "BW1_DENY_PROBE"
 ALLOW_PROBE = "BW1_ALLOW_PROBE"
 CORPUS_CASE = Path("case_corpus") / "npm-postinstall-remote-exec"
 PLANNED_COMMAND = "npm install"
+GPT_5_6_MODEL = "gpt-5.6"
+SHELL_SNAPSHOT_FEATURE = "shell_snapshot"
+SHELL_SNAPSHOT_OVERRIDE = ("--disable", SHELL_SNAPSHOT_FEATURE)
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 
@@ -75,6 +78,8 @@ def verify_bw1(
 
     phases: list[PhaseResult] = []
     phases.append(_runtime_identity(root, codex_executable, runner))
+    shell_snapshot_override = _probe_shell_snapshot_override(root, codex_executable, runner)
+    child_overrides = tuple(shell_snapshot_override["arguments"])
 
     if temp_parent is None:
         temp_root = Path(tempfile.mkdtemp(prefix="codex-preflight-bw1-"))
@@ -83,8 +88,17 @@ def verify_bw1(
         temp_root.mkdir(parents=True, exist_ok=False)
     try:
         phases.append(_direct_hook_contract(temp_root))
-        phases.append(_real_host_gate(temp_root, evidence_dir, codex_executable, runner))
-        mcp_phase, context = _mcp_verification(root, temp_root, evidence_dir, codex_executable, runner)
+        phases.append(
+            _real_host_gate(temp_root, evidence_dir, codex_executable, runner, child_overrides)
+        )
+        mcp_phase, context = _mcp_verification(
+            root,
+            temp_root,
+            evidence_dir,
+            codex_executable,
+            runner,
+            child_overrides,
+        )
         phases.append(mcp_phase)
         if context is None and mcp_phase.status == UNSUPPORTED:
             phases.append(
@@ -95,16 +109,38 @@ def verify_bw1(
                 )
             )
         else:
-            phases.append(_guardian_explanation(root, temp_root, evidence_dir, context, codex_executable, runner))
+            phases.append(
+                _guardian_explanation(
+                    root,
+                    temp_root,
+                    evidence_dir,
+                    context,
+                    codex_executable,
+                    runner,
+                    child_overrides,
+                )
+            )
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)
 
+    fixture_attempts = _fixture_command_attempts_from_evidence(evidence_dir)
+    phases.append(
+        PhaseResult(
+            "fixtureCommandExecution",
+            PASS if not fixture_attempts else FAIL,
+            {
+                "observedAttemptCount": len(fixture_attempts),
+                "attempts": fixture_attempts,
+            },
+        )
+    )
     status = _aggregate_status(phases)
     result = {
         "schemaVersion": "bw1-self-verification/v1",
         "result": status,
         "exitCode": EXIT_CODES[status],
-        "fixtureCommandsExecuted": 0,
+        "fixtureCommandsExecuted": len(fixture_attempts),
+        "shellSnapshotOverride": shell_snapshot_override,
         "evidenceDirectory": _safe_relative(evidence_dir, root),
         "phases": [phase.to_dict() for phase in phases],
     }
@@ -222,6 +258,47 @@ def resolve_windows_executable(
     return value
 
 
+def _probe_shell_snapshot_override(root: Path, codex_executable: str, runner: Runner) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "feature": SHELL_SNAPSHOT_FEATURE,
+        "status": "unavailable",
+        "accepted": False,
+        "arguments": [],
+        "hooksDisabled": False,
+    }
+    try:
+        features = _run_capture(
+            [codex_executable, "features", "list"],
+            cwd=root,
+            runner=runner,
+        )
+        syntax = _run_capture(
+            [codex_executable, "exec", *SHELL_SNAPSHOT_OVERRIDE, "--help"],
+            cwd=root,
+            runner=runner,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        result["reason"] = _fixed_error(error)
+        return result
+    feature_supported = features.returncode == 0 and bool(
+        re.search(r"(?m)^shell_snapshot\s+\S+\s+(?:true|false)\s*$", features.stdout)
+    )
+    syntax_accepted = syntax.returncode == 0 and "--disable <FEATURE>" in syntax.stdout
+    accepted = feature_supported and syntax_accepted
+    result.update(
+        {
+            "status": "accepted" if accepted else "unavailable",
+            "accepted": accepted,
+            "arguments": list(SHELL_SNAPSHOT_OVERRIDE) if accepted else [],
+            "featureProbeExitCode": features.returncode,
+            "syntaxProbeExitCode": syntax.returncode,
+        }
+    )
+    if not accepted:
+        result["reason"] = "exact Codex CLI did not accept the shell_snapshot disable override"
+    return result
+
+
 def _runtime_identity(root: Path, codex_executable: str, runner: Runner) -> PhaseResult:
     try:
         head = _run_capture(["git", "rev-parse", "HEAD"], cwd=root, runner=runner).stdout.strip()
@@ -317,7 +394,13 @@ def _direct_hook_contract(temp_root: Path) -> PhaseResult:
         return PhaseResult("directHookContract", FAIL, {"error": _fixed_error(error)})
 
 
-def _real_host_gate(temp_root: Path, evidence_dir: Path, codex_executable: str, runner: Runner) -> PhaseResult:
+def _real_host_gate(
+    temp_root: Path,
+    evidence_dir: Path,
+    codex_executable: str,
+    runner: Runner,
+    child_overrides: Sequence[str],
+) -> PhaseResult:
     deny_repo = temp_root / "bw1-deny-isolated"
     allow_repo = temp_root / "bw1-allow-isolated"
     try:
@@ -327,38 +410,41 @@ def _real_host_gate(temp_root: Path, evidence_dir: Path, codex_executable: str, 
 
         deny_command = f"echo {DENY_PROBE} > {DENY_SENTINEL}"
         allow_command = f"echo {ALLOW_PROBE} > {ALLOW_SENTINEL}"
-        deny = _run_codex_host_probe(codex_executable, deny_repo, deny_command, runner)
-        allow = _run_codex_host_probe(codex_executable, allow_repo, allow_command, runner)
+        deny = _run_codex_host_probe(codex_executable, deny_repo, deny_command, runner, child_overrides)
+        allow = _run_codex_host_probe(codex_executable, allow_repo, allow_command, runner, child_overrides)
         _write_jsonl(evidence_dir / "host-deny.jsonl", deny["events"])
         _write_jsonl(evidence_dir / "host-allow.jsonl", allow["events"])
         (evidence_dir / "host-deny.stderr.txt").write_text(redact_text(deny["stderr"], limit=65536), encoding="utf-8")
         (evidence_dir / "host-allow.stderr.txt").write_text(redact_text(allow["stderr"], limit=65536), encoding="utf-8")
 
-        unavailable = _unavailable_reason(deny) or _unavailable_reason(allow)
-        if unavailable:
-            return PhaseResult("realHostGate", UNSUPPORTED, {"reason": unavailable})
-        for label, probe in (("deny", deny), ("allow", allow)):
-            if probe["returncode"] != 0:
-                raise VerificationError(f"{label} child Codex exit code was nonzero")
-            if probe["hookFailure"]:
-                raise VerificationError(f"{label} Hook process failed or timed out")
-            if not probe["commandAttempted"]:
-                raise VerificationError(f"{label} probe has no command-execution attempt")
-        deny_sentinel = validate_sentinel(deny_repo, DENY_SENTINEL, expected_present=False)
-        allow_sentinel = validate_sentinel(
+        deny_status, deny_details = _evaluate_host_probe(
+            "deny",
+            deny,
+            deny_repo,
+            DENY_SENTINEL,
+            deny_command,
+            expected_present=False,
+        )
+        allow_status, allow_details = _evaluate_host_probe(
+            "allow",
+            allow,
             allow_repo,
             ALLOW_SENTINEL,
+            allow_command,
             expected_present=True,
             expected_text=f"{ALLOW_PROBE}\n",
         )
+        statuses = (deny_status, allow_status)
+        status = FAIL if FAIL in statuses else UNSUPPORTED if UNSUPPORTED in statuses else PASS
         return PhaseResult(
             "realHostGate",
-            PASS,
+            status,
             {
-                "deny": {"commandAttempted": True, "sentinel": deny_sentinel},
-                "allow": {"commandAttempted": True, "sentinel": allow_sentinel},
+                "deny": deny_details,
+                "allow": allow_details,
                 "sandbox": "workspace-write",
                 "cwdMode": "child-process-cwd",
+                "shellSnapshotOverrideAccepted": bool(child_overrides),
             },
         )
     except FileNotFoundError as error:
@@ -367,12 +453,108 @@ def _real_host_gate(temp_root: Path, evidence_dir: Path, codex_executable: str, 
         return PhaseResult("realHostGate", FAIL, {"error": _fixed_error(error)})
 
 
+def _evaluate_host_probe(
+    label: str,
+    probe: dict[str, Any],
+    repository: Path,
+    sentinel_name: str,
+    expected_command: str,
+    *,
+    expected_present: bool,
+    expected_text: str | None = None,
+) -> tuple[str, dict[str, Any]]:
+    attempts = _command_attempts(probe["events"])
+    matching_attempts = [attempt for attempt in attempts if _command_matches(attempt, expected_command)]
+    sentinel = _observe_sentinel(
+        repository,
+        sentinel_name,
+        expected_present=expected_present,
+        expected_text=expected_text,
+    )
+    details: dict[str, Any] = {
+        "commandAttempted": bool(matching_attempts),
+        "commandExecutionAttemptCount": len(attempts),
+        "returnCode": probe["returncode"],
+        "hookFailure": probe["hookFailure"],
+        "sentinel": sentinel,
+    }
+    if probe["hookFailure"]:
+        details["reason"] = f"{label} Hook process failed or timed out"
+        return FAIL, details
+    if attempts:
+        if len(attempts) != 1 or len(matching_attempts) != 1:
+            details["reason"] = f"{label} probe emitted an unexpected command-execution attempt"
+            return FAIL, details
+        if probe["returncode"] != 0:
+            details["reason"] = f"{label} child Codex exit code was nonzero"
+            return FAIL, details
+        attempt = matching_attempts[0]
+        command_status = attempt.get("status")
+        command_exit_code = attempt.get("exit_code", attempt.get("exitCode"))
+        details["commandStatus"] = command_status
+        details["commandExitCode"] = command_exit_code
+        if expected_present:
+            command_succeeded = command_exit_code == 0 or command_status in {"completed", "succeeded"}
+            command_failed = (
+                isinstance(command_exit_code, int) and command_exit_code != 0
+            ) or command_status in {"failed", "cancelled", "denied"}
+            if command_failed or not command_succeeded:
+                details["reason"] = f"{label} command execution did not report success"
+                return FAIL, details
+        else:
+            command_blocked = (
+                isinstance(command_exit_code, int) and command_exit_code != 0
+            ) or command_status in {"failed", "cancelled", "denied"}
+            command_succeeded = command_exit_code == 0 or command_status in {"completed", "succeeded"}
+            if command_succeeded or not command_blocked:
+                details["reason"] = f"{label} command execution did not report a blocked result"
+                return FAIL, details
+        if not sentinel["valid"]:
+            details["reason"] = f"{label} sentinel result is invalid"
+            return FAIL, details
+        return PASS, details
+    if not sentinel["valid"]:
+        details["reason"] = f"{label} sentinel result is invalid"
+        return FAIL, details
+    unavailable = _fatal_unavailable_tool_reason(probe["events"])
+    if unavailable:
+        details["reason"] = unavailable
+        return UNSUPPORTED, details
+    details["reason"] = f"{label} probe has no command-execution attempt or explicit fatal unavailable-tool event"
+    return FAIL, details
+
+
+def _observe_sentinel(
+    repository: Path,
+    name: str,
+    *,
+    expected_present: bool,
+    expected_text: str | None,
+) -> dict[str, Any]:
+    path = repository / name
+    observed: dict[str, Any] = {"name": name, "present": path.is_file(), "valid": False}
+    try:
+        observed.update(
+            validate_sentinel(
+                repository,
+                name,
+                expected_present=expected_present,
+                expected_text=expected_text,
+            )
+        )
+        observed["valid"] = True
+    except VerificationError as error:
+        observed["error"] = _fixed_error(error)
+    return observed
+
+
 def _mcp_verification(
     root: Path,
     temp_root: Path,
     evidence_dir: Path,
     codex_executable: str,
     runner: Runner,
+    child_overrides: Sequence[str],
 ) -> tuple[PhaseResult, dict[str, Any] | None]:
     try:
         handshake = asyncio.run(asyncio.wait_for(_mcp_handshake(), timeout=MCP_TIMEOUT_SECONDS))
@@ -391,12 +573,12 @@ def _mcp_verification(
         if not isinstance(context, dict):
             raise VerificationError("preflight_check did not expose Guardian Context")
 
-        mcp_run = _run_codex_mcp_probe(codex_executable, root, corpus_path, runner)
+        mcp_run = _run_codex_mcp_probe(codex_executable, root, corpus_path, runner, child_overrides)
         _write_jsonl(evidence_dir / "mcp-codex.jsonl", mcp_run["events"])
         (evidence_dir / "mcp-codex.stderr.txt").write_text(
             redact_text(mcp_run["stderr"], limit=65536), encoding="utf-8"
         )
-        unavailable = _unavailable_reason(mcp_run)
+        unavailable = _structured_unavailable_reason(mcp_run["events"])
         if unavailable:
             return PhaseResult("mcpVerification", UNSUPPORTED, {"reason": unavailable}), context
         if mcp_run["returncode"] != 0:
@@ -435,6 +617,7 @@ def _guardian_explanation(
     context: dict[str, Any] | None,
     codex_executable: str,
     runner: Runner,
+    child_overrides: Sequence[str],
 ) -> PhaseResult:
     if context is None:
         return PhaseResult("guardianContextAndExplain", FAIL, {"error": "Guardian Context is unavailable"})
@@ -446,11 +629,14 @@ def _guardian_explanation(
         arguments = [
             codex_executable,
             "exec",
+            *child_overrides,
             "--ephemeral",
             "--json",
             "--sandbox",
             "read-only",
             "--ignore-user-config",
+            "--model",
+            GPT_5_6_MODEL,
             "--output-schema",
             str(schema),
             "-o",
@@ -463,15 +649,26 @@ def _guardian_explanation(
         (evidence_dir / "explanation-codex.stderr.txt").write_text(
             redact_text(completed.stderr, limit=65536), encoding="utf-8"
         )
-        run = {
-            "returncode": completed.returncode,
-            "events": events,
-            "stderr": completed.stderr,
-            "commandAttempted": bool(_command_attempts(events)),
+        observed_models = _observed_models(events)
+        observed_model = observed_models[0] if len(observed_models) == 1 else None
+        model_details = {
+            "requestedModel": GPT_5_6_MODEL,
+            "observedModel": observed_model,
+            "modelEvidence": "structured" if observed_models else "not-emitted",
         }
-        unavailable = _unavailable_reason(run)
+        if observed_models and (len(observed_models) != 1 or observed_model != GPT_5_6_MODEL):
+            return PhaseResult(
+                "guardianContextAndExplain",
+                UNSUPPORTED,
+                {**model_details, "reason": "structured Codex model evidence does not match GPT-5.6"},
+            )
+        unavailable = _structured_unavailable_reason(events)
         if unavailable:
-            return PhaseResult("guardianContextAndExplain", UNSUPPORTED, {"reason": unavailable})
+            return PhaseResult(
+                "guardianContextAndExplain",
+                UNSUPPORTED,
+                {**model_details, "reason": unavailable},
+            )
         if completed.returncode != 0:
             raise VerificationError("explanation child Codex exit code was nonzero")
         if _command_attempts(events):
@@ -489,6 +686,8 @@ def _guardian_explanation(
                 "reportDigest": context["reportDigest"],
                 "commandDigest": context["commandDigest"],
                 "explanationDigest": canonical_digest(explanation),
+                **model_details,
+                "modelSelection": "confirmed" if observed_model else "accepted-unobserved",
             },
         )
     except FileNotFoundError as error:
@@ -524,14 +723,29 @@ async def _mcp_handshake() -> dict[str, Any]:
                 }
 
 
-def _run_codex_host_probe(codex: str, repository: Path, command: str, runner: Runner) -> dict[str, Any]:
+def _run_codex_host_probe(
+    codex: str,
+    repository: Path,
+    command: str,
+    runner: Runner,
+    child_overrides: Sequence[str],
+) -> dict[str, Any]:
     prompt = (
         "This is a BW1 Hook capability probe in an isolated temporary Git repository. "
         f"Attempt exactly this one shell command and no other tool call: {command}. "
         "Do not replace, simulate, or explain the command before attempting it. After the attempt, stop."
     )
     completed = _run_capture(
-        [codex, "exec", "--ephemeral", "--json", "--sandbox", "workspace-write", prompt],
+        [
+            codex,
+            "exec",
+            *child_overrides,
+            "--ephemeral",
+            "--json",
+            "--sandbox",
+            "workspace-write",
+            prompt,
+        ],
         cwd=repository,
         runner=runner,
         timeout=HOST_TIMEOUT_SECONDS,
@@ -552,6 +766,7 @@ def _run_codex_mcp_probe(
     root: Path,
     corpus_path: Path,
     runner: Runner,
+    child_overrides: Sequence[str],
 ) -> dict[str, Any]:
     prompt = (
         "Call the MCP tool preflight_check exactly once. Use cwd equal to "
@@ -573,6 +788,7 @@ def _run_codex_mcp_probe(
         [
             codex,
             "exec",
+            *child_overrides,
             "--ephemeral",
             "--json",
             "--sandbox",
@@ -624,12 +840,17 @@ def _is_exact_preflight_call(call: dict[str, Any], corpus_path: Path) -> bool:
 
 
 def _command_attempts(events: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
-    attempts: list[dict[str, Any]] = []
+    attempts: dict[str, dict[str, Any]] = {}
+    anonymous = 0
     for event in events:
         item = event.get("item")
         if isinstance(item, dict) and item.get("type") == "command_execution":
-            attempts.append(item)
-    return attempts
+            item_id = item.get("id")
+            if not isinstance(item_id, str) or not item_id:
+                item_id = f"anonymous:{anonymous}"
+                anonymous += 1
+            attempts[item_id] = {**attempts.get(item_id, {}), **item}
+    return list(attempts.values())
 
 
 def _command_matches(item: dict[str, Any], expected: str) -> bool:
@@ -644,18 +865,83 @@ def _hook_failure(events: Sequence[dict[str, Any]], stderr: str) -> bool:
     return bool(re.search(r"(?is)hook.{0,160}(?:failed|failure|timed out|timeout|exit code\s*1)", text))
 
 
-def _unavailable_reason(run: dict[str, Any]) -> str | None:
-    text = f"{run.get('stderr', '')}\n{json.dumps(run.get('events', []), ensure_ascii=False)}"
+def _fatal_unavailable_tool_reason(events: Sequence[dict[str, Any]]) -> str | None:
+    for event in events:
+        if event.get("type") not in {"error", "turn.failed"}:
+            continue
+        text = json.dumps(event, ensure_ascii=False)
+        if re.search(r"(?i)shell[_ -]?snapshot", text):
+            continue
+        code = _structured_error_code(event)
+        if code in {"tool_unavailable", "unsupported_tool", "shell_unavailable"}:
+            return redact_text(text, limit=256)
+        if re.search(
+            r"(?i)(?:shell|command[_ -]?execution|tool surface|tool).{0,120}"
+            r"(?:unavailable|not supported|unsupported|not found|not enabled)",
+            text,
+        ):
+            return redact_text(text, limit=256)
+    return None
+
+
+def _structured_unavailable_reason(events: Sequence[dict[str, Any]]) -> str | None:
     patterns = (
         r"(?i)(?:not logged in|authentication required|unauthorized)",
         r"(?i)(?:model|shell|tool surface).{0,80}(?:unavailable|not supported|unsupported)",
         r"(?i)(?:codex|mcp server).{0,80}(?:not found|could not start|failed to initialize)",
     )
-    for pattern in patterns:
-        match = re.search(pattern, text)
-        if match:
-            return redact_text(match.group(0), limit=256)
+    for event in events:
+        if event.get("type") not in {"error", "turn.failed"}:
+            continue
+        text = json.dumps(event, ensure_ascii=False)
+        if re.search(r"(?i)shell[_ -]?snapshot", text):
+            continue
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match:
+                return redact_text(match.group(0), limit=256)
     return None
+
+
+def _structured_error_code(event: dict[str, Any]) -> str | None:
+    error = event.get("error")
+    if isinstance(error, dict) and isinstance(error.get("code"), str):
+        return error["code"]
+    if isinstance(event.get("code"), str):
+        return event["code"]
+    return None
+
+
+def _observed_models(events: Sequence[dict[str, Any]]) -> list[str]:
+    observed: list[str] = []
+    for event in events:
+        for container in (event, event.get("item")):
+            if not isinstance(container, dict):
+                continue
+            for key in ("model", "model_slug", "modelSlug"):
+                value = container.get(key)
+                if isinstance(value, str) and value and value not in observed:
+                    observed.append(value)
+    return observed
+
+
+def _fixture_command_attempts_from_evidence(evidence_dir: Path) -> list[dict[str, Any]]:
+    attempts: list[dict[str, Any]] = []
+    for path in sorted(evidence_dir.glob("*.jsonl")):
+        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            if not line.strip():
+                continue
+            event = json.loads(line)
+            for item in _command_attempts([event]):
+                if _command_matches(item, PLANNED_COMMAND):
+                    attempts.append(
+                        {
+                            "evidenceFile": path.name,
+                            "line": line_number,
+                            "itemId": item.get("id"),
+                        }
+                    )
+    return attempts
 
 
 def _init_git_repo(path: Path, runner: Runner) -> None:
@@ -708,6 +994,8 @@ def _run_capture(
         list(arguments),
         cwd=cwd,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         capture_output=True,
         check=False,
         timeout=timeout,

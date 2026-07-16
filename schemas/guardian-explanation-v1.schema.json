@@ -4,14 +4,14 @@
   "type": "object",
   "additionalProperties": false,
   "properties": {
-    "schemaVersion": { "const": "guardian-explanation/v1" },
+    "schemaVersion": { "type": "string", "const": "guardian-explanation/v1" },
     "sourceReportDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
     "sourceCommandDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
     "deterministicResult": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "decision": { "enum": ["ALLOW", "WARN", "ASK_USER", "BLOCK"] },
+        "decision": { "type": "string", "enum": ["ALLOW", "WARN", "ASK_USER", "BLOCK"] },
         "statement": { "type": "string", "maxLength": 64 }
       },
       "required": ["decision", "statement"]
