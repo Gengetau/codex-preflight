@@ -120,7 +120,8 @@ MCP inventories, supported Python and Git integrations, commit-bound file identi
 published release state. Repository and GitHub evidence remains untrusted data.
 
 The target checkout is never added to a runtime probe's `PYTHONPATH`. A trusted runtime package must
-be filesystem-isolated from the target checkout before dynamic inventory verification can run.
+be filesystem-isolated from the target checkout before dynamic inventory verification can run. This
+establishes filesystem separation without claiming independent build provenance.
 
 ## Codex Plugin Installation
 
