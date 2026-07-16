@@ -465,6 +465,7 @@ def _evaluate_host_probe(
 ) -> tuple[str, dict[str, Any]]:
     attempts = _command_attempts(probe["events"])
     matching_attempts = [attempt for attempt in attempts if _command_matches(attempt, expected_command)]
+    hook_block_reason = _structured_hook_block_reason(probe["events"])
     sentinel = _observe_sentinel(
         repository,
         sentinel_name,
@@ -472,8 +473,11 @@ def _evaluate_host_probe(
         expected_text=expected_text,
     )
     details: dict[str, Any] = {
-        "commandAttempted": bool(matching_attempts),
+        "commandAttempted": bool(matching_attempts) or hook_block_reason is not None,
         "commandExecutionAttemptCount": len(attempts),
+        "commandAttemptEvidence": (
+            "command_execution" if matching_attempts else "hook_block" if hook_block_reason else None
+        ),
         "returnCode": probe["returncode"],
         "hookFailure": probe["hookFailure"],
         "sentinel": sentinel,
@@ -511,6 +515,17 @@ def _evaluate_host_probe(
                 return FAIL, details
         if not sentinel["valid"]:
             details["reason"] = f"{label} sentinel result is invalid"
+            return FAIL, details
+        return PASS, details
+    if hook_block_reason is not None:
+        details["commandStatus"] = "blocked"
+        details["commandExitCode"] = None
+        details["hookBlockReason"] = hook_block_reason
+        if not sentinel["valid"]:
+            details["reason"] = f"{label} sentinel result is invalid"
+            return FAIL, details
+        if probe["returncode"] != 0:
+            details["reason"] = f"{label} child Codex exit code was nonzero"
             return FAIL, details
         return PASS, details
     if not sentinel["valid"]:
@@ -811,12 +826,17 @@ def _run_codex_mcp_probe(
 
 
 def _mcp_tool_calls(events: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
-    calls: list[dict[str, Any]] = []
+    calls: dict[str, dict[str, Any]] = {}
+    anonymous = 0
     for event in events:
         item = event.get("item")
         if isinstance(item, dict) and item.get("type") == "mcp_tool_call":
-            calls.append(item)
-    return calls
+            item_id = item.get("id")
+            if not isinstance(item_id, str) or not item_id:
+                item_id = f"anonymous:{anonymous}"
+                anonymous += 1
+            calls[item_id] = {**calls.get(item_id, {}), **item}
+    return list(calls.values())
 
 
 def _is_exact_preflight_call(call: dict[str, Any], corpus_path: Path) -> bool:
@@ -861,8 +881,28 @@ def _command_matches(item: dict[str, Any], expected: str) -> bool:
 
 
 def _hook_failure(events: Sequence[dict[str, Any]], stderr: str) -> bool:
-    text = f"{stderr}\n{json.dumps(events, ensure_ascii=False)}"
-    return bool(re.search(r"(?is)hook.{0,160}(?:failed|failure|timed out|timeout|exit code\s*1)", text))
+    records = [*stderr.splitlines(), *(json.dumps(event, ensure_ascii=False) for event in events)]
+    return any(
+        re.search(
+            r"(?i)\b(?:pretooluse\s+)?hook(?:\s+process)?\b.{0,120}"
+            r"(?:failed|failure|timed out|timeout|exit code\s*1)",
+            record,
+        )
+        is not None
+        for record in records
+    )
+
+
+def _structured_hook_block_reason(events: Sequence[dict[str, Any]]) -> str | None:
+    pattern = re.compile(r"(?i)Command blocked by PreToolUse hook:\s*`?(PREFLIGHT_[A-Z0-9_]+)`?")
+    for event in events:
+        item = event.get("item")
+        if not isinstance(item, dict) or item.get("type") != "agent_message":
+            continue
+        text = item.get("text")
+        if isinstance(text, str) and (match := pattern.search(text)):
+            return match.group(1)
+    return None
 
 
 def _fatal_unavailable_tool_reason(events: Sequence[dict[str, Any]]) -> str | None:

@@ -732,7 +732,20 @@ def _register_mcp_tools(
     trust_service: Any | None,
     trust_mutation_service: Any | None,
 ) -> None:
-    @mcp.tool(name="preflight_check", description=PREFLIGHT_DESCRIPTION)
+    from mcp.types import ToolAnnotations
+
+    read_only_annotations = ToolAnnotations(
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
+
+    @mcp.tool(
+        name="preflight_check",
+        description=PREFLIGHT_DESCRIPTION,
+        annotations=read_only_annotations,
+    )
     def mcp_preflight_check(
         cwd: str | None = None,
         command: str = "",
@@ -740,7 +753,11 @@ def _register_mcp_tools(
     ) -> dict[str, Any]:
         return preflight_check(cwd=cwd, command=command, format=format)
 
-    @mcp.tool(name="corpus_scan", description=CORPUS_DESCRIPTION)
+    @mcp.tool(
+        name="corpus_scan",
+        description=CORPUS_DESCRIPTION,
+        annotations=read_only_annotations,
+    )
     def mcp_corpus_scan(case_id: str | None = None) -> dict[str, Any]:
         return corpus_scan(case_id=case_id)
 

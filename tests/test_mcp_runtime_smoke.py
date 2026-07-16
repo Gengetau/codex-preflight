@@ -39,6 +39,11 @@ def test_fastmcp_runtime_uses_public_tool_names_required_schema_and_error_codes(
     assert preflight_tool is not None
     assert corpus_tool is not None
     assert preflight_tool.parameters["required"] == ["cwd", "command"]
+    assert preflight_tool.annotations is not None
+    assert preflight_tool.annotations.readOnlyHint is True
+    assert preflight_tool.annotations.destructiveHint is False
+    assert corpus_tool.annotations is not None
+    assert corpus_tool.annotations.readOnlyHint is True
 
     with pytest.raises(Exception) as caught:
         asyncio.run(server._tool_manager.call_tool("preflight_check", {"command": "pytest"}))

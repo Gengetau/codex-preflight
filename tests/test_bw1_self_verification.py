@@ -426,6 +426,44 @@ def test_snapshot_warning_only_without_command_attempt_fails(tmp_path: Path) -> 
     assert "explicit fatal unavailable-tool event" in details["reason"]
 
 
+def test_structured_hook_block_is_an_attempt_not_a_hook_process_failure(tmp_path: Path) -> None:
+    events = [
+        {
+            "type": "item.completed",
+            "item": {
+                "id": "message",
+                "type": "agent_message",
+                "text": "Command blocked by PreToolUse hook: `PREFLIGHT_SYNTHETIC_FIXTURE`.",
+            },
+        },
+        {"type": "turn.completed", "usage": {}},
+    ]
+    stderr = (
+        "ERROR router: Command blocked by PreToolUse hook: PREFLIGHT_SYNTHETIC_FIXTURE\n"
+        "WARN mcp: failed to initialize MCP client during shutdown"
+    )
+    probe = {
+        "returncode": 0,
+        "events": events,
+        "stderr": stderr,
+        "hookFailure": bw1._hook_failure(events, stderr),
+    }
+
+    status, details = bw1._evaluate_host_probe(
+        "deny",
+        probe,
+        tmp_path,
+        bw1.DENY_SENTINEL,
+        f"echo {bw1.DENY_PROBE} > {bw1.DENY_SENTINEL}",
+        expected_present=False,
+    )
+
+    assert probe["hookFailure"] is False
+    assert status == bw1.PASS
+    assert details["commandAttempted"] is True
+    assert details["commandAttemptEvidence"] == "hook_block"
+
+
 def test_missing_runtime_executable_is_unsupported(tmp_path: Path) -> None:
     def missing_runner(*_args, **_kwargs):
         raise FileNotFoundError("missing")
@@ -724,6 +762,39 @@ def test_mcp_tool_call_validator_rejects_hostile_arguments(tmp_path: Path) -> No
     }
 
     assert bw1._is_exact_preflight_call(hostile, corpus.resolve()) is False
+
+
+def test_mcp_tool_call_lifecycle_is_counted_once() -> None:
+    arguments = {"cwd": "C:/fixture", "command": bw1.PLANNED_COMMAND, "format": "json"}
+    events = [
+        {
+            "type": "item.started",
+            "item": {
+                "id": "mcp-1",
+                "type": "mcp_tool_call",
+                "tool": "preflight_check",
+                "arguments": arguments,
+                "status": "in_progress",
+            },
+        },
+        {
+            "type": "item.completed",
+            "item": {
+                "id": "mcp-1",
+                "type": "mcp_tool_call",
+                "tool": "preflight_check",
+                "arguments": arguments,
+                "status": "completed",
+                "result": {"decision": "BLOCK"},
+            },
+        },
+    ]
+
+    calls = bw1._mcp_tool_calls(events)
+
+    assert len(calls) == 1
+    assert calls[0]["status"] == "completed"
+    assert calls[0]["result"] == {"decision": "BLOCK"}
 
 
 def test_sanitizer_redacts_usernames_tokens_home_paths_and_private_values() -> None:
