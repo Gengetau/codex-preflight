@@ -14,6 +14,7 @@ from codex_preflight_cli.main import app
 from codex_preflight_guardian import self_verification as bw1
 
 ROOT = Path(__file__).resolve().parents[1]
+_REQUESTED_MODEL = "__requested_model__"
 
 
 @pytest.fixture
@@ -40,9 +41,12 @@ def _stub_runner(
     exit_one: bool = False,
     snapshot_warning: bool = False,
     no_command_attempt: bool = False,
+    allow_denied: bool = False,
+    missing_allow_completion: bool = False,
+    allow_stdout: str = "true\n",
     fixture_attempt: bool = False,
-    observed_model: str | None = bw1.GPT_5_6_MODEL,
-    model_unavailable: bool = False,
+    observed_model: str | None = _REQUESTED_MODEL,
+    unsupported_models: tuple[str, ...] = (),
 ):
     def run(args, *, cwd, text, encoding, errors, capture_output, check, timeout):
         assert text is True and encoding == "utf-8" and errors == "replace"
@@ -50,12 +54,16 @@ def _stub_runner(
         args = [str(item) for item in args]
         cwd = Path(cwd)
         if args[0] == "git":
-            if any(
-                part.startswith("codex-preflight-bw1-") or part == ".bw1-self-verification-temporary"
-                for part in cwd.parts
-            ):
-                return subprocess.CompletedProcess(args, 0, "", "")
-            return subprocess.run(args, cwd=cwd, text=True, capture_output=True, check=False, timeout=timeout)
+            return subprocess.run(
+                args,
+                cwd=cwd,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+                check=False,
+                timeout=timeout,
+            )
         assert args[0] == "codex-stub"
         if args[1:] == ["--version"]:
             return subprocess.CompletedProcess(args, 0, "codex-cli 0.test\n", "")
@@ -103,13 +111,64 @@ def _stub_runner(
                     ],
                     warning,
                 )
-            if bw1.ALLOW_SENTINEL in command:
-                (cwd / bw1.ALLOW_SENTINEL).write_text(f"{bw1.ALLOW_PROBE}\n", encoding="utf-8")
-            elif fail_open:
+            is_allow = command == bw1.ALLOW_COMMAND
+            if is_allow and allow_denied:
+                return _completed(
+                    args,
+                    0,
+                    [
+                        {"type": "thread.started", "thread_id": "stub"},
+                        {
+                            "type": "item.completed",
+                            "item": {
+                                "id": "message",
+                                "type": "agent_message",
+                                "text": "Command blocked by PreToolUse hook: `PREFLIGHT_WARN_REVIEW_REQUIRED`.",
+                            },
+                        },
+                        {"type": "turn.completed", "usage": {}},
+                    ],
+                    warning,
+                )
+            if is_allow and missing_allow_completion:
+                return _completed(
+                    args,
+                    0,
+                    [
+                        {"type": "thread.started", "thread_id": "stub"},
+                        {
+                            "type": "item.started",
+                            "item": {
+                                "id": "command",
+                                "type": "command_execution",
+                                "command": command,
+                                "status": "in_progress",
+                            },
+                        },
+                        {"type": "turn.completed", "usage": {}},
+                    ],
+                    warning,
+                )
+            if fail_open and not is_allow:
                 (cwd / bw1.DENY_SENTINEL).write_text(f"{bw1.DENY_PROBE}\n", encoding="utf-8")
-            is_allow = bw1.ALLOW_SENTINEL in command
-            final_status = "completed" if is_allow or fail_open else "failed"
-            final_exit_code = 0 if is_allow or fail_open else 1
+            if not is_allow and not fail_open:
+                return _completed(
+                    args,
+                    0,
+                    [
+                        {"type": "thread.started", "thread_id": "stub"},
+                        {
+                            "type": "item.completed",
+                            "item": {
+                                "id": "message",
+                                "type": "agent_message",
+                                "text": "Command blocked by PreToolUse hook: `PREFLIGHT_SYNTHETIC_FIXTURE`.",
+                            },
+                        },
+                        {"type": "turn.completed", "usage": {}},
+                    ],
+                    warning,
+                )
             return _completed(
                 args,
                 0,
@@ -130,8 +189,9 @@ def _stub_runner(
                             "id": "command",
                             "type": "command_execution",
                             "command": command,
-                            "status": final_status,
-                            "exit_code": final_exit_code,
+                            "status": "completed",
+                            "exit_code": 0,
+                            "aggregated_output": allow_stdout if is_allow else "",
                         },
                     },
                     {"type": "turn.completed", "usage": {}},
@@ -175,8 +235,9 @@ def _stub_runner(
                 events,
             )
         if "--output-schema" in args:
-            assert args[args.index("--model") + 1] == bw1.GPT_5_6_MODEL
-            if model_unavailable:
+            requested_model = args[args.index("--model") + 1]
+            assert requested_model in bw1.GPT_5_6_CANDIDATES
+            if requested_model in unsupported_models:
                 return _completed(
                     args,
                     1,
@@ -185,7 +246,7 @@ def _stub_runner(
                             "type": "turn.failed",
                             "error": {
                                 "code": "model_not_found",
-                                "message": f"model {bw1.GPT_5_6_MODEL} unavailable",
+                                "message": f"The '{requested_model}' model is not supported",
                             },
                         }
                     ],
@@ -208,6 +269,7 @@ def _stub_runner(
                 },
             }
             Path(args[args.index("-o") + 1]).write_text(json.dumps(explanation), encoding="utf-8")
+            actual_model = requested_model if observed_model == _REQUESTED_MODEL else observed_model
             return _completed(
                 args,
                 0,
@@ -215,7 +277,7 @@ def _stub_runner(
                     {
                         "type": "thread.started",
                         "thread_id": "stub",
-                        **({"model": observed_model} if observed_model is not None else {}),
+                        **({"model": actual_model} if actual_model is not None else {}),
                     },
                     {"type": "item.completed", "item": {"id": "message", "type": "agent_message", "text": "{}"}},
                     {"type": "turn.completed", "usage": {}},
@@ -289,7 +351,7 @@ def test_full_self_verification_passes_with_stub_codex_executable(
 @pytest.mark.parametrize(
     ("runner", "expected"),
     [
-        (_stub_runner(unavailable=True), bw1.FAIL),
+        (_stub_runner(unavailable=True), bw1.UNSUPPORTED),
         (_stub_runner(fail_open=True), bw1.FAIL),
         (_stub_runner(exit_one=True), bw1.FAIL),
     ],
@@ -329,7 +391,86 @@ def test_powershell_snapshot_warning_with_valid_deny_and_allow_evidence_passes(
     assert host["details"]["deny"]["commandAttempted"] is True
     assert host["details"]["allow"]["commandAttempted"] is True
     assert host["details"]["deny"]["sentinel"]["valid"] is True
-    assert host["details"]["allow"]["sentinel"]["valid"] is True
+    assert host["details"]["allowPrerequisite"]["decision"] == "ALLOW"
+    assert host["details"]["allow"]["commandStatus"] == "completed"
+    assert host["details"]["allow"]["commandExitCode"] == 0
+    assert host["details"]["allow"]["normalizedStdout"] == "true"
+    assert host["details"]["allow"]["repositoryMutation"]["mutated"] is False
+
+
+def test_deterministic_allow_prerequisite_rejects_non_allow_without_child_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    child_calls: list[list[str]] = []
+    stub = _stub_runner()
+
+    def recording_runner(args, **kwargs):
+        normalized = [str(item) for item in args]
+        if normalized[:2] == ["codex-stub", "exec"]:
+            child_calls.append(normalized)
+        return stub(args, **kwargs)
+
+    monkeypatch.setattr(
+        bw1,
+        "run_preflight",
+        lambda *_args, **_kwargs: {
+            "decision": "WARN",
+            "commandScope": "safe_readonly",
+            "riskScore": 10,
+        },
+    )
+
+    phase = bw1._real_host_gate(
+        tmp_path,
+        evidence,
+        "codex-stub",
+        recording_runner,
+        ("--disable", "shell_snapshot"),
+    )
+
+    assert phase.status == bw1.FAIL
+    assert phase.details["allowPrerequisite"]["decision"] == "WARN"
+    assert phase.details["childSessionsLaunched"] is False
+    assert child_calls == []
+
+
+def test_allow_command_denied_is_fail(short_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = _make_repository(short_root)
+    monkeypatch.setattr(bw1, "_mcp_handshake", _handshake)
+
+    status, _evidence, result = bw1.verify_bw1(
+        root,
+        codex_executable="codex-stub",
+        runner=_stub_runner(allow_denied=True),
+        temp_parent=root,
+    )
+
+    assert status == bw1.FAIL
+    host = next(phase for phase in result["phases"] if phase["name"] == "realHostGate")
+    assert host["status"] == bw1.FAIL
+    assert host["details"]["allow"]["hookDenied"] is True
+    assert host["details"]["allow"]["hookBlockReason"] == "PREFLIGHT_WARN_REVIEW_REQUIRED"
+
+
+def test_missing_allow_structured_completion_is_unsupported(
+    short_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _make_repository(short_root)
+    monkeypatch.setattr(bw1, "_mcp_handshake", _handshake)
+
+    status, _evidence, result = bw1.verify_bw1(
+        root,
+        codex_executable="codex-stub",
+        runner=_stub_runner(missing_allow_completion=True),
+        temp_parent=root,
+    )
+
+    assert status == bw1.UNSUPPORTED
+    host = next(phase for phase in result["phases"] if phase["name"] == "realHostGate")
+    assert host["status"] == bw1.UNSUPPORTED
+    assert "did not prove completed" in host["details"]["allow"]["reason"]
 
 
 def test_powershell_snapshot_warning_plus_hook_exit_one_fails(
@@ -515,7 +656,7 @@ def test_missing_mcp_context_preserves_unsupported_result(
 
 
 @pytest.mark.parametrize("observed_model", ["gpt-5.6-terra", "gpt-5.5"])
-def test_guardian_explanation_model_mismatch_is_unsupported(
+def test_guardian_explanation_explicit_model_mismatch_is_fail(
     short_root: Path,
     monkeypatch: pytest.MonkeyPatch,
     observed_model: str,
@@ -530,13 +671,15 @@ def test_guardian_explanation_model_mismatch_is_unsupported(
         temp_parent=root,
     )
 
-    assert status == bw1.UNSUPPORTED
+    assert status == bw1.FAIL
     explain = next(phase for phase in result["phases"] if phase["name"] == "guardianContextAndExplain")
-    assert explain["details"]["requestedModel"] == bw1.GPT_5_6_MODEL
+    assert explain["status"] == bw1.FAIL
+    assert explain["details"]["requestedModel"] == "gpt-5.6-sol"
+    assert explain["details"]["acceptedModelIdentifier"] is None
     assert explain["details"]["observedModel"] == observed_model
 
 
-def test_guardian_explanation_unavailable_gpt_5_6_is_unsupported(
+def test_guardian_explanation_all_gpt_5_6_candidates_unsupported(
     short_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = _make_repository(short_root)
@@ -545,17 +688,20 @@ def test_guardian_explanation_unavailable_gpt_5_6_is_unsupported(
     status, _evidence, result = bw1.verify_bw1(
         root,
         codex_executable="codex-stub",
-        runner=_stub_runner(model_unavailable=True),
+        runner=_stub_runner(unsupported_models=bw1.GPT_5_6_CANDIDATES),
         temp_parent=root,
     )
 
     assert status == bw1.UNSUPPORTED
     explain = next(phase for phase in result["phases"] if phase["name"] == "guardianContextAndExplain")
-    assert explain["details"]["requestedModel"] == bw1.GPT_5_6_MODEL
+    assert explain["details"]["requestedModel"] == "gpt-5.6"
+    assert explain["details"]["acceptedModelIdentifier"] is None
     assert explain["details"]["observedModel"] is None
+    assert len(explain["details"]["modelAttempts"]) == 2
+    assert "all GPT-5.6 candidates are unsupported" in explain["details"]["reason"]
 
 
-def test_guardian_explanation_accepts_unemitted_actual_model_after_successful_selection(
+def test_guardian_explanation_accepts_gpt_5_6_sol_without_model_field(
     short_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = _make_repository(short_root)
@@ -570,9 +716,33 @@ def test_guardian_explanation_accepts_unemitted_actual_model_after_successful_se
 
     assert status == bw1.PASS
     explain = next(phase for phase in result["phases"] if phase["name"] == "guardianContextAndExplain")
-    assert explain["details"]["requestedModel"] == bw1.GPT_5_6_MODEL
+    assert explain["details"]["requestedModel"] == "gpt-5.6-sol"
+    assert explain["details"]["acceptedModelIdentifier"] == "gpt-5.6-sol"
     assert explain["details"]["observedModel"] is None
     assert explain["details"]["modelSelection"] == "accepted-unobserved"
+
+
+def test_guardian_explanation_uses_second_candidate_only_after_sol_is_unsupported(
+    short_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _make_repository(short_root)
+    monkeypatch.setattr(bw1, "_mcp_handshake", _handshake)
+
+    status, _evidence, result = bw1.verify_bw1(
+        root,
+        codex_executable="codex-stub",
+        runner=_stub_runner(unsupported_models=("gpt-5.6-sol",), observed_model=None),
+        temp_parent=root,
+    )
+
+    assert status == bw1.PASS
+    explain = next(phase for phase in result["phases"] if phase["name"] == "guardianContextAndExplain")
+    assert explain["details"]["requestedModel"] == "gpt-5.6"
+    assert explain["details"]["acceptedModelIdentifier"] == "gpt-5.6"
+    assert [attempt["requestedModel"] for attempt in explain["details"]["modelAttempts"]] == [
+        "gpt-5.6-sol",
+        "gpt-5.6",
+    ]
 
 
 def test_fixture_command_attempt_is_derived_from_jsonl_and_fails_gate(
@@ -722,34 +892,49 @@ def test_mcp_inventory_requires_exact_two_tools() -> None:
 def test_exact_sentinel_presence_absence_windows_and_unicode_paths(tmp_path: Path) -> None:
     repository = tmp_path / "C drive 模拟" / "工作区"
     repository.mkdir(parents=True)
-    (repository / bw1.ALLOW_SENTINEL).write_bytes(f"{bw1.ALLOW_PROBE}\r\n".encode())
+    probe_name = "unicode-probe.txt"
+    (repository / probe_name).write_bytes("UNICODE_PROBE\r\n".encode())
 
-    allow = bw1.validate_sentinel(
+    present = bw1.validate_sentinel(
         repository,
-        bw1.ALLOW_SENTINEL,
+        probe_name,
         expected_present=True,
-        expected_text=f"{bw1.ALLOW_PROBE}\n",
+        expected_text="UNICODE_PROBE\n",
     )
     deny = bw1.validate_sentinel(repository, bw1.DENY_SENTINEL, expected_present=False)
 
-    assert allow["present"] is True
-    assert allow["contentDigest"].startswith("sha256:")
+    assert present["present"] is True
+    assert present["contentDigest"].startswith("sha256:")
     assert deny == {"name": bw1.DENY_SENTINEL, "present": False}
 
 
 def test_sentinel_validator_rejects_wrong_contents_and_fail_open(tmp_path: Path) -> None:
-    (tmp_path / bw1.ALLOW_SENTINEL).write_text("wrong\n", encoding="utf-8")
+    probe_name = "probe.txt"
+    (tmp_path / probe_name).write_text("wrong\n", encoding="utf-8")
     (tmp_path / bw1.DENY_SENTINEL).write_text("executed\n", encoding="utf-8")
 
     with pytest.raises(bw1.VerificationError, match="contents"):
         bw1.validate_sentinel(
             tmp_path,
-            bw1.ALLOW_SENTINEL,
+            probe_name,
             expected_present=True,
-            expected_text=f"{bw1.ALLOW_PROBE}\n",
+            expected_text="expected\n",
         )
     with pytest.raises(bw1.VerificationError, match="presence"):
         bw1.validate_sentinel(tmp_path, bw1.DENY_SENTINEL, expected_present=False)
+
+
+@pytest.mark.parametrize(
+    ("statuses", "expected"),
+    [
+        ([bw1.PASS, bw1.PASS], bw1.PASS),
+        ([bw1.PASS, bw1.UNSUPPORTED], bw1.UNSUPPORTED),
+        ([bw1.UNSUPPORTED, bw1.FAIL], bw1.FAIL),
+    ],
+)
+def test_phase_aggregation_prioritizes_fail_then_unsupported(statuses: list[str], expected: str) -> None:
+    phases = [bw1.PhaseResult(f"phase-{index}", status, {}) for index, status in enumerate(statuses)]
+    assert bw1._aggregate_status(phases) == expected
 
 
 def test_mcp_tool_call_validator_rejects_hostile_arguments(tmp_path: Path) -> None:

@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from codex_preflight_core.preflight import run_preflight
 from codex_preflight_guardian import pre_tool_use
 from codex_preflight_guardian.explanation import build_explanation_prompt, validate_explanation
 from codex_preflight_guardian.guardian_context import (
@@ -36,12 +37,12 @@ HOST_TIMEOUT_SECONDS = 180
 MCP_TIMEOUT_SECONDS = 60
 EXPECTED_MCP_TOOLS = {"preflight_check", "corpus_scan"}
 DENY_SENTINEL = "bw1-deny-sentinel.txt"
-ALLOW_SENTINEL = "bw1-allow-sentinel.txt"
 DENY_PROBE = "BW1_DENY_PROBE"
-ALLOW_PROBE = "BW1_ALLOW_PROBE"
+ALLOW_COMMAND = "git rev-parse --is-inside-work-tree"
+ALLOW_EXPECTED_STDOUT = "true"
 CORPUS_CASE = Path("case_corpus") / "npm-postinstall-remote-exec"
 PLANNED_COMMAND = "npm install"
-GPT_5_6_MODEL = "gpt-5.6"
+GPT_5_6_CANDIDATES = ("gpt-5.6-sol", "gpt-5.6")
 SHELL_SNAPSHOT_FEATURE = "shell_snapshot"
 SHELL_SNAPSHOT_OVERRIDE = ("--disable", SHELL_SNAPSHOT_FEATURE)
 
@@ -409,9 +410,46 @@ def _real_host_gate(
         (deny_repo / pre_tool_use.SYNTHETIC_MARKER).write_text("deny\n", encoding="utf-8")
 
         deny_command = f"echo {DENY_PROBE} > {DENY_SENTINEL}"
-        allow_command = f"echo {ALLOW_PROBE} > {ALLOW_SENTINEL}"
+        allow_before = _repository_worktree_snapshot(allow_repo)
+        allow_preflight = run_preflight(
+            allow_repo,
+            ALLOW_COMMAND,
+            use_cache=False,
+            allow_trust=False,
+        )
+        _write_json(evidence_dir / "host-allow-preflight.json", sanitize_value(allow_preflight))
+        allow_decision = allow_preflight.get("decision")
+        prerequisite = {
+            "command": ALLOW_COMMAND,
+            "decision": allow_decision,
+            "commandScope": allow_preflight.get("commandScope"),
+            "riskScore": allow_preflight.get("riskScore"),
+            "useCache": False,
+            "allowTrust": False,
+        }
+        if allow_decision != "ALLOW":
+            return PhaseResult(
+                "realHostGate",
+                FAIL,
+                {
+                    "allowPrerequisite": prerequisite,
+                    "reason": "allow probe direct preflight decision was not exactly ALLOW",
+                    "childSessionsLaunched": False,
+                },
+            )
+        if _repository_worktree_snapshot(allow_repo) != allow_before:
+            return PhaseResult(
+                "realHostGate",
+                FAIL,
+                {
+                    "allowPrerequisite": prerequisite,
+                    "reason": "allow probe direct preflight mutated the isolated repository",
+                    "childSessionsLaunched": False,
+                },
+            )
+
         deny = _run_codex_host_probe(codex_executable, deny_repo, deny_command, runner, child_overrides)
-        allow = _run_codex_host_probe(codex_executable, allow_repo, allow_command, runner, child_overrides)
+        allow = _run_codex_host_probe(codex_executable, allow_repo, ALLOW_COMMAND, runner, child_overrides)
         _write_jsonl(evidence_dir / "host-deny.jsonl", deny["events"])
         _write_jsonl(evidence_dir / "host-allow.jsonl", allow["events"])
         (evidence_dir / "host-deny.stderr.txt").write_text(redact_text(deny["stderr"], limit=65536), encoding="utf-8")
@@ -424,15 +462,13 @@ def _real_host_gate(
             DENY_SENTINEL,
             deny_command,
             expected_present=False,
+            expected_hook_reason="PREFLIGHT_SYNTHETIC_FIXTURE",
         )
-        allow_status, allow_details = _evaluate_host_probe(
-            "allow",
+        allow_status, allow_details = _evaluate_allow_host_probe(
             allow,
             allow_repo,
-            ALLOW_SENTINEL,
-            allow_command,
-            expected_present=True,
-            expected_text=f"{ALLOW_PROBE}\n",
+            ALLOW_COMMAND,
+            allow_before,
         )
         statuses = (deny_status, allow_status)
         status = FAIL if FAIL in statuses else UNSUPPORTED if UNSUPPORTED in statuses else PASS
@@ -442,6 +478,7 @@ def _real_host_gate(
             {
                 "deny": deny_details,
                 "allow": allow_details,
+                "allowPrerequisite": prerequisite,
                 "sandbox": "workspace-write",
                 "cwdMode": "child-process-cwd",
                 "shellSnapshotOverrideAccepted": bool(child_overrides),
@@ -462,9 +499,10 @@ def _evaluate_host_probe(
     *,
     expected_present: bool,
     expected_text: str | None = None,
+    expected_hook_reason: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     attempts = _command_attempts(probe["events"])
-    matching_attempts = [attempt for attempt in attempts if _command_matches(attempt, expected_command)]
+    matching_attempts = [attempt for attempt in attempts if _command_equals(attempt, expected_command)]
     hook_block_reason = _structured_hook_block_reason(probe["events"])
     sentinel = _observe_sentinel(
         repository,
@@ -475,6 +513,7 @@ def _evaluate_host_probe(
     details: dict[str, Any] = {
         "commandAttempted": bool(matching_attempts) or hook_block_reason is not None,
         "commandExecutionAttemptCount": len(attempts),
+        "expectedCommand": expected_command,
         "commandAttemptEvidence": (
             "command_execution" if matching_attempts else "hook_block" if hook_block_reason else None
         ),
@@ -506,6 +545,9 @@ def _evaluate_host_probe(
                 details["reason"] = f"{label} command execution did not report success"
                 return FAIL, details
         else:
+            if hook_block_reason != expected_hook_reason:
+                details["reason"] = f"{label} probe did not report the required Hook denial"
+                return FAIL, details
             command_blocked = (
                 isinstance(command_exit_code, int) and command_exit_code != 0
             ) or command_status in {"failed", "cancelled", "denied"}
@@ -521,6 +563,9 @@ def _evaluate_host_probe(
         details["commandStatus"] = "blocked"
         details["commandExitCode"] = None
         details["hookBlockReason"] = hook_block_reason
+        if expected_hook_reason is not None and hook_block_reason != expected_hook_reason:
+            details["reason"] = f"{label} probe reported an unexpected Hook denial"
+            return FAIL, details
         if not sentinel["valid"]:
             details["reason"] = f"{label} sentinel result is invalid"
             return FAIL, details
@@ -537,6 +582,86 @@ def _evaluate_host_probe(
         return UNSUPPORTED, details
     details["reason"] = f"{label} probe has no command-execution attempt or explicit fatal unavailable-tool event"
     return FAIL, details
+
+
+def _evaluate_allow_host_probe(
+    probe: dict[str, Any],
+    repository: Path,
+    expected_command: str,
+    before_snapshot: dict[str, str],
+) -> tuple[str, dict[str, Any]]:
+    attempts = _command_attempts(probe["events"])
+    matching_attempts = [attempt for attempt in attempts if _command_equals(attempt, expected_command)]
+    hook_block_reason = _structured_hook_block_reason(probe["events"])
+    after_snapshot = _repository_worktree_snapshot(repository)
+    repository_mutated = after_snapshot != before_snapshot
+    details: dict[str, Any] = {
+        "commandAttempted": len(matching_attempts) == 1,
+        "commandExecutionAttemptCount": len(attempts),
+        "expectedCommand": expected_command,
+        "returnCode": probe["returncode"],
+        "hookFailure": probe["hookFailure"],
+        "hookDenied": hook_block_reason is not None,
+        "repositoryMutation": {
+            "mutated": repository_mutated,
+            "beforeDigest": canonical_digest(before_snapshot),
+            "afterDigest": canonical_digest(after_snapshot),
+        },
+    }
+    if probe["hookFailure"]:
+        details["reason"] = "allow Hook process failed or timed out"
+        return FAIL, details
+    if hook_block_reason is not None:
+        details["hookBlockReason"] = hook_block_reason
+        details["reason"] = "allow command was denied by the Hook"
+        return FAIL, details
+    if repository_mutated:
+        details["reason"] = "allow command mutated the isolated repository"
+        return FAIL, details
+    if attempts and (len(attempts) != 1 or len(matching_attempts) != 1):
+        details["reason"] = "allow probe emitted an unexpected command-execution attempt"
+        return FAIL, details
+    if not attempts:
+        unavailable = _fatal_unavailable_tool_reason(probe["events"])
+        if unavailable:
+            details["reason"] = unavailable
+            return UNSUPPORTED, details
+        details["reason"] = "allow JSONL did not expose the required command-execution evidence"
+        return UNSUPPORTED, details
+
+    attempt = matching_attempts[0]
+    command_status = attempt.get("status")
+    command_exit_code = attempt.get("exit_code", attempt.get("exitCode"))
+    stdout = _structured_command_stdout(attempt)
+    details.update(
+        {
+            "commandStatus": command_status,
+            "commandExitCode": command_exit_code,
+            "normalizedStdout": _normalize_stdout(stdout) if stdout is not None else None,
+        }
+    )
+    if command_status in {"failed", "cancelled", "denied"}:
+        details["reason"] = "allow command execution reported failure or denial"
+        return FAIL, details
+    if isinstance(command_exit_code, int) and command_exit_code != 0:
+        details["reason"] = "allow command execution reported a nonzero exit code"
+        return FAIL, details
+    if probe["returncode"] != 0:
+        details["reason"] = "allow child Codex exit code was nonzero"
+        return FAIL, details
+    if command_status != "completed":
+        details["reason"] = "allow JSONL did not prove completed command status"
+        return UNSUPPORTED, details
+    if not isinstance(command_exit_code, int):
+        details["reason"] = "allow JSONL did not expose an integer command exit code"
+        return UNSUPPORTED, details
+    if stdout is None:
+        details["reason"] = "allow JSONL did not expose structured command stdout"
+        return UNSUPPORTED, details
+    if _normalize_stdout(stdout) != ALLOW_EXPECTED_STDOUT:
+        details["reason"] = "allow command stdout did not equal the expected value"
+        return FAIL, details
+    return PASS, details
 
 
 def _observe_sentinel(
@@ -641,68 +766,152 @@ def _guardian_explanation(
         _init_git_repo(explain_repo, runner)
         output_file = explain_repo / "guardian-explanation.json"
         schema = root / EXPLANATION_SCHEMA
-        arguments = [
-            codex_executable,
-            "exec",
-            *child_overrides,
-            "--ephemeral",
-            "--json",
-            "--sandbox",
-            "read-only",
-            "--ignore-user-config",
-            "--model",
-            GPT_5_6_MODEL,
-            "--output-schema",
-            str(schema),
-            "-o",
-            str(output_file),
-            build_explanation_prompt(context),
-        ]
-        completed = _run_capture(arguments, cwd=explain_repo, runner=runner, timeout=HOST_TIMEOUT_SECONDS)
-        events = parse_codex_jsonl(completed.stdout)
-        _write_jsonl(evidence_dir / "explanation-codex.jsonl", events)
-        (evidence_dir / "explanation-codex.stderr.txt").write_text(
-            redact_text(completed.stderr, limit=65536), encoding="utf-8"
+        model_attempts: list[dict[str, Any]] = []
+        for index, candidate in enumerate(GPT_5_6_CANDIDATES, start=1):
+            output_file.unlink(missing_ok=True)
+            arguments = [
+                codex_executable,
+                "exec",
+                *child_overrides,
+                "--ephemeral",
+                "--json",
+                "--sandbox",
+                "read-only",
+                "--ignore-user-config",
+                "--model",
+                candidate,
+                "--output-schema",
+                str(schema),
+                "-o",
+                str(output_file),
+                build_explanation_prompt(context),
+            ]
+            completed = _run_capture(
+                arguments,
+                cwd=explain_repo,
+                runner=runner,
+                timeout=HOST_TIMEOUT_SECONDS,
+            )
+            events = parse_codex_jsonl(completed.stdout)
+            observed_models = _observed_models(events)
+            observed_model = observed_models[0] if len(observed_models) == 1 else None
+            attempt = {
+                "requestedModel": candidate,
+                "returnCode": completed.returncode,
+                "observedModels": observed_models,
+            }
+            contradictory = [model for model in observed_models if model != candidate]
+            if contradictory:
+                attempt["status"] = FAIL
+                attempt["reason"] = "structured Codex model evidence contradicts the requested model"
+                model_attempts.append(attempt)
+                _write_explanation_codex_evidence(
+                    evidence_dir,
+                    f"explanation-codex-candidate-{index}",
+                    events,
+                    completed.stderr,
+                )
+                return PhaseResult(
+                    "guardianContextAndExplain",
+                    FAIL,
+                    {
+                        "candidateModels": list(GPT_5_6_CANDIDATES),
+                        "requestedModel": candidate,
+                        "acceptedModelIdentifier": None,
+                        "observedModel": observed_model,
+                        "modelEvidence": "structured",
+                        "modelAttempts": model_attempts,
+                        "reason": "structured Codex model evidence contradicts the requested model",
+                    },
+                )
+
+            model_unsupported = _model_not_supported_reason(events)
+            if model_unsupported:
+                attempt["status"] = UNSUPPORTED
+                attempt["reason"] = model_unsupported
+                model_attempts.append(attempt)
+                _write_explanation_codex_evidence(
+                    evidence_dir,
+                    f"explanation-codex-candidate-{index}",
+                    events,
+                    completed.stderr,
+                )
+                continue
+
+            unavailable = _structured_unavailable_reason(events)
+            if unavailable:
+                attempt["status"] = UNSUPPORTED
+                attempt["reason"] = unavailable
+                model_attempts.append(attempt)
+                _write_explanation_codex_evidence(
+                    evidence_dir,
+                    f"explanation-codex-candidate-{index}",
+                    events,
+                    completed.stderr,
+                )
+                return PhaseResult(
+                    "guardianContextAndExplain",
+                    UNSUPPORTED,
+                    {
+                        "candidateModels": list(GPT_5_6_CANDIDATES),
+                        "requestedModel": candidate,
+                        "acceptedModelIdentifier": None,
+                        "observedModel": observed_model,
+                        "modelEvidence": "structured" if observed_models else "not-emitted",
+                        "modelAttempts": model_attempts,
+                        "reason": unavailable,
+                    },
+                )
+            if completed.returncode != 0:
+                raise VerificationError("explanation child Codex exit code was nonzero")
+            if _command_attempts(events):
+                raise VerificationError("explanation child attempted a command")
+
+            attempt["status"] = PASS
+            model_attempts.append(attempt)
+            _write_explanation_codex_evidence(
+                evidence_dir,
+                "explanation-codex",
+                events,
+                completed.stderr,
+            )
+            explanation = json.loads(output_file.read_text(encoding="utf-8"))
+            validate_explanation(explanation, context)
+            _write_json(evidence_dir / "guardian-context.json", context)
+            _write_json(evidence_dir / "guardian-explanation.json", explanation)
+            return PhaseResult(
+                "guardianContextAndExplain",
+                PASS,
+                {
+                    "contextSchema": context["schemaVersion"],
+                    "explanationSchema": explanation["schemaVersion"],
+                    "reportDigest": context["reportDigest"],
+                    "commandDigest": context["commandDigest"],
+                    "explanationDigest": canonical_digest(explanation),
+                    "candidateModels": list(GPT_5_6_CANDIDATES),
+                    "requestedModel": candidate,
+                    "acceptedModelIdentifier": candidate,
+                    "observedModel": observed_model,
+                    "modelEvidence": "structured" if observed_models else "not-emitted",
+                    "modelAttempts": model_attempts,
+                    "modelSelection": "confirmed" if observed_model else "accepted-unobserved",
+                },
+            )
+
+        reasons = "; ".join(
+            f"{attempt['requestedModel']}: {attempt['reason']}" for attempt in model_attempts
         )
-        observed_models = _observed_models(events)
-        observed_model = observed_models[0] if len(observed_models) == 1 else None
-        model_details = {
-            "requestedModel": GPT_5_6_MODEL,
-            "observedModel": observed_model,
-            "modelEvidence": "structured" if observed_models else "not-emitted",
-        }
-        if observed_models and (len(observed_models) != 1 or observed_model != GPT_5_6_MODEL):
-            return PhaseResult(
-                "guardianContextAndExplain",
-                UNSUPPORTED,
-                {**model_details, "reason": "structured Codex model evidence does not match GPT-5.6"},
-            )
-        unavailable = _structured_unavailable_reason(events)
-        if unavailable:
-            return PhaseResult(
-                "guardianContextAndExplain",
-                UNSUPPORTED,
-                {**model_details, "reason": unavailable},
-            )
-        if completed.returncode != 0:
-            raise VerificationError("explanation child Codex exit code was nonzero")
-        if _command_attempts(events):
-            raise VerificationError("explanation child attempted a command")
-        explanation = json.loads(output_file.read_text(encoding="utf-8"))
-        validate_explanation(explanation, context)
-        _write_json(evidence_dir / "guardian-context.json", context)
-        _write_json(evidence_dir / "guardian-explanation.json", explanation)
         return PhaseResult(
             "guardianContextAndExplain",
-            PASS,
+            UNSUPPORTED,
             {
-                "contextSchema": context["schemaVersion"],
-                "explanationSchema": explanation["schemaVersion"],
-                "reportDigest": context["reportDigest"],
-                "commandDigest": context["commandDigest"],
-                "explanationDigest": canonical_digest(explanation),
-                **model_details,
-                "modelSelection": "confirmed" if observed_model else "accepted-unobserved",
+                "candidateModels": list(GPT_5_6_CANDIDATES),
+                "requestedModel": GPT_5_6_CANDIDATES[-1],
+                "acceptedModelIdentifier": None,
+                "observedModel": None,
+                "modelEvidence": "not-emitted",
+                "modelAttempts": model_attempts,
+                "reason": f"all GPT-5.6 candidates are unsupported: {reasons}",
             },
         )
     except FileNotFoundError as error:
@@ -771,7 +980,7 @@ def _run_codex_host_probe(
         "returncode": completed.returncode,
         "events": events,
         "stderr": completed.stderr,
-        "commandAttempted": any(_command_matches(item, command) for item in attempts),
+        "commandAttempted": any(_command_equals(item, command) for item in attempts),
         "hookFailure": _hook_failure(events, completed.stderr),
     }
 
@@ -880,6 +1089,25 @@ def _command_matches(item: dict[str, Any], expected: str) -> bool:
     return isinstance(command, str) and expected.lower() in command.lower()
 
 
+def _command_equals(item: dict[str, Any], expected: str) -> bool:
+    command = item.get("command")
+    if isinstance(command, list):
+        command = " ".join(str(part) for part in command)
+    return isinstance(command, str) and command.strip() == expected
+
+
+def _structured_command_stdout(item: dict[str, Any]) -> str | None:
+    for key in ("aggregated_output", "stdout"):
+        value = item.get(key)
+        if isinstance(value, str):
+            return value
+    return None
+
+
+def _normalize_stdout(value: str) -> str:
+    return value.replace("\r\n", "\n").replace("\r", "\n").strip()
+
+
 def _hook_failure(events: Sequence[dict[str, Any]], stderr: str) -> bool:
     records = [*stderr.splitlines(), *(json.dumps(event, ensure_ascii=False) for event in events)]
     return any(
@@ -943,6 +1171,17 @@ def _structured_unavailable_reason(events: Sequence[dict[str, Any]]) -> str | No
     return None
 
 
+def _model_not_supported_reason(events: Sequence[dict[str, Any]]) -> str | None:
+    for event in events:
+        if event.get("type") not in {"error", "turn.failed", "item.completed"}:
+            continue
+        text = json.dumps(event, ensure_ascii=False)
+        match = re.search(r"(?i)(?:the\s+['`]?[^'`]+['`]?\s+)?model.{0,160}not supported", text)
+        if match:
+            return redact_text(match.group(0), limit=256)
+    return None
+
+
 def _structured_error_code(event: dict[str, Any]) -> str | None:
     error = event.get("error")
     if isinstance(error, dict) and isinstance(error.get("code"), str):
@@ -963,6 +1202,19 @@ def _observed_models(events: Sequence[dict[str, Any]]) -> list[str]:
                 if isinstance(value, str) and value and value not in observed:
                     observed.append(value)
     return observed
+
+
+def _write_explanation_codex_evidence(
+    evidence_dir: Path,
+    stem: str,
+    events: Sequence[dict[str, Any]],
+    stderr: str,
+) -> None:
+    _write_jsonl(evidence_dir / f"{stem}.jsonl", events)
+    (evidence_dir / f"{stem}.stderr.txt").write_text(
+        redact_text(stderr, limit=65536),
+        encoding="utf-8",
+    )
 
 
 def _fixture_command_attempts_from_evidence(evidence_dir: Path) -> list[dict[str, Any]]:
@@ -992,6 +1244,22 @@ def _init_git_repo(path: Path, runner: Runner) -> None:
     (path / "README.md").write_text("BW1 isolated self-verification repository.\n", encoding="utf-8")
     _run_capture(["git", "add", "README.md"], cwd=path, runner=runner)
     _run_capture(["git", "commit", "-m", "initialize BW1 probe"], cwd=path, runner=runner)
+
+
+def _repository_worktree_snapshot(repository: Path) -> dict[str, str]:
+    snapshot: dict[str, str] = {}
+    for path in sorted(repository.rglob("*"), key=lambda candidate: candidate.as_posix()):
+        relative = path.relative_to(repository)
+        if relative.parts and relative.parts[0] == ".git":
+            continue
+        key = relative.as_posix()
+        if path.is_symlink():
+            snapshot[key] = f"symlink:{os.readlink(path)}"
+        elif path.is_file():
+            snapshot[key] = f"file:{_sha256_file(path)}"
+        elif path.is_dir():
+            snapshot[key] = "directory"
+    return snapshot
 
 
 def _hook_payload(cwd: Path) -> dict[str, Any]:
