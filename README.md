@@ -11,62 +11,42 @@ Local-first, command-aware, pre-execution, execution-chain preflight for Codex-s
 agents.
 
 Codex Preflight statically scans a repository before risky commands run, analyzes the planned
-command itself, builds a best-effort execution graph of reachable local scripts/files, detects
+command itself, builds a best-effort execution graph of reachable local scripts and files, detects
 dangerous capabilities and uncertainty, and returns `ALLOW`, `WARN`, `ASK_USER`, or `BLOCK`
-decisions with JSON/Markdown reports.
+decisions with JSON or Markdown evidence.
 
 Codex Preflight is open-source software licensed under the Apache License 2.0.
 
 ## Why This Exists
 
-AI coding agents often need to run commands such as dependency installation, shell scripts, Docker
-commands, test/build commands, or MCP startup commands. Those commands can be risky when the
-repository is unfamiliar or untrusted: package lifecycle scripts can run automatically, Docker can
-mount host resources, shell scripts can download and execute remote content, and agent instruction
-files can try to steer the agent toward unsafe behavior.
+AI coding agents often need to run dependency installation, shell scripts, Docker commands,
+test/build commands, or MCP startup commands. Those commands can be risky in an unfamiliar or
+untrusted repository: package lifecycle scripts can run automatically, Docker can mount host
+resources, shell scripts can download and execute remote content, and repository instructions can
+try to steer the agent toward unsafe behavior.
 
 Codex Preflight sits before command execution and answers:
 
 > Should this command run in this repository right now?
 
-## What It Solves
-
-Codex Preflight gives an agent a local, explainable safety gate before it runs a command. It does
-not try to prove a repository is safe. Instead, it catches high-signal static risks, traces obvious
-local indirection, surfaces uncertainty, and gives the user a decision with evidence.
+It does not try to prove that a repository is safe. It catches high-signal static risks, follows
+bounded local execution chains, surfaces uncertainty, and produces evidence for a separate human or
+agent decision.
 
 ## Key Features
 
-- Local repository preflight.
-- External GitHub repository scan via `--repo`.
-- Default-off, confirmation-gated MCP static scan for public GitHub HTTPS repositories.
-- Default-off, bounded and redacted MCP listing of existing local trust approvals.
-- Composite command classification.
-- Planned-command risk findings for remote shell pipelines, encoded PowerShell, dangerous Docker
-  flags and mounts, and inline interpreter execution.
-- Static README link-poisoning detection for fake release links, non-release installer/download
-  hosts, raw source archive downloads, and security-warning bypass wording.
-- Static Rust and Go ecosystem coverage for Cargo build scripts, Cargo source replacement,
-  Cargo aliases, git-sourced Cargo lock entries, Go generator directives, TestMain hooks, cgo
-  indicators, and Go module replacements.
-- Static Ruby ecosystem coverage for Bundler git/local sources, gemspec extensions and lifecycle
-  hooks, native `extconf.rb` configuration, and command-running Rake tasks.
-- Static Java and Kotlin ecosystem coverage for Maven plugin executions, Gradle plugin
-  repositories, init/build logic, and wrapper distribution integrity indicators.
-- Reachability parsing for common wrappers such as shell `-c`, interpreter flags, `env`,
-  package-manager wrappers, PowerShell, `cmd /c`, and Windows-style paths.
-- Cross-file Node.js module reachability for local `require()` and `import` chains.
-- Evidence trust-boundary labels for repository-controlled snippets.
-- Nested monorepo critical file collection.
-- Package lifecycle detection.
-- Shell, Docker, GitHub Actions, MCP, agent instruction, Rust, Go, Ruby, Java/Kotlin, and secret checks.
-- Execution graph for reachable local scripts/files.
-- Capability detection for Node.js, Python, shell, and Docker.
-- Uncertainty policy: unknown is not safe.
-- Trust and cache management.
+- Local repository preflight and public GitHub repository scanning.
+- Planned-command risk analysis and composite command classification.
+- Package lifecycle, shell, Docker, GitHub Actions, MCP, agent-instruction, secret, README-link,
+  Rust, Go, Ruby, Java, and Kotlin analysis.
+- Cross-file reachability and execution-capability graphs.
+- Evidence trust-boundary labels for repository-controlled data.
+- Conservative uncertainty policy: unknown is not safe.
+- Bounded trust and cache management.
 - Synthetic historical attack-pattern corpus.
-- JSON and Markdown reports.
-- `exec` wrapper for command gating.
+- JSON and Markdown reports and report comparison.
+- Explicit `exec` wrapper for guarded command execution.
+- Codex plugin packaging with a self-contained local Hook and MCP runtime.
 
 ## How It Works
 
@@ -82,35 +62,24 @@ planned command
   -> JSON / Markdown report
 ```
 
-Codex Preflight uses bounded safe reads and never executes repository code. Reachability follows
-only statically visible local paths inside the repository and reports missing, dynamic,
-outside-repo, symlink, oversized, binary, or incomplete paths as uncertainty. README
-link-poisoning detection is static-only: it parses local repository documentation and does not fetch
-linked pages, download artifacts, recursively scan linked repositories, use browser automation, or
-call GitHub metadata APIs.
+Codex Preflight uses bounded safe reads and never executes repository code while scanning.
+Reachability follows only statically visible local paths inside the repository and reports missing,
+dynamic, outside-repository, symlink, oversized, binary, or incomplete paths as uncertainty.
 
-## Safety Model
-
-Codex Preflight is local-first: repository files are read on the local machine, and reports are
-generated locally. Remote MCP access exists only behind an explicit startup flag and one-time
-confirmation, and materializes a bounded static snapshot locally. The scanner does not run package
-install scripts, shell payloads, Docker, MCP servers, test commands from fixtures, or repository code. The CLI is intentionally scanner-first:
-it does not include a web dashboard, SaaS backend, cloud upload, database server, browser
-extension, or IDE extension.
-
-Policy decisions:
+Policy decisions are:
 
 - `ALLOW`: no relevant static risk findings were detected.
-- `WARN`: low or contextual risk; proceed only after summarizing the warning.
+- `WARN`: low or contextual risk; summarize the warning before proceeding.
 - `ASK_USER`: do not execute automatically; summarize and ask the user.
-- `BLOCK`: do not execute; explain the blocking finding.
+- `BLOCK`: do not run the command; explain the blocking evidence.
 
-## Quick Start
+## Standalone CLI Quick Start
 
-Install locally:
+The Python package is still available for standalone CLI use and source-checkout development. This
+installation is separate from normal Codex plugin installation.
 
 ```bash
-pip install -e ".[dev]"
+pip install -e ".[dev,mcp]"
 codex-preflight --help
 ```
 
@@ -126,215 +95,181 @@ Wrap command execution:
 codex-preflight exec --cwd . --format markdown -- pytest
 ```
 
-The exec wrapper runs the command only when preflight returns `ALLOW` or `WARN`. It prints a
-readable report and exits without running the command for `ASK_USER` or `BLOCK`.
+The wrapper runs the command only when preflight returns `ALLOW` or `WARN`. It exits without running
+the command for `ASK_USER` or `BLOCK`.
 
-Verify local release readiness without changing repository or release state:
+Verify release readiness without changing repository or release state:
 
 ```bash
 codex-preflight release verify --root . --expected-version 0.3.7 --expected-commit HEAD --format markdown
 ```
 
-The command checks all five version sources, the three root/marketplace plugin-copy files, the
-exact eight-way static MCP inventories, and supported Python, Git, and optional MCP integrations.
-When the optional MCP runtime is installed, it also checks all eight runtime inventories. When it
-is missing, both the integration and `mcp.inventory.runtime` checks return `SKIP`, the runtime probe
-is not invoked, and the exact install command is reported without installing anything. Add `--tag`,
-`--github-repo OWNER/NAME`, and `--merged-branch` only when
-you explicitly want bounded, read-only tag, published Release, and branch-cleanup verification.
-JSON output uses the stable `release-readiness/v1` schema. Repository and GitHub evidence remains
-untrusted data.
+The release verifier checks version sources, root and marketplace plugin copies, static and runtime
+MCP inventories, supported Python and Git integrations, commit-bound file identity, and optional
+published release state. Repository and GitHub evidence remains untrusted data.
 
-The target checkout is never added to a runtime probe's `PYTHONPATH`. Runtime probes are allowed only
-when the active Codex Preflight package root resolves outside the target checkout; filesystem overlap
-fails readiness before a probe starts. This proves filesystem separation only: it does not determine
-editable-install metadata or prove independent build provenance. Invoke the command from a separately
-trusted installation when an independent code-provenance boundary is required. Each probe replaces
-only the side-effectful trust-service factories with inert in-memory services and then calls the same
-default `create_mcp_server()` path as normal startup. Normal startup and verification therefore use
-one pure shared registration function and the same registration inputs; the probe reads the resulting
-actual FastMCP Tool Manager without opening trust stores or writing registration audit state.
-Every required target file is opened through no-follow handles; symbolic links, reparse points,
-unsafe hard links, and repository escapes fail readiness. `HEAD` must equal the requested canonical
-commit, and every file actually consumed by diagnostics must content-match its tracked commit blob.
-The commit tree entry must be a regular `100644` or `100755` blob; symlink and submodule modes fail
-even when a checkout materializes them as ordinary files. One immutable no-follow byte snapshot is
-verified and then reused by all version, plugin, and inventory parsers. Only the safe built-in
-CRLF-to-LF checkout conversion is accepted; repository filters are never run. Dynamic namespace
-writes such as `globals()` and `exec` fail the strict static version/inventory contract.
-Index hints such as `assume-unchanged` and `skip-worktree` cannot hide drift. Git environment
-overrides are discarded, and the verifier does not call `git status` or repository fsmonitor hooks.
-The discovered Git executable is resolved once to a canonical absolute path outside the target and
-that exact path is used for every Git subprocess.
-Tag checks require annotated tags; lightweight tags fail. External checks reject redirects, cap response bytes,
-validate repository and branch names, and positively identify the public repository before a branch
-`404` can mean deletion. Markdown output encodes every interpolated value as data.
+## Codex Plugin Installation
 
-## Codex Plugin Usage
+The Codex plugin is self-contained for its default Hook and MCP integrations. Installing the plugin
+includes the platform runtime selected by the plugin launcher. Normal plugin use does not require the
+user to install Python, create a virtual environment, install a wheel, set a Python path, or run
+`pip install`.
 
-Codex Preflight remains a Python CLI project and is also packaged as a Codex plugin that bundles
-the operational skill and the existing local stdio MCP server configuration.
+The installable plugin contains:
 
-The plugin package contains:
+- `.codex-plugin/plugin.json`: plugin manifest.
+- `.mcp.json`: local stdio server declaration.
+- `hooks/hooks.json`: plugin-provided `PreToolUse` Hook.
+- `scripts/launch-mcp.mjs`: MCP role launcher.
+- `scripts/launch-hook.mjs`: Hook role launcher.
+- `scripts/runtime-launcher.mjs`: plugin-root resolution, platform selection, and digest validation.
+- `runtime/runtime-manifest.json`: plugin-version, source-commit, path, and SHA-256 bindings.
+- `runtime/windows-x64/codex-preflight-runtime.exe`: Windows x64 runtime.
+- `runtime/linux-x64/codex-preflight-runtime`: Linux x64 runtime.
+- `skills/codex-preflight/SKILL.md`: workflow guidance for Codex.
 
-- `.codex-plugin/plugin.json`: Codex plugin manifest.
-- `.mcp.json`: local stdio server map for the bundled cross-platform MCP launcher.
-- `scripts/launch-mcp.mjs`: shell-free launcher that selects an installed Python environment and
-  starts `python -m codex_preflight_mcp.server`.
-- `skills/codex-preflight/SKILL.md`: English skill instructions for when and how Codex should call
-  `codex-preflight`.
-- `.agents/plugins/marketplace.json`: Codex marketplace root manifest for the Codex UI
-  "Add marketplace" flow.
-- `plugins/codex-preflight/`: marketplace-packaged copy of the plugin referenced relative to the
-  repository marketplace root.
+The MCP declaration uses only plugin-relative paths:
 
-The manifest declares `mcpServers: "./.mcp.json"`. It does not declare an App, remote MCP URL,
-credentials, shell command, automatic installer, or repository-controlled startup arguments.
-
-When Codex is about to run a risky command in a local or unfamiliar repository, it should run:
-
-```bash
-codex-preflight preflight --cwd . --command "<planned command>" --format markdown
+```json
+{
+  "mcpServers": {
+    "codex-preflight": {
+      "command": "node",
+      "args": ["./scripts/launch-mcp.mjs"],
+      "cwd": "."
+    }
+  }
+}
 ```
 
-Codex must respect the resulting decision:
+The launcher resolves the plugin root from its own file location, selects the exact platform and
+architecture, verifies that the runtime manifest version matches the plugin manifest, rejects paths
+that escape the plugin, verifies the executable SHA-256 digest, and starts the selected role. A
+missing, unsupported, or digest-mismatched runtime fails closed with a reinstall message. It never
+silently falls back to an arbitrary user Python environment.
 
-- `ALLOW`: the command may proceed.
-- `WARN`: summarize the warning before proceeding.
-- `ASK_USER`: stop and ask the user.
-- `BLOCK`: do not run the command.
+The Hook command uses Codex-provided `PLUGIN_ROOT`, so it does not depend on a globally installed
+`codex-preflight-hook` executable. Hook trust remains an explicit Codex user decision.
 
-Install the Python MCP prerequisite first. Plugin installation does not install packages or modify
-the Python environment:
+### Add the Marketplace
 
-```bash
-python -m pip install "codex-preflight[mcp]"
-```
-
-The MCP extra requires `mcp>=1.3.0`, the lowest verified Python MCP SDK release whose
-FastMCP runtime preserves server instructions. An old, manually downgraded, shadowed, or
-instruction-dropping runtime is rejected before stdio server startup. Upgrade an incompatible
-environment explicitly with:
-
-```bash
-python -m pip install --upgrade "codex-preflight[mcp]"
-```
-
-This fail-closed behavior is intentional: silently omitting the fixed server instructions would
-violate the MCP safety contract. `mcp doctor` reports a missing runtime, a present but
-instruction-incompatible runtime, and an instruction-capable runtime as distinct states; it does
-not install or upgrade packages.
-
-The plugin MCP launcher does not depend on the Python console-script directory being present on
-`PATH`. It probes Python without a shell and starts the module directly. If several Python
-environments are installed, set `CODEX_PREFLIGHT_PYTHON` to the executable where
-`codex-preflight[mcp]` is installed. The selected Python package version must match the plugin
-manifest version; a Codex local cachebuster suffix is ignored for this comparison.
-
-Then add this repository through the Codex UI "Add marketplace" flow with:
+Use the Codex UI "Add marketplace" flow with:
 
 - Source: `https://github.com/Gengetau/codex-preflight.git`
-- Git ref: `master`
+- Git ref: the intended release or review ref
 - Sparse paths: `.agents/plugins` and `plugins/codex-preflight`
 
-The equivalent CLI marketplace command is:
+Equivalent CLI commands:
 
 ```bash
 codex plugin marketplace add https://github.com/Gengetau/codex-preflight.git --ref master --sparse .agents/plugins --sparse plugins/codex-preflight
+codex plugin add codex-preflight@codex-preflight
 ```
 
 Use both sparse paths. `.agents/plugins/marketplace.json` is the marketplace manifest, while
-`plugins/codex-preflight` is the plugin root resolved by its `./plugins/codex-preflight` source
-path. `.codex-plugin/plugin.json` alone is not a marketplace root.
+`plugins/codex-preflight` is the plugin root. `.codex-plugin/plugin.json` alone is not a marketplace
+root.
 
-An older marketplace configured with only `.agents/plugins` can still show the plugin card or
-retain an installed cache while the details page fails with `path does not exist or is not a
-directory`. Rebuild that marketplace with both sparse paths by following the recovery procedure in
-[`docs/plugin.md`](docs/plugin.md#repair-an-existing-one-path-marketplace-snapshot).
-
-Do not use `git@github.com:Gengetau/codex-preflight.git` unless SSH host keys and credentials are
-configured in the Codex runtime. If SSH fails with "Host key verification failed", use the HTTPS
-source URL above.
-
-After marketplace, plugin, or MCP configuration changes, reinstall or refresh according to the
-official Plugin Creator workflow and start a new Codex session so the updated skill and server are
-loaded.
-
-Inspect the supported configuration or diagnose prerequisites without changing files:
+An older one-path snapshot can leave the plugin card visible while the details page reports
+`path does not exist or is not a directory`. Rebuild that marketplace:
 
 ```bash
-codex-preflight mcp config --client codex
-codex-preflight mcp doctor --client codex
+codex plugin remove codex-preflight@codex-preflight
+codex plugin marketplace remove codex-preflight
+codex plugin marketplace add https://github.com/Gengetau/codex-preflight.git --ref master --sparse .agents/plugins --sparse plugins/codex-preflight
+codex plugin add codex-preflight@codex-preflight
 ```
 
-The ChatGPT desktop app, Codex CLI, and IDE extension share MCP configuration for the same Codex
-host. Standalone configuration remains available when the plugin is not used; see
-[MCP Integration and Client Examples](docs/mcp-client-examples.md).
+After installation or update, restart Codex or start a new Codex session so the refreshed Skill,
+MCP server, Hook definition, and bundled runtime are loaded.
 
-More details are in [docs/plugin.md](docs/plugin.md).
+The ChatGPT desktop app, Codex CLI, and IDE extension share MCP configuration for the same Codex
+host. See [Codex Plugin Packaging](docs/plugin.md) for the complete installation, runtime, trust, and
+platform boundary.
+
+## Hook Coverage Boundary
+
+The plugin currently declares the canonical Hook matcher `^Bash$`. Bundling the Hook executable
+solves installation and executable resolution; it does not expand Codex tool-surface coverage.
+
+A runtime may be described as `hook-active` only after a harmless live probe proves that its exact
+Codex version, operating system, surface, trust state, and command path reach the Hook. A native
+Windows PowerShell surface that does not reach the `Bash` Hook remains `skill-only`, even though the
+same installed plugin can still provide MCP scanning and advisory explanation.
+
+The deterministic scanner remains the sole authority for `ALLOW`, `WARN`, `ASK_USER`, and `BLOCK`.
+Model explanation is advisory and cannot change policy, mint approval, or declare a repository safe.
 
 ## MCP
 
-The MCP-facing package never executes repository code or planned commands. Evidence and stored
-trust entries are treated as untrusted data and bounded before they are returned.
-
-The default runtime authority remains exactly two tools:
+The bundled default MCP process registers exactly two local, no-network tools:
 
 ```text
 preflight_check
 corpus_scan
 ```
 
-v0.3.2 adds a separately gated public GitHub scanner. It is absent unless the server starts with
-the exact environment value `CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN=1`; enabled registration adds only
-`remote_repository_scan`. The first valid call performs lexical validation and returns a one-time
-confirmation challenge before DNS or network access. A confirmed call uses public-address
-validation and pinning, zero redirects, bounded shallow bare Git acquisition, regular-file-only
-materialization, an isolated static worker, dedicated remote cache/audit state, and verified
-cleanup. Confirmation never creates trust.
+`preflight_check` returns the deterministic report plus bounded and redacted
+`guardian-context/v1` evidence. The model may explain that evidence, but it must keep the
+Deterministic Result separate from GPT Advisory Explanation.
 
-v0.3.3 adds a separate default-off trust-read capability. Exact startup value
-`CODEX_PREFLIGHT_ENABLE_TRUST_READ=1` registers only `trust_list`; with both startup flags, the
-inventory is `preflight_check`, `corpus_scan`, `remote_repository_scan`, and `trust_list`.
-`trust_list` reads only the normal local trust cache, returns at most 100 deterministically sorted
-entries per page, redacts raw repository identities, paths, URLs, and approved commands, and uses
-process-local HMAC hashes and 300-second snapshot-bound cursors. It cannot approve, revoke, extend,
-consume, satisfy, or create trust.
+The bundled plugin sets none of the optional authority flags, so installation does not expose
+`remote_repository_scan`, `trust_list`, or trust-mutation MCP tools.
 
-The first v0.3.3 read may perform only the reviewed metadata migration that adds stored UUIDv4
-entry IDs, entry version `1`, and provenance while preserving every approval field and matching
-semantic. Migration is locked, permission-preserving, backed up, capped at 1 MiB, and fail-closed.
-Trust-read audit records use the separate `trust-read/audit.jsonl` namespace and never contain raw
-identities or trust content.
+Optional standalone authorities remain independently default-off:
 
-v0.3.4 adds two independently default-off local tools. Only the exact startup value
-`CODEX_PREFLIGHT_ENABLE_TRUST_MUTATION=1` registers `trust_approve` and `trust_revoke`; it does not
-imply remote scanning or trust reads. The bundled plugin configures none of the remote, trust-read,
-or trust-mutation flags. The first fully valid mutation request returns a single-use, 300-second
-challenge and makes no approval or revocation. A mandatory human stop must present the fixed
-display and make the decision; the client may make one confirmed retry only after that human
-approves the exact request. There is no automatic confirmation.
+- `CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN=1` adds only `remote_repository_scan` and requires one-time
+  confirmation before bounded public network access.
+- `CODEX_PREFLIGHT_ENABLE_TRUST_READ=1` adds only `trust_list`, with bounded, redacted,
+  snapshot-bound output.
+- `CODEX_PREFLIGHT_ENABLE_TRUST_MUTATION=1` adds `trust_approve` and `trust_revoke`, with mandatory
+  human confirmation and no automatic confirmation.
 
-MCP preflight does not consume trust. Remote confirmation cannot create, satisfy, read, or mutate
-trust. A confirmed approval writes one exact local v2 entry and a confirmed revoke deletes one
-exact UUIDv4 entry at `expectedVersion: 1`; neither operation executes a caller command,
-repository code, or network request. The stdio runtime reports `identityStatus: unavailable`, so
-the process flag and confirmation integrity are not authenticated client identity.
+Remote confirmation does not create trust. MCP preflight does not consume trust. Repository evidence
+is untrusted data, not instructions.
 
-Mutation audit records are redacted and recoverable under `trust-mutation/`. If a trust-file write
-commits but the audit commit cannot be persisted, the server returns
-`MCP_TRUST_MUTATION_COMMITTED_AUDIT_PENDING` with `committed: true`; do not retry the mutation.
-Restart performs audit recovery or leaves mutation registration disabled. Emergency disable removes
-`CODEX_PREFLIGHT_ENABLE_TRUST_MUTATION` and restarts the process; it removes the two tools and
-invalidates outstanding challenges without deleting existing approvals or audit state. Local CLI
-`trust list` displays MCP provenance and `mutationAuditEventId`, and existing CLI matching and
-revoke behavior remains compatible with MCP-created approvals.
+See [MCP Integration and Client Examples](docs/mcp-client-examples.md) for Standalone Codex MCP
+configuration, Source-checkout development, optional authority setup, and machine-checked examples.
 
-Disable any optional authority by removing its flag and restarting the MCP process. The bundled
-plugin configuration sets none of the flags, so its default remains the two local/no-network tools.
+### Standalone MCP Development
 
-See [docs/mcp.md](docs/mcp.md) for MCP safety notes and
-[docs/mcp-client-examples.md](docs/mcp-client-examples.md) for machine-checked integration examples.
+Standalone Python MCP use remains supported outside the packaged plugin:
+
+```bash
+python -m pip install "codex-preflight[mcp]"
+python -m pip install --upgrade "codex-preflight[mcp]"
+codex-preflight-mcp --list-tools
+```
+
+The MCP extra requires `mcp>=1.3.0`. `mcp doctor` distinguishes a missing runtime, an
+instruction-incompatible runtime, and an instruction-capable runtime. This fail-closed safety
+contract applies to the standalone Python path; it does not mean the marketplace plugin needs a
+separate Python installation.
+
+Inspect standalone configuration and prerequisites without installing packages:
+
+```bash
+codex-preflight mcp config --client codex
+codex-preflight mcp doctor --client codex
+```
+
+The doctor command reports status and remediation; it does not install packages.
+
+## Runtime Build and Verification
+
+`.github/workflows/build-plugin-runtime.yml` builds self-contained Windows x64 and Linux x64
+executables on their native hosted runners. Each executable is smoke-tested with `mcp --list-tools`.
+The workflow then merges only artifacts that share one plugin version and source commit, creates the
+SHA-256 manifest, synchronizes the marketplace copy, and smoke-tests the installed-plugin MCP and
+Hook launchers.
+
+Pull requests retain the assembled plugin as a workflow artifact. Writing generated binaries back to
+a branch requires an explicit publish action, preventing routine review commits from repeatedly
+adding large generated blobs.
+
+Repository development may explicitly opt into a local Python runtime by setting both
+`CODEX_PREFLIGHT_ALLOW_DEV_RUNTIME=1` and `CODEX_PREFLIGHT_DEV_PYTHON` to an absolute development
+Python executable. That override is disabled by default and is not part of marketplace installation.
 
 ## Demo Examples
 
@@ -360,8 +295,7 @@ Indirect execution chain:
 codex-preflight preflight --cwd case_corpus/nested-node-child-process --command "pnpm install" --format markdown
 ```
 
-Expected decision: `ASK_USER`, because package install reaches a local Node.js file with child
-process execution.
+Expected decision: `ASK_USER`.
 
 Docker compose to Dockerfile:
 
@@ -369,60 +303,21 @@ Docker compose to Dockerfile:
 codex-preflight preflight --cwd case_corpus/docker-compose-to-dockerfile-run --command "docker compose up" --format markdown
 ```
 
-Expected decision: `BLOCK`, because compose reaches a Dockerfile remote shell pattern.
+Expected decision: `BLOCK`.
 
 Generated demo reports live in [docs/examples](docs/examples/README.md).
 
 ## Reports
 
-JSON reports include `executionGraph` with reachable nodes, edges, capabilities, and uncertainty.
-Markdown reports include `Execution Chain` and `Uncertainty` sections for human review.
-Large reports are capped to keep agent output bounded; when detail is omitted, the report includes
-an explicit `REPORT_SIZE_BUDGET_EXCEEDED` uncertainty summary.
+JSON reports include the deterministic decision, policy explanation, findings, evidence labels,
+execution graph, capabilities, uncertainty, cache metadata, and report limits. Markdown reports
+render the same decision and evidence for human review.
 
-JSON reports also include additive `policyExplanation` data showing the final gate, command scope,
-risk-score contribution, matched matrix entries, and whether each rule affected the gate or was
-report-only. Markdown reports render the same information in `Policy Explanation`.
-
-Compare two existing local JSON reports without scanning or executing report content:
+Compare existing local JSON reports without scanning or executing report content:
 
 ```bash
 codex-preflight report compare baseline.json candidate.json --format markdown
 ```
-
-Comparison covers decisions, command classifications, policy selectors, command contributions,
-findings, policy rule contributions, execution capabilities, and uncertainties. Inputs are bounded
-local files; UNC, URL, scp-like, and clone-like forms are rejected before filesystem access, and
-all report text remains untrusted data.
-
-README link-poisoning findings use `README_` rule IDs:
-
-- `README_FAKE_RELEASE_LINK`: release/download wording points away from the expected GitHub
-  Releases page.
-- `README_INSTALLER_FROM_NON_RELEASE_HOST`: installer/setup/download wording points to a target
-  that is not shaped like a GitHub Releases asset.
-- `README_RAW_SOURCE_ARCHIVE_DOWNLOAD`: download/install/release wording points to raw source URLs
-  such as raw GitHub file paths.
-- `README_DEFEAT_SECURITY_WARNING`: repository documentation encourages bypassing operating
-  system, browser, antivirus, Defender, or SmartScreen warnings.
-
-For safe read-only commands these findings warn; for install, build, and script-execution scopes
-they require user review. Evidence snippets remain labeled as repository-controlled untrusted data.
-
-Rust and Go ecosystem findings use warning-oriented rule IDs:
-
-- `RUST_BUILD_SCRIPT`: a `build.rs` file or Cargo package build script is present.
-- `RUST_CARGO_SOURCE_REPLACEMENT`: Cargo source replacement or custom registry configuration is
-  present.
-- `RUST_CARGO_ALIAS`: Cargo aliases can hide additional subcommands behind familiar names.
-- `RUST_CARGO_GIT_SOURCE`: `Cargo.lock` references a git-sourced dependency.
-- `GO_GENERATE_DIRECTIVE`: repository source declares a `//go:generate` command.
-- `GO_TESTMAIN`: Go tests define a `TestMain` hook.
-- `GO_CGO_USAGE`: Go source imports cgo through `import "C"`.
-- `GO_MODULE_REPLACE` and `GO_LOCAL_MODULE_REPLACE`: `go.mod` changes module resolution.
-
-These findings are local static signals. Codex Preflight does not run Cargo, Go, build scripts,
-tests, generators, compilers, package managers, or repository code while detecting them.
 
 ## External Repository Scan
 
@@ -432,28 +327,21 @@ Scan a public repository without running its code:
 codex-preflight preflight --repo https://github.com/octocat/Hello-World.git --ref master --command "cat README" --format json
 ```
 
-Clone protocol restrictions reject unsafe local, file, ssh, git, and `ext::` clone URLs by default.
+Unsafe local, file, SSH, Git, and `ext::` clone forms are rejected by default.
 
 ## Corpus
 
-Run the safe synthetic historical-pattern corpus:
+Run the synthetic historical-pattern corpus:
 
 ```bash
 codex-preflight corpus scan
 ```
 
-The corpus contains static fixtures only. The scanner reads files and compares actual decisions and
-rule IDs with expected outcomes. JSON and Markdown output group cases by category, display expected
-and actual rules, and label negative controls.
+The corpus contains static fixtures only. The scanner reads files and compares expected decisions
+and rule IDs. It never runs package managers, lifecycle hooks, shell payloads, Docker, tests, or
+fixture code.
 
-## Trust And Cache
-
-`ALLOW` and `WARN` scan reports can be cached by repository identity, head commit, critical-file
-fingerprint, command scope, policy version, and ruleset version. Local trust approvals use the same
-scope, so approval is invalidated by policy or ruleset changes, relevant file changes, or a
-different command scope.
-
-Use:
+## Trust and Cache
 
 ```bash
 codex-preflight trust approve --cwd . --command "pnpm install" --ttl 7d
@@ -462,33 +350,15 @@ codex-preflight trust revoke --cwd .
 codex-preflight cache clear
 ```
 
-## Dogfooding Workflow
-
-When working on this project, run preflight before tests, lint, package installation, Docker, shell
-scripts, MCP startup, or commands in unfamiliar repositories:
-
-```bash
-codex-preflight preflight --cwd . --command "pytest" --format json --no-cache
-pytest
-
-codex-preflight preflight --cwd . --command "ruff check ." --format json --no-cache
-ruff check .
-```
-
-If the decision is `ASK_USER` or `BLOCK`, stop and inspect the report before continuing.
+Approvals are scoped by repository identity, command scope, critical-file fingerprint, policy, and
+ruleset version.
 
 ## Development
 
-Run tests:
-
 ```bash
 pytest
-```
-
-Run lint:
-
-```bash
 ruff check .
+python scripts/sync_marketplace_plugin.py --check
 ```
 
 ## Release History
@@ -504,9 +374,8 @@ license terms and [NOTICE](NOTICE) for attribution information.
 
 ## Limitations
 
-Codex Preflight is static, heuristic, and best-effort. It does not prove a repository is safe, does
-not execute code, and does not replace SAST, dependency audit tools, malware sandboxes, or CVE
-scanners. Dynamic runtime behavior may still evade static analysis. Unknown, dynamic, missing,
-outside-repository, symlink, oversized, binary, or incompletely scanned high-risk paths are
-escalated conservatively. Very large graphs or finding sets may be summarized with explicit
-report-budget uncertainty instead of unbounded detail.
+Codex Preflight is static, heuristic, and best-effort. It does not prove a repository is safe and
+does not replace SAST, dependency audit tools, malware sandboxes, or CVE scanners. Dynamic behavior
+may evade static analysis. Unknown, dynamic, missing, outside-repository, symlink, oversized, binary,
+or incompletely scanned high-risk paths are escalated conservatively. Very large graphs or finding
+sets may be summarized with explicit report-budget uncertainty.
