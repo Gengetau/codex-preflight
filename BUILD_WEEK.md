@@ -265,18 +265,14 @@ No local web server or additional API key is part of this path.
 
 `BW0 Baseline` and the hook-backed architecture planning are complete.
 
-The bounded Bash Hook feasibility implementation exists on the Build Week branch. BW1 now includes
-the deterministic `codex-preflight guardian verify-bw1` self-verification harness, additive
-`guardian-context/v1` output on `preflight_check`, and independently validated
-`guardian-explanation/v1` advisory output.
+The Build Week branch contains the bounded Bash `PreToolUse` Hook, additive bounded and redacted
+`guardian-context/v1` output on the existing `preflight_check` MCP tool, and the
+`guardian-explanation/v1` protocol that keeps deterministic findings separate from advisory model
+explanation.
 
-The verifier writes a sanitized evidence bundle under
-`artifacts/bw1-self-verification/<utc-timestamp>/`. It returns `0` for `PASS`, `1` for `FAIL`, and
-the distinct documented exit code `3` for `UNSUPPORTED`. `PASS` requires every phase and
-`fixtureCommandsExecuted: 0`. An unavailable supported Codex shell, model, authentication, or MCP
-surface is `UNSUPPORTED`; Hook failure, timeout, exit code 1, missing command attempt, fail-open,
-ambiguous evidence, invalid explanation references, or unexpected command execution is `FAIL`.
+BW1 is completed through the real Codex product path: Codex itself performs the harmless live Hook
+probe, calls the existing MCP tool, and renders the deterministic result and advisory explanation in
+the conversation. No separate self-verification CLI, evidence-harness subsystem, or additional MCP
+tool is part of the product.
 
-The command does not modify Hook definitions, repositories under test, trust, policy, or execution
-authority. It creates only isolated temporary Git repositories and the required sanitized evidence
-bundle. BW2 approval, repair modes, and later Build Week checkpoints remain out of scope.
+BW2 approval, repair modes, and later Build Week checkpoints remain out of scope.
