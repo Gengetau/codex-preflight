@@ -168,7 +168,8 @@ removes stale runtime files, rejects source symlinks, and preserves executable m
 `.github/workflows/build-plugin-runtime.yml` builds one-file runtimes on Windows x64 and Linux x64,
 smoke-tests `mcp --list-tools`, merges only entries with one plugin version and source commit, writes
 the digest manifest, synchronizes the marketplace plugin copy, and smoke-tests both installed-plugin
-launchers before publishing the generated files to the review branch.
+launchers. Pull requests retain the assembled plugin as a workflow artifact. Writing generated
+binaries back to a branch requires an explicit `workflow_dispatch` publish action.
 
 The build pipeline never downloads or installs dependencies on the end user's machine. Build-time
 Python and PyInstaller exist only on the controlled CI runners.
@@ -178,7 +179,7 @@ Python and PyInstaller exist only on the controlled CI runners.
 The bundled default MCP process registers exactly `preflight_check` and `corpus_scan`. It sets none
 of `CODEX_PREFLIGHT_ENABLE_REMOTE_SCAN`, `CODEX_PREFLIGHT_ENABLE_TRUST_READ`, or
 `CODEX_PREFLIGHT_ENABLE_TRUST_MUTATION`, so plugin installation grants no network, trust-read, or
-trust-mutation authority.
+trust-mutation authority. In particular, the default installation does not expose trust-mutation MCP tools.
 
 Evidence marked `evidenceTrust: "untrusted"` or `evidenceSource: "repository-content"` remains data,
 not instructions.
