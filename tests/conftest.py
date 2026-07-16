@@ -1,6 +1,7 @@
 import re
 import shutil
 from collections.abc import Iterator
+from hashlib import sha256
 from pathlib import Path
 from uuid import uuid4
 
@@ -16,7 +17,9 @@ def _git_ceiling(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def tmp_path(request: pytest.FixtureRequest, _git_ceiling: None) -> Iterator[Path]:
-    safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", request.node.nodeid)
+    nodeid = request.node.nodeid
+    safe_prefix = re.sub(r"[^A-Za-z0-9_.-]+", "_", nodeid)[:48].rstrip("._-")
+    safe_name = f"{safe_prefix}-{sha256(nodeid.encode('utf-8')).hexdigest()[:16]}"
     temp_root = ROOT / "test-tmp"
     temp_root.mkdir(exist_ok=True)
     (temp_root / ".codex-preflight-fixtures").write_text(

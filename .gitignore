@@ -13,3 +13,4 @@ dist/
 build/
 *.egg-info/
 .superpowers/
+artifacts/bw1-self-verification/

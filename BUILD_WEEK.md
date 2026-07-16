@@ -265,6 +265,18 @@ No local web server or additional API key is part of this path.
 
 `BW0 Baseline` and the hook-backed architecture planning are complete.
 
-The bounded Bash Hook feasibility implementation exists on the Build Week branch and has passed repository CI, but real host trust and active-status evidence remains a separate runtime gate.
+The bounded Bash Hook feasibility implementation exists on the Build Week branch. BW1 now includes
+the deterministic `codex-preflight guardian verify-bw1` self-verification harness, additive
+`guardian-context/v1` output on `preflight_check`, and independently validated
+`guardian-explanation/v1` advisory output.
 
-Guardian Context, exact approval, repair modes, and deterministic end-to-end verification are not yet complete.
+The verifier writes a sanitized evidence bundle under
+`artifacts/bw1-self-verification/<utc-timestamp>/`. It returns `0` for `PASS`, `1` for `FAIL`, and
+the distinct documented exit code `3` for `UNSUPPORTED`. `PASS` requires every phase and
+`fixtureCommandsExecuted: 0`. An unavailable supported Codex shell, model, authentication, or MCP
+surface is `UNSUPPORTED`; Hook failure, timeout, exit code 1, missing command attempt, fail-open,
+ambiguous evidence, invalid explanation references, or unexpected command execution is `FAIL`.
+
+The command does not modify Hook definitions, repositories under test, trust, policy, or execution
+authority. It creates only isolated temporary Git repositories and the required sanitized evidence
+bundle. BW2 approval, repair modes, and later Build Week checkpoints remain out of scope.

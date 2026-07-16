@@ -204,6 +204,19 @@ Codex must respect the resulting decision:
 - `ASK_USER`: stop and ask the user.
 - `BLOCK`: do not run the command.
 
+### BW1 Guardian self-verification
+
+Run the deterministic Hook Gate and Explain harness from a clean checkout:
+
+```bash
+codex-preflight guardian verify-bw1
+```
+
+The command prints only `PASS`, `FAIL`, or `UNSUPPORTED`, writes sanitized evidence beneath
+`artifacts/bw1-self-verification/<utc-timestamp>/`, returns exit code `1` for `FAIL`, and returns the
+distinct exit code `3` when a required local Codex runtime capability is unavailable. The synthetic
+corpus command is analyzed as data and is never executed.
+
 Install the Python MCP prerequisite first. Plugin installation does not install packages or modify
 the Python environment:
 

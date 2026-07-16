@@ -13,6 +13,7 @@ from typing import Any
 from codex_preflight_core.cache.paths import remote_audit_path
 from codex_preflight_core.corpus import scan_corpus
 from codex_preflight_core.preflight import run_preflight
+from codex_preflight_guardian.guardian_context import build_guardian_context
 from codex_preflight_mcp.contract import build_mcp_result
 from codex_preflight_mcp.errors import McpErrorCode, McpErrorDetail, McpToolError
 from codex_preflight_mcp.remote_confirmation import ConfirmationError, RemoteConfirmationManager
@@ -369,6 +370,7 @@ def preflight_check(
         raise
     except Exception as exc:
         raise _internal_error() from exc
+    report["guardianContext"] = build_guardian_context(report)
     return build_mcp_result("preflight_check", report)
 
 

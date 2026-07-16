@@ -67,6 +67,7 @@ findings
 executionGraph
 reportLimits
 cache
+guardianContext
 safety
 ```
 
@@ -124,6 +125,14 @@ cacheReason
 
 MCP `preflight_check` calls the core with scan cache disabled and trust disabled. Both used flags
 therefore remain false for MCP calls; no MCP trust approval is consulted or mutated.
+
+### Guardian Context
+
+Build Week BW1 adds `guardianContext` with schema version `guardian-context/v1` to successful
+`preflight_check` results. This bounded object contains the canonical report and command digests,
+authoritative deterministic decision, at most 20 redacted evidence references, explicit
+uncertainty and evidence-trust boundaries, and omitted counts. It omits the raw command, absolute
+repository path, environment, and transcript. No MCP tool is added.
 
 ### Compatibility
 

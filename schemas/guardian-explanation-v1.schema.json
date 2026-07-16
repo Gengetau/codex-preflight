@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "guardian-explanation/v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": "guardian-explanation/v1" },
+    "sourceReportDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "sourceCommandDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "deterministicResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "decision": { "enum": ["ALLOW", "WARN", "ASK_USER", "BLOCK"] },
+        "statement": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["decision", "statement"]
+    },
+    "advisoryExplanation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "summary": { "type": "string", "minLength": 1, "maxLength": 1200 },
+        "evidenceReferences": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^(finding|uncertainty):[0-9]+$" },
+          "uniqueItems": true,
+          "maxItems": 20
+        },
+        "uncertaintyReferences": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^uncertainty:[0-9]+$" },
+          "uniqueItems": true,
+          "maxItems": 8
+        },
+        "reviewSteps": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 240 },
+          "maxItems": 5
+        }
+      },
+      "required": ["summary", "evidenceReferences", "uncertaintyReferences", "reviewSteps"]
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "sourceReportDigest",
+    "sourceCommandDigest",
+    "deterministicResult",
+    "advisoryExplanation"
+  ]
+}
