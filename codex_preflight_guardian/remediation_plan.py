@@ -7,12 +7,15 @@ from datetime import datetime, timedelta
 from pathlib import PurePosixPath
 from typing import Any
 
+from codex_preflight_guardian.guardian_context import validate_guardian_context
+
 SCHEMA_VERSION = "guardian-remediation-plan/v1"
 PLAN_ID_PREFIX = "guardian-plan-v1:sha256:"
 MAX_OPERATIONS = 32
 MAX_EVIDENCE_REFERENCES = 32
 MAX_RULE_IDS = 64
 MAX_TEXT_LENGTH = 512
+MAX_POSTIMAGE_BYTES = 65_536
 MAX_PLAN_LIFETIME = timedelta(hours=1)
 
 PROHIBITED_OPERATIONS = [
@@ -69,7 +72,7 @@ def remediation_plan_schema() -> dict[str, Any]:
                 "properties": {
                     "reportDigest": digest,
                     "commandDigest": digest,
-                    "originalDecision": {"enum": ["ALLOW", "WARN", "ASK_USER", "BLOCK"]},
+                    "originalDecision": {"enum": ["WARN", "ASK_USER", "BLOCK"]},
                 },
             },
             "target": {
@@ -98,6 +101,7 @@ def remediation_plan_schema() -> dict[str, Any]:
                         "path",
                         "preimageDigest",
                         "postimageDigest",
+                        "postimageContent",
                     ],
                     "properties": {
                         "operationId": {
@@ -111,6 +115,12 @@ def remediation_plan_schema() -> dict[str, Any]:
                         },
                         "postimageDigest": {
                             "oneOf": [digest, {"const": "absent"}],
+                        },
+                        "postimageContent": {
+                            "oneOf": [
+                                {"type": "string", "maxLength": MAX_POSTIMAGE_BYTES},
+                                {"type": "null"},
+                            ]
                         },
                     },
                 },
@@ -197,7 +207,10 @@ def remediation_plan_schema() -> dict[str, Any]:
     }
 
 
-def build_remediation_plan(payload: dict[str, Any]) -> dict[str, Any]:
+def build_remediation_plan(
+    payload: dict[str, Any],
+    source_context: dict[str, Any],
+) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise GuardianPlanError("plan payload must be an object")
     if "planId" in payload:
@@ -205,8 +218,9 @@ def build_remediation_plan(payload: dict[str, Any]) -> dict[str, Any]:
     plan = dict(payload)
     plan["planId"] = f"{PLAN_ID_PREFIX}{'0' * 64}"
     _validate_structure(plan)
+    _validate_source_binding(plan, source_context)
     plan["planId"] = compute_plan_id(plan)
-    return validate_remediation_plan(plan)
+    return validate_remediation_plan(plan, source_context)
 
 
 def canonical_plan_bytes(plan: object) -> bytes:
@@ -230,8 +244,12 @@ def compute_plan_id(plan: object) -> str:
     return f"{PLAN_ID_PREFIX}{digest}"
 
 
-def validate_remediation_plan(plan: object) -> dict[str, Any]:
+def validate_remediation_plan(
+    plan: object,
+    source_context: dict[str, Any],
+) -> dict[str, Any]:
     value = _validate_structure(plan)
+    _validate_source_binding(value, source_context)
     expected = compute_plan_id(value)
     if value["planId"] != expected:
         raise GuardianPlanError("planId does not match the complete canonical plan")
@@ -265,8 +283,8 @@ def _validate_structure(plan: object) -> dict[str, Any]:
     _exact_keys(source, {"reportDigest", "commandDigest", "originalDecision"}, "source")
     _digest(source["reportDigest"], "source.reportDigest")
     _digest(source["commandDigest"], "source.commandDigest")
-    if source["originalDecision"] not in {"ALLOW", "WARN", "ASK_USER", "BLOCK"}:
-        raise GuardianPlanError("source.originalDecision is invalid")
+    if source["originalDecision"] not in {"WARN", "ASK_USER", "BLOCK"}:
+        raise GuardianPlanError("source.originalDecision is invalid for remediation planning")
 
     target = _object(value["target"], "target")
     _exact_keys(target, {"isolation", "targetId", "rootDigest"}, "target")
@@ -283,7 +301,14 @@ def _validate_structure(plan: object) -> dict[str, Any]:
         operation = _object(operation_value, f"operations[{index}]")
         _exact_keys(
             operation,
-            {"operationId", "kind", "path", "preimageDigest", "postimageDigest"},
+            {
+                "operationId",
+                "kind",
+                "path",
+                "preimageDigest",
+                "postimageDigest",
+                "postimageContent",
+            },
             f"operations[{index}]",
         )
         if operation["operationId"] != f"operation:{index}":
@@ -297,14 +322,25 @@ def _validate_structure(plan: object) -> dict[str, Any]:
         seen_paths.add(path)
         preimage = operation["preimageDigest"]
         postimage = operation["postimageDigest"]
+        content = operation["postimageContent"]
         _digest_or_absent(preimage, f"operations[{index}].preimageDigest")
         _digest_or_absent(postimage, f"operations[{index}].postimageDigest")
-        if kind == "create-file" and (preimage != "absent" or postimage == "absent"):
-            raise GuardianPlanError("create-file digest contract is invalid")
-        if kind == "replace-file" and (preimage == "absent" or postimage == "absent"):
-            raise GuardianPlanError("replace-file digest contract is invalid")
-        if kind == "delete-file" and (preimage == "absent" or postimage != "absent"):
-            raise GuardianPlanError("delete-file digest contract is invalid")
+        if kind == "create-file" and preimage != "absent":
+            raise GuardianPlanError("create-file preimageDigest must be absent")
+        if kind in {"replace-file", "delete-file"} and preimage == "absent":
+            raise GuardianPlanError(f"{kind} preimageDigest must bind the existing file")
+        if kind == "delete-file":
+            if postimage != "absent" or content is not None:
+                raise GuardianPlanError("delete-file postimage contract is invalid")
+        else:
+            if postimage == "absent" or not isinstance(content, str):
+                raise GuardianPlanError(f"{kind} postimage contract is invalid")
+            encoded = content.encode("utf-8")
+            if len(encoded) > MAX_POSTIMAGE_BYTES:
+                raise GuardianPlanError("postimageContent exceeds the byte limit")
+            expected_postimage = f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+            if postimage != expected_postimage:
+                raise GuardianPlanError("postimageDigest does not match postimageContent")
 
     if value["prohibitedOperations"] != PROHIBITED_OPERATIONS:
         raise GuardianPlanError("prohibitedOperations must match the fixed safety boundary")
@@ -324,14 +360,7 @@ def _validate_structure(plan: object) -> dict[str, Any]:
     _digest(verification["commandDigest"], "verification.commandDigest")
     if verification["commandDigest"] != source["commandDigest"]:
         raise GuardianPlanError("verification.commandDigest must match source.commandDigest")
-    decisions = verification["acceptableDecisions"]
-    if (
-        not isinstance(decisions, list)
-        or not 1 <= len(decisions) <= 2
-        or len(set(decisions)) != len(decisions)
-        or any(item not in {"ALLOW", "WARN"} for item in decisions)
-    ):
-        raise GuardianPlanError("verification.acceptableDecisions is invalid")
+    _decision_list(verification["acceptableDecisions"])
     _integer(verification["maximumRiskScore"], "verification.maximumRiskScore", 0, 100)
     _rule_ids(verification["requiredAbsentRuleIds"], "verification.requiredAbsentRuleIds")
     if verification["requireNoNewBlockingFindings"] is not True:
@@ -343,14 +372,7 @@ def _validate_structure(plan: object) -> dict[str, Any]:
     _rule_ids(improvement["removedRuleIds"], "expectedImprovement.removedRuleIds")
     _bounded_text(improvement["remainingRiskStatement"], "expectedImprovement.remainingRiskStatement")
 
-    references = value["evidenceReferences"]
-    if (
-        not isinstance(references, list)
-        or not 1 <= len(references) <= MAX_EVIDENCE_REFERENCES
-        or len(set(references)) != len(references)
-        or any(not isinstance(item, str) or not _REFERENCE_PATTERN.fullmatch(item) for item in references)
-    ):
-        raise GuardianPlanError("evidenceReferences is invalid")
+    _evidence_references(value["evidenceReferences"])
 
     validity = _object(value["validity"], "validity")
     _exact_keys(validity, {"sessionId", "createdAt", "expiresAt"}, "validity")
@@ -362,6 +384,34 @@ def _validate_structure(plan: object) -> dict[str, Any]:
     if expires_at - created_at > MAX_PLAN_LIFETIME:
         raise GuardianPlanError("plan validity exceeds the one-hour maximum")
     return value
+
+
+def _validate_source_binding(plan: dict[str, Any], source_context: dict[str, Any]) -> None:
+    try:
+        context = validate_guardian_context(source_context)
+    except ValueError as exc:
+        raise GuardianPlanError("source Guardian Context is invalid") from exc
+    source = plan["source"]
+    decision = context["deterministicDecision"]["decision"]
+    if source != {
+        "reportDigest": context["reportDigest"],
+        "commandDigest": context["commandDigest"],
+        "originalDecision": decision,
+    }:
+        raise GuardianPlanError("plan source does not match the exact Guardian Context")
+    available = {item["refId"]: item for item in context["evidenceRefs"]}
+    references = plan["evidenceReferences"]
+    missing = [item for item in references if item not in available]
+    if missing:
+        raise GuardianPlanError(f"plan evidenceReferences are not present in Guardian Context: {missing}")
+    referenced_rule_ids = {available[item]["ruleId"] for item in references}
+    for field, values in (
+        ("verification.requiredAbsentRuleIds", plan["verification"]["requiredAbsentRuleIds"]),
+        ("expectedImprovement.removedRuleIds", plan["expectedImprovement"]["removedRuleIds"]),
+    ):
+        unknown = [item for item in values if item not in referenced_rule_ids]
+        if unknown:
+            raise GuardianPlanError(f"{field} contains unreferenced rule IDs: {unknown}")
 
 
 def _object(value: object, field: str) -> dict[str, Any]:
@@ -410,14 +460,36 @@ def _integer(value: object, field: str, minimum: int, maximum: int) -> int:
     return value
 
 
+def _decision_list(value: object) -> list[str]:
+    if not isinstance(value, list) or not 1 <= len(value) <= 2:
+        raise GuardianPlanError("verification.acceptableDecisions is invalid")
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, str) or item not in {"ALLOW", "WARN"} or item in seen:
+            raise GuardianPlanError("verification.acceptableDecisions is invalid")
+        seen.add(item)
+    return value
+
+
 def _rule_ids(value: object, field: str) -> list[str]:
-    if (
-        not isinstance(value, list)
-        or len(value) > MAX_RULE_IDS
-        or len(set(value)) != len(value)
-        or any(not isinstance(item, str) or not _RULE_ID_PATTERN.fullmatch(item) for item in value)
-    ):
+    if not isinstance(value, list) or len(value) > MAX_RULE_IDS:
         raise GuardianPlanError(f"{field} is invalid")
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, str) or not _RULE_ID_PATTERN.fullmatch(item) or item in seen:
+            raise GuardianPlanError(f"{field} is invalid")
+        seen.add(item)
+    return value
+
+
+def _evidence_references(value: object) -> list[str]:
+    if not isinstance(value, list) or not 1 <= len(value) <= MAX_EVIDENCE_REFERENCES:
+        raise GuardianPlanError("evidenceReferences is invalid")
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, str) or not _REFERENCE_PATTERN.fullmatch(item) or item in seen:
+            raise GuardianPlanError("evidenceReferences is invalid")
+        seen.add(item)
     return value
 
 
@@ -442,3 +514,14 @@ def _timestamp(value: object, field: str) -> datetime:
     if parsed.utcoffset() != timedelta(0):
         raise GuardianPlanError(f"{field} must use UTC")
     return parsed
+
+
+__all__ = [
+    "GuardianPlanError",
+    "PROHIBITED_OPERATIONS",
+    "build_remediation_plan",
+    "canonical_plan_bytes",
+    "compute_plan_id",
+    "remediation_plan_schema",
+    "validate_remediation_plan",
+]
