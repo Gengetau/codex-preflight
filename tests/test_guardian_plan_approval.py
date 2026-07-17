@@ -11,8 +11,8 @@ from codex_preflight_guardian.plan_approval import (
     validate_plan_approval,
 )
 from codex_preflight_guardian.remediation_plan import (
-    GuardianPlanError,
     PROHIBITED_OPERATIONS,
+    GuardianPlanError,
     build_remediation_plan,
     validate_remediation_plan,
 )
