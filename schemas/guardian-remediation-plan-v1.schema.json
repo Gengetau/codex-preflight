@@ -43,7 +43,6 @@
         },
         "originalDecision": {
           "enum": [
-            "ALLOW",
             "WARN",
             "ASK_USER",
             "BLOCK"
@@ -85,7 +84,8 @@
           "kind",
           "path",
           "preimageDigest",
-          "postimageDigest"
+          "postimageDigest",
+          "postimageContent"
         ],
         "properties": {
           "operationId": {
@@ -123,6 +123,17 @@
               },
               {
                 "const": "absent"
+              }
+            ]
+          },
+          "postimageContent": {
+            "oneOf": [
+              {
+                "type": "string",
+                "maxLength": 65536
+              },
+              {
+                "type": "null"
               }
             ]
           }
