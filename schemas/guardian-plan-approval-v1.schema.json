@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codex-preflight.local/schemas/guardian-plan-approval-v1.schema.json",
+  "title": "Codex Preflight Guardian Plan Approval v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "approvalId",
+    "planId",
+    "targetId",
+    "sessionId",
+    "approvedAt",
+    "expiresAt",
+    "nonce",
+    "singleUse"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "guardian-plan-approval/v1"
+    },
+    "approvalId": {
+      "type": "string",
+      "pattern": "^guardian-approval-v1:sha256:[0-9a-f]{64}$"
+    },
+    "planId": {
+      "type": "string",
+      "pattern": "^guardian-plan-v1:sha256:[0-9a-f]{64}$"
+    },
+    "targetId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "sessionId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "approvedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "expiresAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "nonce": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32,128}$"
+    },
+    "singleUse": {
+      "const": true
+    }
+  }
+}
