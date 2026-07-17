@@ -278,7 +278,10 @@ No local web server, extra API key, user Python environment, or package installa
 
 No further BW1 product code is planned. The deferred Bash probe may add evidence later, but it is not a reason to expand the BW1 implementation.
 
-`BW2 Exact Plan Approval` is active. The initial local identity and approval core is implemented:
+`BW2 Exact Plan Approval` is active at implementation head
+`1e2ffc475f15a66161ef5fec8846b8029402f698`.
+
+The initial local identity and approval core is implemented:
 
 - a closed `guardian-remediation-plan/v1` contract
 - exact source binding to a validated `guardian-context/v1`
