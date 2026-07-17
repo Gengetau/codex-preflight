@@ -120,8 +120,7 @@ MCP inventories, supported Python and Git integrations, commit-bound file identi
 published release state. Repository and GitHub evidence remains untrusted data.
 
 The target checkout is never added to a runtime probe's `PYTHONPATH`. A trusted runtime package must
-be filesystem-isolated from the target checkout before dynamic inventory verification can run. This
-establishes filesystem separation without claiming independent build provenance.
+provide filesystem separation from the target checkout before dynamic inventory verification can run.
 
 ## Codex Plugin Installation
 
@@ -214,6 +213,16 @@ same installed plugin can still provide MCP scanning and advisory explanation.
 
 The deterministic scanner remains the sole authority for `ALLOW`, `WARN`, `ASK_USER`, and `BLOCK`.
 Model explanation is advisory and cannot change policy, mint approval, or declare a repository safe.
+
+## Build Week Checkpoint Boundary
+
+BW1 engineering is complete. The Windows x64 clean-install product path passed in `skill-only` mode;
+exact-runtime Bash `hook-active` certification is deferred and is never inferred from packaging.
+
+BW2 is limited to exact plan approval: a closed `guardian-remediation-plan/v1` contract, complete
+canonical identity, stable `planId`, a separate exact and single-use approval record, and drift tests.
+BW2 does not edit files, execute repairs, probe `apply_patch`, run a changed command, or add MCP
+mutating authority. Those capabilities remain later checkpoints.
 
 ## MCP
 
@@ -334,6 +343,40 @@ Compare existing local JSON reports without scanning or executing report content
 codex-preflight report compare baseline.json candidate.json --format markdown
 ```
 
+Comparison covers decisions, command classifications, policy selectors, command contributions,
+findings, policy rule contributions, execution capabilities, and uncertainties. Inputs are bounded
+local files; UNC, URL, scp-like, and clone-like forms are rejected before filesystem access, and all
+report text remains untrusted data.
+
+README link-poisoning findings use `README_` rule IDs:
+
+- `README_FAKE_RELEASE_LINK`: release/download wording points away from the expected GitHub
+  Releases page.
+- `README_INSTALLER_FROM_NON_RELEASE_HOST`: installer/setup/download wording points to a target
+  that is not shaped like a GitHub Releases asset.
+- `README_RAW_SOURCE_ARCHIVE_DOWNLOAD`: download/install/release wording points to raw source URLs
+  such as raw GitHub file paths.
+- `README_DEFEAT_SECURITY_WARNING`: repository documentation encourages bypassing operating
+  system, browser, antivirus, Defender, or SmartScreen warnings.
+
+For safe read-only commands these findings warn; for install, build, and script-execution scopes
+they require user review. Evidence snippets remain labeled as repository-controlled untrusted data.
+
+Rust and Go ecosystem findings use warning-oriented rule IDs:
+
+- `RUST_BUILD_SCRIPT`: a `build.rs` file or Cargo package build script is present.
+- `RUST_CARGO_SOURCE_REPLACEMENT`: Cargo source replacement or custom registry configuration is
+  present.
+- `RUST_CARGO_ALIAS`: Cargo aliases can hide additional subcommands behind familiar names.
+- `RUST_CARGO_GIT_SOURCE`: `Cargo.lock` references a git-sourced dependency.
+- `GO_GENERATE_DIRECTIVE`: repository source declares a `//go:generate` command.
+- `GO_TESTMAIN`: Go tests define a `TestMain` hook.
+- `GO_CGO_USAGE`: Go source imports cgo through `import "C"`.
+- `GO_MODULE_REPLACE` and `GO_LOCAL_MODULE_REPLACE`: `go.mod` changes module resolution.
+
+These findings are local static signals. Codex Preflight does not run Cargo, Go, build scripts,
+tests, generators, compilers, package managers, or repository code while detecting them.
+
 ## External Repository Scan
 
 Scan a public repository without running its code:
@@ -342,21 +385,28 @@ Scan a public repository without running its code:
 codex-preflight preflight --repo https://github.com/octocat/Hello-World.git --ref master --command "cat README" --format json
 ```
 
-Unsafe local, file, SSH, Git, and `ext::` clone forms are rejected by default.
+Clone protocol restrictions reject unsafe local, file, ssh, git, and `ext::` clone URLs by default.
 
 ## Corpus
 
-Run the synthetic historical-pattern corpus:
+Run the safe synthetic historical-pattern corpus:
 
 ```bash
 codex-preflight corpus scan
 ```
 
-The corpus contains static fixtures only. The scanner reads files and compares expected decisions
-and rule IDs. It never runs package managers, lifecycle hooks, shell payloads, Docker, tests, or
-fixture code.
+The corpus contains static fixtures only. The scanner reads files and compares actual decisions and
+rule IDs with expected outcomes. JSON and Markdown output group cases by category, display expected
+and actual rules, and label negative controls.
 
-## Trust and Cache
+## Trust And Cache
+
+`ALLOW` and `WARN` scan reports can be cached by repository identity, head commit, critical-file
+fingerprint, command scope, policy version, and ruleset version. Local trust approvals use the same
+scope, so approval is invalidated by policy or ruleset changes, relevant file changes, or a
+different command scope.
+
+Use:
 
 ```bash
 codex-preflight trust approve --cwd . --command "pnpm install" --ttl 7d
@@ -365,15 +415,33 @@ codex-preflight trust revoke --cwd .
 codex-preflight cache clear
 ```
 
-Approvals are scoped by repository identity, command scope, critical-file fingerprint, policy, and
-ruleset version.
+## Dogfooding Workflow
+
+When working on this project, run preflight before tests, lint, package installation, Docker, shell
+scripts, MCP startup, or commands in unfamiliar repositories:
+
+```bash
+codex-preflight preflight --cwd . --command "pytest" --format json --no-cache
+pytest
+
+codex-preflight preflight --cwd . --command "ruff check ." --format json --no-cache
+ruff check .
+```
+
+If the decision is `ASK_USER` or `BLOCK`, stop and inspect the report before continuing.
 
 ## Development
 
+Run tests:
+
 ```bash
 pytest
+```
+
+Run lint:
+
+```bash
 ruff check .
-python scripts/sync_marketplace_plugin.py --check
 ```
 
 ## Release History
@@ -389,8 +457,9 @@ license terms and [NOTICE](NOTICE) for attribution information.
 
 ## Limitations
 
-Codex Preflight is static, heuristic, and best-effort. It does not prove a repository is safe and
-does not replace SAST, dependency audit tools, malware sandboxes, or CVE scanners. Dynamic behavior
-may evade static analysis. Unknown, dynamic, missing, outside-repository, symlink, oversized, binary,
-or incompletely scanned high-risk paths are escalated conservatively. Very large graphs or finding
-sets may be summarized with explicit report-budget uncertainty.
+Codex Preflight is static, heuristic, and best-effort. It does not prove a repository is safe, does
+not execute code, and does not replace SAST, dependency audit tools, malware sandboxes, or CVE
+scanners. Dynamic runtime behavior may still evade static analysis. Unknown, dynamic, missing,
+outside-repository, symlink, oversized, binary, or incompletely scanned high-risk paths are
+escalated conservatively. Very large graphs or finding sets may be summarized with explicit
+report-budget uncertainty instead of unbounded detail.
