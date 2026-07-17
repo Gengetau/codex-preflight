@@ -102,7 +102,7 @@ The intended form is:
 planId = guardian-plan-v1:sha256:<digest-of-complete-canonical-plan>
 ```
 
-The digest must bind the complete validated plan, excluding only the `planId` field itself, including:
+The digest binds the complete validated plan, excluding only the `planId` field itself, including:
 
 - schema version
 - source report and command digests
@@ -110,17 +110,18 @@ The digest must bind the complete validated plan, excluding only the `planId` fi
 - isolated target identity
 - exact ordered target paths and edit operations
 - target-file preimage digests
+- complete intended UTF-8 postimage content and matching postimage digests
 - prohibited operations
 - verification conditions
 - expected deterministic improvement
-- evidence references
-- session or expiry binding where used
+- evidence references validated against the exact Guardian Context
+- session and expiry binding
 
-Unknown fields are rejected. Any field, nested value, operation order, path, preimage, or verification change produces a different `planId` or target-drift failure.
+Unknown fields are rejected. Any field, nested value, operation order, path, preimage, postimage, evidence reference, or verification change produces a different `planId` or validation failure.
 
-Before an edit, local code revalidates the complete plan, recomputes the ID, verifies the approval record, and rechecks target state.
+Before any later edit, local code must revalidate the complete plan, recompute the ID, verify the separate approval record, and recheck target state.
 
-When pre-edit Hook enforcement is unavailable, `planId` still defines the approved intent. The isolated repair is accepted only if the complete resulting patch matches the approved paths and operations and the deterministic rescan satisfies the verification gate.
+When pre-edit Hook enforcement is unavailable, `planId` still defines the approved intent. The isolated repair is accepted only if the complete resulting patch matches the approved paths and postimages and the deterministic rescan satisfies the verification gate.
 
 ## Prior Work Boundary
 
@@ -190,7 +191,7 @@ When the trusted Bash Hook is verified active, the synthetic marker is an uncond
 
 The demo must never execute npm, pnpm, lifecycle hooks, shell payloads, Node.js, Python, Docker, build, test, or any fixture command and must never access the network.
 
-Codex may edit only the prepared temporary copy after exact plan approval.
+Codex may edit only the prepared temporary copy after exact plan approval and only in a later capability-gated checkpoint.
 
 The video must label which repair mode was used:
 
@@ -229,12 +230,12 @@ The intended clean-environment path is:
 
 1. Add and install the Codex Preflight marketplace plugin, which includes the supported bundled runtime.
 2. Start a new Codex session and record the exact Codex version, surface, and operating system.
-3. Check the effective Hook feature state. Current builds use canonical key `hooks`; do not require or document deprecated aliases as a universal step.
+3. Check the effective Hook feature state.
 4. Review and trust the exact bundled Hook definition.
 5. Run a harmless live Bash allow/deny probe and verify the Hook is actually active on that surface.
 6. If the probe fails, select read-only fallback and do not attempt the synthetic command.
 7. Use the active GPT-5.6 Codex model for the documented safe synthetic demo.
-8. Review the complete closed remediation plan and its recomputed `planId`.
+8. Review the complete closed remediation plan, including exact intended postimage content, and its locally recomputed `planId`.
 9. Approve or reject that exact `planId` through a separate bounded approval record.
 10. Use `guarded-repair` only after an exact-build `apply_patch` capability probe passes; otherwise use `verified-isolated-repair`.
 11. Observe deterministic rescan and before/after evidence.
@@ -246,7 +247,8 @@ No local web server, extra API key, user Python environment, or package installa
 
 - Deterministic policy remains authoritative.
 - Repository evidence is untrusted data.
-- GPT-5.6 explanation is advisory.
+- GPT-5.6 explanation and plan proposal are advisory.
+- The model cannot choose `planId` or create approval.
 - Skill instructions are workflow guidance, not enforcement.
 - Hook protection is reported only after an exact runtime probe.
 - Windows Hook protection is never inferred from packaging or `commandWindows` alone.
@@ -276,12 +278,21 @@ No local web server, extra API key, user Python environment, or package installa
 
 No further BW1 product code is planned. The deferred Bash probe may add evidence later, but it is not a reason to expand the BW1 implementation.
 
-`BW2 Exact Plan Approval` is now active. Its scope is limited to:
+`BW2 Exact Plan Approval` is active. The initial local identity and approval core is implemented:
 
-- a closed `guardian-remediation-plan/v1` schema
-- canonical encoding of the complete validated plan excluding only `planId`
+- a closed `guardian-remediation-plan/v1` contract
+- exact source binding to a validated `guardian-context/v1`
+- complete intended UTF-8 postimage content with matching SHA-256 digest
+- canonical UTF-8 JSON identity excluding only `planId`
 - stable `guardian-plan-v1:sha256:<digest>` identity
-- a separate exact, target-bound, expiring, single-use approval record
-- validation and drift tests for every bound top-level and nested field, operation order, path, preimage, evidence reference, and verification condition
+- fixed prohibited operations and bounded verification conditions
+- evidence references and removed-rule claims checked against the exact Guardian Context
+- a separate `guardian-plan-approval/v1` record bound to plan, target, session, nonce, approval time, and expiry
+- approval lifetime capped at fifteen minutes and at the parent plan expiry
+- process-local single-use consumption enforcement
+- checked-in JSON Schemas locked to code contracts
+- drift tests for top-level and nested fields, operation order, path, preimage, complete postimage, evidence, verification, target, session, expiry, and approval reuse
+
+BW2 is not yet declared complete. The next BW2 slice is the real Codex product-path proposal, complete-plan display, explicit approval/rejection interaction, and evidence capture using this local validator. That slice must still stop before any edit or repair.
 
 BW2 does not edit files, run repair, probe `apply_patch`, rescan a changed target, execute a planned command, or add new MCP authority. Those remain BW3 and later checkpoints.
