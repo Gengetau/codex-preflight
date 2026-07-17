@@ -219,8 +219,13 @@ Model explanation is advisory and cannot change policy, mint approval, or declar
 BW1 engineering is complete. The Windows x64 clean-install product path passed in `skill-only` mode;
 exact-runtime Bash `hook-active` certification is deferred and is never inferred from packaging.
 
-BW2 is limited to exact plan approval: a closed `guardian-remediation-plan/v1` contract, complete
-canonical identity, stable `planId`, a separate exact and single-use approval record, and drift tests.
+BW2 is limited to exact plan approval. Its closed `guardian-remediation-plan/v1` binds the exact
+Guardian Context, isolated target, ordered operations, preimage digests, complete intended UTF-8
+postimage content and matching digests, fixed prohibited operations, verification conditions,
+evidence references, session, and expiry. Local canonicalization computes the stable `planId`; the
+model cannot choose it. Approval is a separate target- and session-bound record with its own nonce,
+expiry, and single-use enforcement.
+
 BW2 does not edit files, execute repairs, probe `apply_patch`, run a changed command, or add MCP
 mutating authority. Those capabilities remain later checkpoints.
 
