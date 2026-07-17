@@ -8,7 +8,6 @@ from typing import Any
 
 from codex_preflight_guardian.remediation_plan import (
     PLAN_ID_PREFIX,
-    GuardianPlanError,
     validate_remediation_plan,
 )
 
