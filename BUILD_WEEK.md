@@ -227,22 +227,20 @@ Synthetic fixture commands executed: 0
 
 The intended clean-environment path is:
 
-1. Install Python 3.12 or newer.
-2. Install `codex-preflight[mcp]`.
-3. Add and install the Codex Preflight marketplace plugin.
-4. Record the exact Codex version, surface, and operating system.
-5. Check the effective Hook feature state. Current builds use canonical key `hooks`; do not require or document deprecated aliases as a universal step.
-6. Review and trust the exact bundled Hook definition.
-7. Run a harmless live Bash allow/deny probe and verify the Hook is actually active on that surface.
-8. If the probe fails, select read-only fallback and do not attempt the synthetic command.
-9. Start a new Codex session using GPT-5.6.
-10. Enter the documented safe synthetic demo prompt.
-11. Approve or reject the exact displayed `planId`.
-12. Use `guarded-repair` only after an exact-build `apply_patch` capability probe passes; otherwise use `verified-isolated-repair`.
-13. Observe deterministic rescan and before/after evidence.
-14. Stop with fixture execution count `0`.
+1. Add and install the Codex Preflight marketplace plugin, which includes the supported bundled runtime.
+2. Start a new Codex session and record the exact Codex version, surface, and operating system.
+3. Check the effective Hook feature state. Current builds use canonical key `hooks`; do not require or document deprecated aliases as a universal step.
+4. Review and trust the exact bundled Hook definition.
+5. Run a harmless live Bash allow/deny probe and verify the Hook is actually active on that surface.
+6. If the probe fails, select read-only fallback and do not attempt the synthetic command.
+7. Use the active GPT-5.6 Codex model for the documented safe synthetic demo.
+8. Review the complete closed remediation plan and its recomputed `planId`.
+9. Approve or reject that exact `planId` through a separate bounded approval record.
+10. Use `guarded-repair` only after an exact-build `apply_patch` capability probe passes; otherwise use `verified-isolated-repair`.
+11. Observe deterministic rescan and before/after evidence.
+12. Stop with fixture execution count `0`.
 
-No local web server or additional API key is part of this path.
+No local web server, extra API key, user Python environment, or package installation step is part of the normal plugin path.
 
 ## Safety Model
 
@@ -263,17 +261,27 @@ No local web server or additional API key is part of this path.
 
 ## Current State
 
-`BW0 Baseline` and the hook-backed architecture planning are complete.
+`BW0 Baseline` is complete.
 
-The Build Week branch contains the bounded Bash `PreToolUse` Hook, additive bounded and redacted
-`guardian-context/v1` output on the existing `preflight_check` MCP tool, and the
-`guardian-explanation/v1` protocol that keeps deterministic findings separate from advisory model
-explanation.
+`BW1 Hook Gate and Explain` is engineering-complete at exact head
+`666f45e3b064567583b126ca38a41e9207ee2972`:
 
-BW1 now uses only the real Codex product path: Codex itself performs the harmless live Hook probe,
-calls the existing MCP tool, and renders the deterministic result and advisory explanation in the
-conversation. No separate self-verification CLI, evidence-harness subsystem, or additional MCP tool
-is part of the product.
+- the bounded Bash `PreToolUse` Hook is implemented
+- `guardian-context/v1` is exposed through the existing `preflight_check` MCP tool
+- `guardian-explanation/v1` keeps deterministic findings separate from advisory model output
+- the self-contained Windows x64 and Linux x64 plugin runtimes are built, digest-bound, and smoke-tested
+- the Windows x64 clean-install real Codex product path passed without user Python configuration
+- native Windows PowerShell is correctly reported as `skill-only`
+- exact-runtime Bash `hook-active` certification is deferred and must not be inferred
 
-The remaining BW1 gate is to run and capture that real Codex product demonstration on the exact
-target runtime. BW2 approval, repair modes, and later Build Week checkpoints remain out of scope.
+No further BW1 product code is planned. The deferred Bash probe may add evidence later, but it is not a reason to expand the BW1 implementation.
+
+`BW2 Exact Plan Approval` is now active. Its scope is limited to:
+
+- a closed `guardian-remediation-plan/v1` schema
+- canonical encoding of the complete validated plan excluding only `planId`
+- stable `guardian-plan-v1:sha256:<digest>` identity
+- a separate exact, target-bound, expiring, single-use approval record
+- validation and drift tests for every bound top-level and nested field, operation order, path, preimage, evidence reference, and verification condition
+
+BW2 does not edit files, run repair, probe `apply_patch`, rescan a changed target, execute a planned command, or add new MCP authority. Those remain BW3 and later checkpoints.
