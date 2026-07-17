@@ -8,6 +8,7 @@ from typing import Any
 
 from codex_preflight_guardian.remediation_plan import (
     PLAN_ID_PREFIX,
+    GuardianPlanError,
     validate_remediation_plan,
 )
 
@@ -71,12 +72,13 @@ def plan_approval_schema() -> dict[str, Any]:
 
 def build_plan_approval(
     plan: dict[str, Any],
+    source_context: dict[str, Any],
     *,
     approved_at: str,
     expires_at: str,
     nonce: str,
 ) -> dict[str, Any]:
-    validated_plan = validate_remediation_plan(plan)
+    validated_plan = _validated_plan(plan, source_context)
     approval = {
         "schemaVersion": SCHEMA_VERSION,
         "approvalId": f"{APPROVAL_ID_PREFIX}{'0' * 64}",
@@ -90,7 +92,12 @@ def build_plan_approval(
     }
     _validate_structure(approval, validated_plan)
     approval["approvalId"] = compute_approval_id(approval)
-    return validate_plan_approval(approval, validated_plan, now=approved_at)
+    return validate_plan_approval(
+        approval,
+        validated_plan,
+        source_context,
+        now=approved_at,
+    )
 
 
 def canonical_approval_bytes(approval: object) -> bytes:
@@ -117,10 +124,11 @@ def compute_approval_id(approval: object) -> str:
 def validate_plan_approval(
     approval: object,
     plan: dict[str, Any],
+    source_context: dict[str, Any],
     *,
     now: str,
 ) -> dict[str, Any]:
-    validated_plan = validate_remediation_plan(plan)
+    validated_plan = _validated_plan(plan, source_context)
     value = _validate_structure(approval, validated_plan)
     expected = compute_approval_id(value)
     if value["approvalId"] != expected:
@@ -145,10 +153,16 @@ class ApprovalLedger:
         self,
         approval: object,
         plan: dict[str, Any],
+        source_context: dict[str, Any],
         *,
         now: str,
     ) -> dict[str, Any]:
-        value = validate_plan_approval(approval, plan, now=now)
+        value = validate_plan_approval(
+            approval,
+            plan,
+            source_context,
+            now=now,
+        )
         approval_id = value["approvalId"]
         if approval_id in self._consumed:
             raise GuardianApprovalError("approval has already been consumed")
@@ -157,6 +171,16 @@ class ApprovalLedger:
 
     def is_consumed(self, approval_id: str) -> bool:
         return approval_id in self._consumed
+
+
+def _validated_plan(
+    plan: dict[str, Any],
+    source_context: dict[str, Any],
+) -> dict[str, Any]:
+    try:
+        return validate_remediation_plan(plan, source_context)
+    except GuardianPlanError as exc:
+        raise GuardianApprovalError("approval plan is invalid") from exc
 
 
 def _validate_structure(approval: object, plan: dict[str, Any]) -> dict[str, Any]:
