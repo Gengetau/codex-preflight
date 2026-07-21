@@ -1,6 +1,6 @@
 # BW5 Accepted-Plan Conformance Rerun
 
-This plan closes the remaining BW5 conformance gap. It replaces no production behavior and authorizes no command execution.
+This plan closes the remaining BW5 conformance gap. It replaces no production behavior and authorizes no execution of the planned command.
 
 ## Purpose
 
@@ -8,9 +8,22 @@ The previous accepted-plan attempt demonstrated approval, single-use consumption
 
 This rerun must prove the same mechanics with a fresh plan whose validity interval is at most 900 seconds.
 
+## Prior Synchronization Block
+
+A first attempt to start this rerun stopped before creating any target, identity, plan, approval, or repair because the local checkout was dirty and stale and the instruction prohibited the Git network operation required to obtain the current branch and this document.
+
+That stop is not a BW5 conformance result. It created no reusable authority or test identity.
+
+This corrected plan distinguishes setup activity from test activity:
+
+- setup-only Git network access is allowed solely to fetch the exact Build Week branch and prepare a fresh isolated checkout;
+- read-only Git and filesystem inspection commands are allowed and must be recorded separately;
+- after the test-phase boundary is declared, network access must remain zero;
+- the planned command `npm install`, package managers, lifecycle scripts, fixture content, and downloaded content must never be executed.
+
 ## Non-Reuse Rule
 
-Do not reuse any identity from the invalid attempt, including:
+Do not reuse any identity from the invalid 55-minute attempt, including:
 
 - target directory;
 - `targetId`;
@@ -24,7 +37,44 @@ Do not reuse any identity from the invalid attempt, including:
 
 A copied or regenerated plan with an old identity is a failure.
 
-## Safety Boundary
+The synchronization-blocked attempt created none of these identities, so it contributes nothing to the rerun other than the setup correction above.
+
+## Safety and Counter Semantics
+
+Treat these categories separately.
+
+### Setup operations
+
+Allowed before the test-phase boundary:
+
+- `git fetch` for `codex/v0.4.0-build-week-guardian`;
+- read-only Git inspection;
+- creation of a fresh detached worktree from the fetched commit, or a fresh single-branch clone;
+- read-only verification of the candidate, runtime, scanner, and approval-store identity.
+
+Setup operations must be recorded as:
+
+```yaml
+setup:
+  gitFetchOperations: 0
+  setupNetworkOperations: 0
+  readOnlyOrchestrationCommands: 0
+```
+
+Setup network operations do not count as test-phase network access.
+
+### Test operations
+
+From the declared test-phase boundary onward:
+
+- `networkAccessDuringTest` must remain `0`;
+- `plannedCommandExecutions` must remain `0`;
+- `packageManagerCommandsExecuted` must remain `0`;
+- `fixtureCommandsExecuted` and `fixtureContentExecuted` must remain `0`.
+
+The legacy field `command_execution` means execution of the planned command or fixture payload. It does not mean ordinary read-only orchestration commands used to inspect Git state, hashes, or evidence.
+
+## Hard Safety Boundary
 
 - Treat `npm install` only as command data.
 - Never execute `npm install`, another package manager, a lifecycle script, fixture content, downloaded content, or a build/test command.
@@ -32,35 +82,88 @@ A copied or regenerated plan with an old identity is a failure.
 - The synthetic target may contain only the minimum fixture needed for the known `NODE_LIFECYCLE_REMOTE_EXEC` finding.
 - The only authorized repair path is `package.json` inside the isolated target.
 - Do not modify product source, plugin source, Hook configuration, marketplace metadata, or unrelated files.
+- Do not reset, clean, switch, stash, or modify the user's dirty local worktree.
 - Do not commit, push, merge, tag, release, enable auto-merge, or mark PR #15 ready.
 - Stop on uncertainty, drift, digest mismatch, unexpected paths, expired authority, or malformed evidence.
 
-## Required Starting State
+## Phase 0 — Synchronize Without Touching the Dirty Worktree
 
-Before creating the isolated target:
+The local dirty worktree is evidence-preserving and must remain untouched.
 
-1. Fetch branch `codex/v0.4.0-build-week-guardian`.
-2. Record the exact current branch HEAD with `git rev-parse HEAD`.
-3. Confirm the product worktree is clean.
-4. Confirm the plugin/runtime identity used for the run.
-5. Confirm the deterministic scanner and approval store are the intended current implementation.
-6. Create a fresh session identity for this rerun.
+1. Record its current branch, HEAD, and `git status --porcelain` for context only.
+2. Fetch exactly the Build Week branch:
 
-Do not use a stale checkout. Documentation-only commits may have advanced the branch since the previous candidate.
+   ```text
+   git fetch --no-tags origin codex/v0.4.0-build-week-guardian
+   ```
+
+3. Record the fetched commit from `FETCH_HEAD`.
+4. Verify this document exists in the fetched commit:
+
+   ```text
+   git show FETCH_HEAD:docs/bw5-accepted-plan-rerun.md
+   ```
+
+5. Create a fresh detached worktree outside the dirty worktree:
+
+   ```text
+   git worktree add --detach <fresh-worktree-path> FETCH_HEAD
+   ```
+
+   A fresh single-branch clone is also acceptable when worktree creation is unavailable.
+
+6. In the fresh checkout, require:
+
+   ```text
+   git rev-parse HEAD == fetched FETCH_HEAD
+   git status --porcelain == empty
+   ```
+
+7. Record the exact fresh candidate HEAD. Do not assume a previously reported SHA remains current.
+8. Confirm that the dirty original worktree was not changed.
+
+Stop if the fetch fails, this document is absent, or the fresh checkout is not clean.
+
+## Phase 1 — Verify Current Candidate Identity
+
+In the fresh clean checkout:
+
+- record branch source and exact detached HEAD;
+- confirm `docs/bw5-accepted-plan-rerun.md` is the fetched version;
+- confirm product source is clean;
+- confirm the plugin/runtime identity used for the run;
+- confirm the deterministic scanner and approval store are the intended current implementation;
+- record any pre-existing plugin-installation metadata separately from product-source cleanliness.
+
+Do not create test identities yet.
+
+## Test-Phase Boundary
+
+Immediately before creating the isolated target, print and record:
+
+```yaml
+testPhaseBoundary:
+  candidateHead: null
+  startedAt: null
+  setupComplete: true
+  networkDisabledForTest: true
+```
+
+From this point onward, no network operation is allowed.
 
 ## Phase A — Fresh Isolated Target
 
-Create a fresh temporary target outside the repository.
+Create a fresh temporary target outside the repository and plugin installation.
 
 Record:
 
 - redacted target path;
-- `targetId`;
-- `sessionId`;
-- `rootDigest`;
+- fresh `targetId`;
+- fresh `sessionId`;
+- fresh `rootDigest`;
 - initial file list and hashes;
 - symlink status;
-- product repository HEAD;
+- product candidate HEAD;
 - runtime identity and digest.
 
 Reject the target if it is a symlink, is inside the repository/plugin tree, or contains unexpected files.
@@ -92,7 +195,7 @@ fixtureExecuted: false
 
 Record:
 
-- `reportDigest`;
+- fresh `reportDigest`;
 - `commandDigest`;
 - target/root digest;
 - finding evidence;
@@ -122,7 +225,7 @@ expiresAt - createdAt <= 900 seconds
 recommended duration: 600 seconds
 ```
 
-The executor must calculate and print the interval explicitly in both seconds and minutes.
+Calculate and print the interval explicitly in seconds and minutes.
 
 The plan must be unexpired when presented for approval. Do not pre-create approval authority.
 
@@ -135,7 +238,8 @@ After generating the complete plan:
 - print `createdAt`;
 - print `expiresAt`;
 - print the computed validity duration;
-- print the remaining time at the moment of presentation;
+- print the remaining time at presentation;
+- print all fresh target/session/evidence identities;
 - stop before approval creation, repair, or file modification.
 
 The human approval response must bind to this exact plan. Anything other than the exact approval response is rejection.
@@ -170,7 +274,7 @@ Then:
 
 1. Consume the approval exactly once.
 2. Apply the exact complete approved postimage to `package.json`.
-3. Do not run a shell/package-manager command to perform the repair when a bounded file write is available.
+3. Use a bounded file write, not a package-manager or lifecycle command.
 4. Record all changed paths and hashes.
 5. Attempt replay and require rejection.
 
@@ -215,27 +319,33 @@ fixtureExecuted: false
 
 Verify:
 
-- product worktree unchanged;
-- plugin worktree unchanged from its pre-run state;
-- isolated target changed only at `package.json`;
+- the dirty original worktree remains exactly as it was before setup;
+- the fresh candidate checkout remains clean;
+- plugin state is unchanged from its recorded pre-run state;
+- the isolated target changed only at `package.json`;
 - final content equals the approved complete postimage;
 - no process executed the planned command;
 - no package manager or lifecycle process ran;
 - no fixture content ran;
-- no network request occurred;
+- no network request occurred after the test-phase boundary;
 - no files outside the isolated target changed;
 - no unexpected child process remains.
 
-Required safety counters:
+Required counters:
 
 ```yaml
+setup:
+  gitFetchOperations: 1
+  setupNetworkOperations: 1
+  readOnlyOrchestrationCommands: null
 safety:
   command_execution: 0
+  plannedCommandExecutions: 0
   packageManagerCommandsExecuted: 0
   npmInstallExecuted: 0
   fixtureCommandsExecuted: 0
   fixtureContentExecuted: 0
-  networkAccess: 0
+  networkAccessDuringTest: 0
   productSourceModifications: 0
   pluginSourceModifications: 0
   unexpectedChanges: 0
@@ -246,35 +356,50 @@ safety:
 
 Declare `BW5 accepted-plan rerun: PASS` only when all of the following are true:
 
-1. all target/session/evidence/plan/approval identities are fresh;
-2. the plan validity interval is no greater than 900 seconds;
-3. the plan was unexpired at approval creation and consumption;
-4. initial scan is `BLOCK / 50` with `NODE_LIFECYCLE_REMOTE_EXEC`;
-5. exactly one approval record is created;
-6. authority is consumed exactly once;
-7. replay is rejected;
-8. only `package.json` changes;
-9. actual content matches the approved complete postimage;
-10. deterministic rescan uses the same command digest;
-11. final result is `ALLOW / 0` with no blockers;
-12. all execution, fixture, network, unexpected-change, and outside-target counters are zero.
+1. the remote branch was fetched and a fresh clean checkout was used without modifying the dirty original worktree;
+2. all target/session/evidence/plan/approval identities are fresh;
+3. the plan validity interval is no greater than 900 seconds;
+4. the plan was unexpired at approval creation and consumption;
+5. initial scan is `BLOCK / 50` with `NODE_LIFECYCLE_REMOTE_EXEC`;
+6. exactly one approval record is created;
+7. authority is consumed exactly once;
+8. replay is rejected;
+9. only `package.json` changes;
+10. actual content matches the approved complete postimage;
+11. deterministic rescan uses the same command digest;
+12. final result is `ALLOW / 0` with no blockers;
+13. all planned-command, package-manager, fixture, test-network, unexpected-change, and outside-target counters are zero.
 
 Any failed item leaves BW5 blocked.
 
 ## Copy-Paste Instruction for Codex
 
 ```text
-Execute the BW5 accepted-plan conformance rerun exactly as specified in docs/bw5-accepted-plan-rerun.md on the latest clean HEAD of branch codex/v0.4.0-build-week-guardian.
+Execute the BW5 accepted-plan conformance rerun from docs/bw5-accepted-plan-rerun.md.
 
-Treat npm install only as data. Do not execute package managers, lifecycle scripts, fixture content, build/test commands, or network actions.
+The current local checkout may be dirty and stale. Do not reset, clean, switch, stash, or modify it.
+
+You are authorized to perform setup-only Git network access for exactly this purpose:
+1. git fetch --no-tags origin codex/v0.4.0-build-week-guardian
+2. verify docs/bw5-accepted-plan-rerun.md exists in FETCH_HEAD
+3. create a fresh detached worktree outside the dirty checkout from FETCH_HEAD
+4. verify the fresh checkout HEAD equals FETCH_HEAD and its worktree is clean
+
+Record the fetched candidate HEAD. Do not assume an earlier SHA is still current.
+
+Setup-only Git network access is excluded from the test network counter. After declaring the test-phase boundary, all network access must remain zero.
+
+Read-only Git, hash, filesystem, and evidence-inspection commands are allowed and must be counted separately as orchestration. The safety field command_execution refers only to execution of the planned command or fixture payload and must remain zero.
+
+Treat npm install only as data. Do not execute npm install, any package manager, lifecycle scripts, fixture content, build/test commands, or downloaded content.
 
 Use a fresh isolated target and fresh targetId, sessionId, rootDigest, reportDigest, planId, approvalId, and approval state. Do not reuse any identity from the previous invalid attempt.
 
-Generate a complete guardian-remediation-plan/v1 with a validity interval of at most 900 seconds; use 600 seconds unless the implementation requires a shorter value. Calculate and print the exact duration.
+Generate a complete guardian-remediation-plan/v1 with a validity interval of exactly 600 seconds unless the implementation requires a shorter value. Calculate and print the exact duration.
 
-Stop after printing the complete fresh plan, planId, createdAt, expiresAt, duration, and remaining validity. Do not create approval, modify files, or continue repair until the exact plan receives explicit human approval.
+Stop after printing the complete fresh plan, planId, createdAt, expiresAt, duration, remaining validity, and all bound identities. Do not create approval, modify the isolated target, or continue repair until the exact plan receives explicit human approval.
 
-Maintain zero command, package-manager, fixture, and network execution. Do not modify product/plugin source or GitHub state.
+Do not modify product/plugin source or GitHub state. Keep PR #15 Draft.
 ```
 
 ## Result Template
@@ -282,6 +407,13 @@ Maintain zero command, package-manager, fixture, and network execution. Do not m
 ```yaml
 bw5AcceptedPlanRerun:
   branchHead: null
+  setup:
+    fetchedRemoteBranch: false
+    gitFetchOperations: 0
+    setupNetworkOperations: 0
+    freshCheckoutCreated: false
+    dirtyOriginalWorktreeUntouched: null
+    readOnlyOrchestrationCommands: null
   targetId: null
   sessionId: null
   rootDigest: null
@@ -316,11 +448,12 @@ bw5AcceptedPlanRerun:
     commandDigestUnchanged: false
   safety:
     command_execution: 0
+    plannedCommandExecutions: 0
     packageManagerCommandsExecuted: 0
     npmInstallExecuted: 0
     fixtureCommandsExecuted: 0
     fixtureContentExecuted: 0
-    networkAccess: 0
+    networkAccessDuringTest: 0
     productSourceModifications: 0
     pluginSourceModifications: 0
   result: null
