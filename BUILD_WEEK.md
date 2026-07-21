@@ -168,7 +168,7 @@ outside-target changes: 0
 - `BW3 Repair Capability Gate`: **complete** — exact-surface capability probe selected `verified-isolated-repair`; package.json-only bounded repair, postimage matching, and replay rejection passed.
 - `BW4 Verify`: **complete** — unchanged-command deterministic rescan and before/after evidence passed without executing the command.
 - `BW5 Plugin Experience`: **complete** — clean installation, capability classification, valid 600-second accepted plan, one approval/consumption, isolated repair, replay rejection, and `BLOCK / 50 -> ALLOW / 0` verification passed.
-- `BW6 Submission Candidate`: **active** — public links, final candidate freeze, and final exact-head review remain.
+- `BW6 Submission Candidate`: **submitted / validation pending** — YouTube and Devpost are published; this submission-link commit must pass final exact-head review.
 
 ## Validation Coverage
 
@@ -204,13 +204,15 @@ Documentation-only submission commits create newer heads, so the final frozen su
 
 ## Submission Status
 
-Pending owner-account actions:
+Published owner-account links:
 
 ```text
-YouTube demo URL: pending
-Devpost project/submission URL: pending
+YouTube demo URL: https://youtu.be/L2L_fuGgzFM
+Devpost project/submission URL: https://devpost.com/software/codex-preflight-guardian
 ```
 
-After those URLs are available, they will be added to this document, `README.md`, and PR #15. The resulting commit will be frozen as the final submission candidate and must pass exact-head `CI` and `Build plugin runtime` before final acceptance.
+Devpost submission `1110678` is `Submitted` in the `Developer Tools` category.
+
+This submission-link commit is the final candidate and must pass exact-head `CI` and `Build plugin runtime` before final acceptance.
 
 PR #15 remains Draft. This document authorizes no merge, tag, release, auto-merge, or ready-for-review transition.

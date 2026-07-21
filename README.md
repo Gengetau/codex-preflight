@@ -232,7 +232,7 @@ BW2 Exact Plan Approval: complete
 BW3 Repair Capability Gate: complete
 BW4 Verify: complete
 BW5 Plugin Experience: complete
-BW6 Submission Candidate: active
+BW6 Submission Candidate: submitted; exact-head CI freeze pending
 ```
 
 The tested Windows and native Linux Codex sessions exposed `exec_command`, not canonical `Bash`.
@@ -249,8 +249,13 @@ consumption, replay rejection, isolated `package.json`-only repair, exact approv
 and same-command deterministic verification from `BLOCK / 50` to `ALLOW / 0`. Planned-command,
 package-manager, fixture, and test-phase network execution remained zero.
 
-See [BUILD_WEEK.md](BUILD_WEEK.md) and [Build Week status](docs/build-week-status.md). YouTube and
-Devpost links will be added after publication, followed by a final exact-head CI freeze.
+Submission links:
+
+- [YouTube demo](https://youtu.be/L2L_fuGgzFM)
+- [Devpost project](https://devpost.com/software/codex-preflight-guardian)
+
+See [BUILD_WEEK.md](BUILD_WEEK.md) and [Build Week status](docs/build-week-status.md). This
+submission-link commit is the final candidate for exact-head `CI` and `Build plugin runtime` validation.
 
 ## MCP
 
