@@ -19,7 +19,15 @@ Only work after the released baseline is claimed as Build Week implementation.
 - `BW3 Repair Capability Gate`: complete. The tested Windows Codex Desktop surface did not expose verified `apply_patch` Hook enforcement, so the supported path is `verified-isolated-repair` rather than `guarded-repair`.
 - `BW4 Verify`: complete. The same planned command is deterministically rescanned and before/after evidence is compared without executing the command.
 - `BW5 Plugin Experience`: complete on a clean Windows 11 Codex Desktop installation.
-- `BW6 Submission Candidate`: active. Final public documentation, evidence packaging, feedback ID, video, exact-head CI, and final review remain pending.
+- `BW6 Submission Candidate`: active. The selected `/feedback` Session ID is recorded; final public-document folding, evidence packaging, video, final exact-head CI, and exact-head review remain pending.
+
+## Selected Codex Feedback Session
+
+```text
+019f6891-7fa8-7640-a629-379ee5ec0627
+```
+
+This is the primary `/feedback` Session ID selected for the Build Week submission record.
 
 ## Verified Windows Desktop Product Path
 
@@ -108,14 +116,23 @@ The results above are report-level evidence from real product-path runs. Public 
 
 The deterministic scanner remains the sole authority for `ALLOW`, `WARN`, `ASK_USER`, and `BLOCK`. GPT-5.6 explanation and plan proposal are advisory. The model cannot choose `planId`, create approval, consume approval, or authorize command execution.
 
+## Exact-Head CI Record
+
+Candidate `7add58294b7f4d7fd5da9db82f7bd69b114f7a83` passed both:
+
+- `CI`
+- `Build plugin runtime`
+
+This documentation update creates a newer candidate commit, so those workflows must pass again before final exact-head acceptance.
+
 ## Remaining Release Gates
 
 Before the Draft PR can be marked ready:
 
 1. Fold the final status and installation guidance into `README.md` and `BUILD_WEEK.md`.
-2. Add the selected `/feedback` Session ID.
-3. Package redacted evidence and the final demo script.
-4. Record a final candidate commit.
-5. Run Windows and Linux CI, packaged-runtime smoke tests, marketplace synchronization checks, release diagnostics, and exact-head review on that candidate.
-6. Confirm video, Devpost, repository links, supported-platform wording, and known limitations.
+2. Package redacted evidence and the final demo script.
+3. Confirm Linux/Bash certification status or keep it explicitly deferred.
+4. Confirm video, Devpost, repository links, supported-platform wording, and known limitations.
+5. Record the final candidate commit.
+6. Run Windows and Linux CI, packaged-runtime smoke tests, marketplace synchronization checks, release diagnostics, and exact-head review on that candidate.
 7. Keep merge, tag, and release disabled until all gates pass.
