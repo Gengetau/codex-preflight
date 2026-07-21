@@ -11,7 +11,7 @@ Update every version-bearing file:
 - `codex_preflight_core/__init__.py`
 - `codex_preflight_mcp/__init__.py`
 - `.codex-plugin/plugin.json`
-- `.agents/plugins/plugins/codex-preflight/.codex-plugin/plugin.json`
+- `plugins/codex-preflight/.codex-plugin/plugin.json`
 
 Update the root plugin manifest first. Then regenerate and verify the marketplace plugin copy:
 

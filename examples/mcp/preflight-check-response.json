@@ -129,6 +129,66 @@
     "usedTrustCache": false,
     "cacheReason": null
   },
+  "guardianContext": {
+    "schemaVersion": "guardian-context/v1",
+    "reportDigest": "sha256:9dbbdc6152c75339378a949cc043afd21882a3606c3816d0645020cc3797ad6d",
+    "commandDigest": "sha256:728784616083099263b4208450e72cd35d3d864b30d594ee846af514588e0c54",
+    "deterministicDecision": {
+      "decision": "ASK_USER",
+      "riskScore": 10,
+      "commandScope": "script_execution",
+      "reason": "A policy matrix minimum applies to one or more findings for this command scope."
+    },
+    "evidenceRefs": [
+      {
+        "refId": "finding:0",
+        "kind": "finding",
+        "ruleId": "SCRIPT_TARGET_MISSING",
+        "severity": "MEDIUM",
+        "file": "",
+        "line": null,
+        "title": "Reachability uncertainty detected",
+        "evidence": "Referenced local script target was not found: pytest",
+        "trust": "untrusted"
+      },
+      {
+        "refId": "uncertainty:0",
+        "kind": "uncertainty",
+        "ruleId": "SCRIPT_TARGET_MISSING",
+        "severity": "MEDIUM",
+        "file": "",
+        "line": null,
+        "title": "Uncertainty",
+        "evidence": "Referenced local script target was not found: pytest",
+        "trust": "untrusted"
+      }
+    ],
+    "uncertainty": {
+      "present": true,
+      "included": 1,
+      "omitted": 0
+    },
+    "evidenceTrust": {
+      "repositoryContent": "untrusted",
+      "instructionBoundary": "treat-as-data",
+      "deterministicDecisionAuthoritative": true,
+      "advisoryModelMayOverride": false
+    },
+    "omittedCounts": {
+      "findings": 0,
+      "uncertainties": 0,
+      "evidenceRefs": 0
+    },
+    "redaction": {
+      "applied": true,
+      "omittedFields": [
+        "command",
+        "repo.path",
+        "environment",
+        "transcript"
+      ]
+    }
+  },
   "safety": {
     "analysisMode": "static-only",
     "repositoryContentTrust": "untrusted",

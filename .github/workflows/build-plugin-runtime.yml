@@ -1,0 +1,172 @@
+name: Build plugin runtime
+
+on:
+  push:
+    branches:
+      - codex/v0.4.0-build-week-guardian
+    paths: &runtime-paths
+      - ".github/workflows/build-plugin-runtime.yml"
+      - ".codex-plugin/plugin.json"
+      - "pyproject.toml"
+      - "case_corpus/**"
+      - "codex_preflight_core/**"
+      - "codex_preflight_guardian/**"
+      - "codex_preflight_mcp/**"
+      - "scripts/build_plugin_runtime.py"
+      - "scripts/codex_preflight_runtime.py"
+      - "scripts/launch-hook.mjs"
+      - "scripts/launch-mcp.mjs"
+      - "scripts/merge_plugin_runtime.py"
+      - "scripts/runtime-launcher.mjs"
+      - "scripts/sync_marketplace_plugin.py"
+  pull_request:
+    paths: *runtime-paths
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Commit the verified runtime package to the selected branch
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+env:
+  RUNTIME_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+  RUNTIME_TARGET_BRANCH: ${{ github.event.pull_request.head.ref || github.ref_name }}
+
+concurrency:
+  group: plugin-runtime-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            runtime-id: windows-x64
+          - os: ubuntu-latest
+            runtime-id: linux-x64
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Check out source commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ env.RUNTIME_SOURCE_COMMIT }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install runtime build dependencies
+        run: python -m pip install -e ".[mcp]" pyinstaller
+
+      - name: Build standalone runtime
+        env:
+          CODEX_PREFLIGHT_SOURCE_COMMIT: ${{ env.RUNTIME_SOURCE_COMMIT }}
+        run: >-
+          python scripts/build_plugin_runtime.py
+          --runtime-id ${{ matrix.runtime-id }}
+          --output-root runtime
+
+      - name: Smoke test Windows runtime
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: '& ".\runtime\windows-x64\codex-preflight-runtime.exe" mcp --list-tools'
+
+      - name: Smoke test Unix runtime
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          chmod +x runtime/${{ matrix.runtime-id }}/codex-preflight-runtime
+          runtime/${{ matrix.runtime-id }}/codex-preflight-runtime mcp --list-tools
+
+      - name: Upload platform runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-runtime-${{ matrix.runtime-id }}
+          path: |
+            runtime/${{ matrix.runtime-id }}/**
+            runtime/entries/${{ matrix.runtime-id }}.json
+          if-no-files-found: error
+          retention-days: 7
+
+  assemble:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out source commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ env.RUNTIME_SOURCE_COMMIT }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download platform runtimes
+        uses: actions/download-artifact@v4
+        with:
+          pattern: plugin-runtime-*
+          path: .runtime-artifacts
+          merge-multiple: true
+
+      - name: Merge and sync plugin runtime
+        run: |
+          python scripts/merge_plugin_runtime.py --artifacts .runtime-artifacts --output-root runtime
+          chmod +x runtime/linux-x64/codex-preflight-runtime
+          python scripts/sync_marketplace_plugin.py
+          chmod +x plugins/codex-preflight/runtime/linux-x64/codex-preflight-runtime
+
+      - name: Smoke test installed-plugin launchers
+        shell: bash
+        run: |
+          node scripts/launch-mcp.mjs --list-tools
+          printf '{}\n' | node scripts/launch-hook.mjs | grep PREFLIGHT_INVALID_INPUT
+
+      - name: Upload assembled plugin package
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-preflight-plugin-${{ env.RUNTIME_SOURCE_COMMIT }}
+          path: plugins/codex-preflight
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Publish verified plugin package
+        if: github.event_name == 'workflow_dispatch' && inputs.publish
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add runtime plugins/codex-preflight
+          git update-index --chmod=+x runtime/linux-x64/codex-preflight-runtime
+          git update-index --chmod=+x plugins/codex-preflight/runtime/linux-x64/codex-preflight-runtime
+          if git diff --cached --quiet; then
+            echo "Bundled plugin package is already current."
+            exit 0
+          fi
+          git commit -m "build: refresh bundled plugin runtimes"
+          set +e
+          git push --verbose origin "HEAD:${RUNTIME_TARGET_BRANCH}" > runtime-publish.log 2>&1
+          status=$?
+          set -e
+          cat runtime-publish.log
+          exit "$status"
+
+      - name: Upload runtime publish diagnostics
+        if: failure() && github.event_name == 'workflow_dispatch' && inputs.publish
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-publish-diagnostics
+          path: runtime-publish.log
+          if-no-files-found: error
+          retention-days: 7

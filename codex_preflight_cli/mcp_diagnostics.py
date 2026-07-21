@@ -19,13 +19,17 @@ from codex_preflight_mcp.runtime_compatibility import (
 
 MCP_SERVER_NAME = "codex-preflight"
 MCP_COMMAND = "codex-preflight-mcp"
+MCP_LAUNCHER = "./scripts/launch-mcp.mjs"
 MCP_INSTALL_COMMAND = 'python -m pip install "codex-preflight[mcp]"'
 MCP_MANIFEST_PATH = "./.mcp.json"
 EXPECTED_TOOL_NAMES = ("preflight_check", "corpus_scan")
-BUNDLED_MCP_CONFIG: dict[str, dict[str, object]] = {
-    MCP_SERVER_NAME: {
-        "command": MCP_COMMAND,
-        "args": [],
+BUNDLED_MCP_CONFIG: dict[str, object] = {
+    "mcpServers": {
+        MCP_SERVER_NAME: {
+            "command": "node",
+            "args": [MCP_LAUNCHER],
+            "cwd": ".",
+        }
     }
 }
 
@@ -239,9 +243,11 @@ def _discover_source_root(start: Path) -> Path | None:
 def _check_source_plugin(root: Path) -> DoctorCheck:
     root_manifest = root / ".codex-plugin" / "plugin.json"
     root_mcp = root / ".mcp.json"
-    marketplace_root = root / ".agents" / "plugins" / "plugins" / MCP_SERVER_NAME
+    root_launcher = root / "scripts" / "launch-mcp.mjs"
+    marketplace_root = root / "plugins" / MCP_SERVER_NAME
     marketplace_manifest = marketplace_root / ".codex-plugin" / "plugin.json"
     marketplace_mcp = marketplace_root / ".mcp.json"
+    marketplace_launcher = marketplace_root / "scripts" / "launch-mcp.mjs"
     try:
         manifest = _load_json(root_manifest)
         mcp_config = _load_json(root_mcp)
@@ -249,6 +255,8 @@ def _check_source_plugin(root: Path) -> DoctorCheck:
             raise ValueError(f"root manifest must declare mcpServers as {MCP_MANIFEST_PATH}")
         if mcp_config != BUNDLED_MCP_CONFIG:
             raise ValueError("root .mcp.json does not match the supported local stdio configuration")
+        if not root_launcher.is_file():
+            raise ValueError("root MCP launcher is missing")
         if marketplace_root.exists():
             packaged_manifest = _load_json(marketplace_manifest)
             packaged_mcp = _load_json(marketplace_mcp)
@@ -256,6 +264,8 @@ def _check_source_plugin(root: Path) -> DoctorCheck:
                 raise ValueError("marketplace manifest MCP declaration is stale")
             if packaged_mcp != mcp_config:
                 raise ValueError("marketplace .mcp.json is stale")
+            if marketplace_launcher.read_bytes() != root_launcher.read_bytes():
+                raise ValueError("marketplace MCP launcher is stale")
     except (OSError, json.JSONDecodeError, ValueError) as error:
         return DoctorCheck(
             "source-plugin",

@@ -65,10 +65,12 @@ _CONSUMED_TARGET_FILES = (
     "codex_preflight_mcp/server.py",
     ".codex-plugin/plugin.json",
     ".mcp.json",
+    "scripts/launch-mcp.mjs",
     "skills/codex-preflight/SKILL.md",
-    ".agents/plugins/plugins/codex-preflight/.codex-plugin/plugin.json",
-    ".agents/plugins/plugins/codex-preflight/.mcp.json",
-    ".agents/plugins/plugins/codex-preflight/skills/codex-preflight/SKILL.md",
+    "plugins/codex-preflight/.codex-plugin/plugin.json",
+    "plugins/codex-preflight/.mcp.json",
+    "plugins/codex-preflight/scripts/launch-mcp.mjs",
+    "plugins/codex-preflight/skills/codex-preflight/SKILL.md",
 )
 _TRUSTED_PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 _RUNTIME_PROBE = (
@@ -513,7 +515,7 @@ def _check_version_sources(snapshot: FileSnapshot, expected: str) -> ReleaseChec
         ("codex_preflight_mcp/__init__.py", _read_init_version),
         (".codex-plugin/plugin.json", _read_manifest_version),
         (
-            ".agents/plugins/plugins/codex-preflight/.codex-plugin/plugin.json",
+            "plugins/codex-preflight/.codex-plugin/plugin.json",
             _read_manifest_version,
         ),
     )
@@ -543,9 +545,10 @@ def _check_version_sources(snapshot: FileSnapshot, expected: str) -> ReleaseChec
 
 def _check_plugin_copy(snapshot: FileSnapshot) -> ReleaseCheck:
     pairs = (
-        (".codex-plugin/plugin.json", ".agents/plugins/plugins/codex-preflight/.codex-plugin/plugin.json"),
-        (".mcp.json", ".agents/plugins/plugins/codex-preflight/.mcp.json"),
-        ("skills/codex-preflight/SKILL.md", ".agents/plugins/plugins/codex-preflight/skills/codex-preflight/SKILL.md"),
+        (".codex-plugin/plugin.json", "plugins/codex-preflight/.codex-plugin/plugin.json"),
+        (".mcp.json", "plugins/codex-preflight/.mcp.json"),
+        ("scripts/launch-mcp.mjs", "plugins/codex-preflight/scripts/launch-mcp.mjs"),
+        ("skills/codex-preflight/SKILL.md", "plugins/codex-preflight/skills/codex-preflight/SKILL.md"),
     )
     stale: list[str] = []
     for source_name, destination_name in pairs:
@@ -563,7 +566,7 @@ def _check_plugin_copy(snapshot: FileSnapshot) -> ReleaseCheck:
             "Run `python scripts/sync_marketplace_plugin.py`, inspect the diff, then rerun with `--check`.",
             {"stale": stale},
         )
-    return ReleaseCheck("plugin.copy", "PASS", "All three marketplace plugin-copy files match their sources.")
+    return ReleaseCheck("plugin.copy", "PASS", "All four marketplace plugin-copy files match their sources.")
 
 
 def _check_static_inventories(snapshot: FileSnapshot) -> ReleaseCheck:

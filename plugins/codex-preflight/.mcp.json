@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "codex-preflight": {
+      "command": "node",
+      "args": ["./scripts/launch-mcp.mjs"],
+      "cwd": "."
+    }
+  }
+}

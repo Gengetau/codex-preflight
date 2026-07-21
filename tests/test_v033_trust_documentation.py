@@ -15,7 +15,7 @@ def test_current_version_sources_and_plugin_copies_are_aligned() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     root_plugin = json.loads((ROOT / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8"))
     marketplace_plugin = json.loads(
-        (ROOT / ".agents/plugins/plugins/codex-preflight/.codex-plugin/plugin.json").read_text(
+        (ROOT / "plugins/codex-preflight/.codex-plugin/plugin.json").read_text(
             encoding="utf-8"
         )
     )

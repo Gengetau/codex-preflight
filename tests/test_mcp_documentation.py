@@ -82,9 +82,10 @@ def test_success_examples_match_stable_contracts(tmp_path: Path) -> None:
         "agentInstruction",
         "findings",
         "executionGraph",
-        "reportLimits",
-        "cache",
-        "safety",
+            "reportLimits",
+            "cache",
+            "guardianContext",
+            "safety",
     }
 
     assert required_preflight <= preflight.keys()
@@ -130,6 +131,10 @@ def test_success_examples_match_stable_contracts(tmp_path: Path) -> None:
 
     actual_preflight = preflight_check(cwd=str(tmp_path), command="python -m pytest")
     actual_preflight["repo"] = preflight["repo"]
+    actual_context = actual_preflight["guardianContext"]
+    expected_context = preflight["guardianContext"]
+    assert actual_context["reportDigest"].startswith("sha256:")
+    actual_context["reportDigest"] = expected_context["reportDigest"]
     assert actual_preflight == preflight
     assert corpus_scan(case_id="nested-node-child-process") == corpus
 

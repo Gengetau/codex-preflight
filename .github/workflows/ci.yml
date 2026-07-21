@@ -7,6 +7,7 @@ on:
 jobs:
   test:
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
         python-version: ["3.12"]
@@ -39,11 +40,44 @@ jobs:
       - name: Lint
         run: ruff check .
 
+      - name: Capture Ruff diagnostics
+        if: failure()
+        shell: bash
+        run: ruff check . --output-format json > ruff-diagnostics-${{ runner.os }}.json || true
+
+      - name: Upload Ruff diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ruff-diagnostics-${{ runner.os }}
+          path: ruff-diagnostics-${{ runner.os }}.json
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Test
-        run: pytest
+        shell: bash
+        run: |
+          set +e
+          python -m pytest --tb=short --junitxml=pytest-results-${{ runner.os }}.xml > pytest-output-${{ runner.os }}.txt 2>&1
+          status=$?
+          set -e
+          cat pytest-output-${{ runner.os }}.txt
+          exit "$status"
+
+      - name: Upload pytest diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-diagnostics-${{ runner.os }}
+          path: |
+            pytest-output-${{ runner.os }}.txt
+            pytest-results-${{ runner.os }}.xml
+          if-no-files-found: error
+          retention-days: 7
 
   mcp-smoke:
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
         python-version: ["3.12"]

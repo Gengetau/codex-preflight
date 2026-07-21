@@ -1,0 +1,15 @@
+{
+  "pluginVersion": "0.3.7",
+  "runtimes": {
+    "linux-x64": {
+      "path": "linux-x64/codex-preflight-runtime",
+      "sha256": "58ba1e79d0a7d2e17184e916d7acc57d3afbf667b363aacc25a20a263b87c29d"
+    },
+    "windows-x64": {
+      "path": "windows-x64/codex-preflight-runtime.exe",
+      "sha256": "e165f00f8fc6452d9b65d534c46df164cd96e1cc2fb86abd52e69c6ce8777dbf"
+    }
+  },
+  "schemaVersion": "codex-preflight-runtime/v1",
+  "sourceCommit": "b29b69407d83da3abb02e70a357b1e340fd2b107"
+}

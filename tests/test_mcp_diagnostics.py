@@ -156,8 +156,10 @@ def test_diagnostics_do_not_mutate_plugin_files() -> None:
     paths = [
         ROOT / ".codex-plugin" / "plugin.json",
         ROOT / ".mcp.json",
-        ROOT / ".agents" / "plugins" / "plugins" / "codex-preflight" / ".codex-plugin" / "plugin.json",
-        ROOT / ".agents" / "plugins" / "plugins" / "codex-preflight" / ".mcp.json",
+        ROOT / "scripts" / "launch-mcp.mjs",
+        ROOT / "plugins" / "codex-preflight" / ".codex-plugin" / "plugin.json",
+        ROOT / "plugins" / "codex-preflight" / ".mcp.json",
+        ROOT / "plugins" / "codex-preflight" / "scripts" / "launch-mcp.mjs",
     ]
     before = {path: path.read_bytes() for path in paths}
 
@@ -180,7 +182,8 @@ def test_config_presentation_is_cross_platform_and_has_no_shell_wrapper() -> Non
     assert "mcp>=1.3.0" in output
     assert 'command = "codex-preflight-mcp"' in output
     assert '[mcp_servers."codex-preflight"]' in output
-    assert '"command": "codex-preflight-mcp"' in output
+    assert '"command": "node"' in output
+    assert '"./scripts/launch-mcp.mjs"' in output
     assert "no files changed" in lowered
     assert not any(token in lowered for token in ("bash -c", "powershell", "cmd /c", "shell=true"))
 
