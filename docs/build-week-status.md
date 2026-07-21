@@ -14,12 +14,12 @@ Only work after the released baseline is claimed as Build Week implementation.
 ## Checkpoint Status
 
 - `BW0 Baseline`: complete.
-- `BW1 Hook Gate and Explain`: engineering complete. Exact-runtime Bash `hook-active` certification remains deferred and is never inferred from packaging.
+- `BW1 Hook Gate and Explain`: engineering complete. Exact-runtime Bash `hook-active` certification is explicitly deferred and is never inferred from packaging.
 - `BW2 Exact Plan Approval`: complete. Closed remediation-plan and approval contracts, canonical plan identity, exact approval binding, rejection behavior, and single-use enforcement are implemented and exercised.
 - `BW3 Repair Capability Gate`: complete. The tested Windows Codex Desktop surface did not expose verified `apply_patch` Hook enforcement, so the supported path is `verified-isolated-repair` rather than `guarded-repair`.
 - `BW4 Verify`: complete. The same planned command is deterministically rescanned and before/after evidence is compared without executing the command.
 - `BW5 Plugin Experience`: complete on a clean Windows 11 Codex Desktop installation.
-- `BW6 Submission Candidate`: active. The selected `/feedback` Session ID is recorded; final public-document folding, evidence packaging, video, final exact-head CI, and exact-head review remain pending.
+- `BW6 Submission Candidate`: active. The selected `/feedback` Session ID is recorded; Linux/Bash certification is documented as deferred; final public-document folding, evidence packaging, video, final exact-head CI, and exact-head review remain pending.
 
 ## Selected Codex Feedback Session
 
@@ -51,6 +51,34 @@ Repair mode: verified-isolated-repair
 ```
 
 This classification is intentionally conservative. The Desktop surface exposed PowerShell-based command execution and structured `apply_patch`, but no canonical `Bash` tool path. The `apply_patch` capability probe produced a successful isolated sentinel write without a Hook deny, so pre-edit Hook enforcement is not claimed.
+
+## Linux/Bash Certification Status
+
+A Linux/Bash Hook-active certification attempt was made from the available Codex Desktop session, but the execution-topology gate did not pass.
+
+Observed topology:
+
+```text
+Observed platform: Windows x64
+Codex surface: Codex Desktop agent session
+shellToolObserved: exec_command
+canonicalBashSurfaceAvailable: false
+hookHost: none observed
+remoteTransportUsed: false
+```
+
+The configured cloud server was not used through a local SSH wrapper because that would test the local `exec_command` and transport path, not a Codex runtime and `PreToolUse` Hook executing natively on the Linux host.
+
+Final certification result:
+
+```text
+Linux/Bash hook-active certification: DEFERRED
+Bash Hook status: NOT VERIFIED
+Protection mode: skill-only
+Reason: the actual Codex tool was exec_command, not the canonical Bash surface matched by ^Bash$
+```
+
+No allow or deny probe was attempted after the topology gate failed. No package manager, fixture content, network request, product edit, plugin edit, or Hook configuration change occurred. The project makes no Linux Hook-enforcement claim from this attempt.
 
 ## Safe Synthetic Judge Path
 
@@ -112,13 +140,13 @@ The user-rejection path was also exercised separately. Rejecting the exact plan 
 
 ## Evidence Boundary
 
-The results above are report-level evidence from real product-path runs. Public evidence must remain redacted: do not publish local usernames, absolute user-profile paths, or unrelated machine identifiers.
+The results above are report-level evidence from real product-path runs. Public evidence must remain redacted: do not publish local usernames, absolute user-profile paths, server addresses, credentials, or unrelated machine identifiers.
 
 The deterministic scanner remains the sole authority for `ALLOW`, `WARN`, `ASK_USER`, and `BLOCK`. GPT-5.6 explanation and plan proposal are advisory. The model cannot choose `planId`, create approval, consume approval, or authorize command execution.
 
 ## Exact-Head CI Record
 
-Candidate `7add58294b7f4d7fd5da9db82f7bd69b114f7a83` passed both:
+Candidate `be56dbd5a258c63abd60866c1fed3955042306e1` passed both:
 
 - `CI`
 - `Build plugin runtime`
@@ -131,8 +159,7 @@ Before the Draft PR can be marked ready:
 
 1. Fold the final status and installation guidance into `README.md` and `BUILD_WEEK.md`.
 2. Package redacted evidence and the final demo script.
-3. Confirm Linux/Bash certification status or keep it explicitly deferred.
-4. Confirm video, Devpost, repository links, supported-platform wording, and known limitations.
-5. Record the final candidate commit.
-6. Run Windows and Linux CI, packaged-runtime smoke tests, marketplace synchronization checks, release diagnostics, and exact-head review on that candidate.
-7. Keep merge, tag, and release disabled until all gates pass.
+3. Confirm video, Devpost, repository links, supported-platform wording, and known limitations.
+4. Record the final candidate commit.
+5. Run Windows and Linux CI, packaged-runtime smoke tests, marketplace synchronization checks, release diagnostics, and exact-head review on that candidate.
+6. Keep merge, tag, and release disabled until all gates pass.
