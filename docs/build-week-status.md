@@ -18,8 +18,8 @@ Only work after the released baseline is claimed as Build Week implementation.
 - `BW2 Exact Plan Approval`: complete. Closed remediation-plan and approval contracts, canonical plan identity, exact approval binding, rejection behavior, and single-use enforcement are implemented and exercised.
 - `BW3 Repair Capability Gate`: complete. The tested Windows Codex Desktop surface did not expose verified `apply_patch` Hook enforcement, so the supported path is `verified-isolated-repair` rather than `guarded-repair`.
 - `BW4 Verify`: complete. The same planned command is deterministically rescanned and before/after evidence is compared without executing the command.
-- `BW5 Plugin Experience`: complete on a clean Windows 11 Codex Desktop installation.
-- `BW6 Submission Candidate`: active. The selected `/feedback` Session ID is recorded; Linux/Bash certification is documented as deferred; final public-document folding, evidence packaging, video, final exact-head CI, and exact-head review remain pending.
+- `BW5 Plugin Experience`: blocked and not complete. Clean install, capability probing, rejection behavior, and accepted-repair mechanics passed, but the accepted-plan validity window was 55 minutes and violated the contract maximum of 15 minutes. A fresh accepted-plan rerun is required.
+- `BW6 Submission Candidate`: preparation only. It must not be treated as active until BW5 passes the fresh validity-conformant rerun.
 
 ## Selected Codex Feedback Session
 
@@ -54,20 +54,25 @@ This classification is intentionally conservative. The Desktop surface exposed P
 
 ## Linux/Bash Certification Status
 
-A Linux/Bash Hook-active certification attempt was made from the available Codex Desktop session, but the execution-topology gate did not pass.
+A native Linux Codex certification attempt was completed using a local-controller/remote-executor topology.
 
-Observed topology:
+Observed environment and topology:
 
 ```text
-Observed platform: Windows x64
-Codex surface: Codex Desktop agent session
+Remote platform: Ubuntu 22.04 LTS, x86_64
+Remote Codex version: 0.144.6
+Remote Codex execution: native on Linux
+Controller transport: SSH
 shellToolObserved: exec_command
+shell interpreter: /bin/bash
 canonicalBashSurfaceAvailable: false
-hookHost: none observed
-remoteTransportUsed: false
+Hook event observed: false
+Hook launcher observed: false
 ```
 
-The configured cloud server was not used through a local SSH wrapper because that would test the local `exec_command` and transport path, not a Codex runtime and `PreToolUse` Hook executing natively on the Linux host.
+The remote Codex CLI was installed successfully with `npm install -g @openai/codex`, a fresh native session was started from the exact upgraded binary, the candidate HEAD matched, and the bundled Linux runtime digest matched its manifest.
+
+The certification still did not pass because the remote tool API was `exec_command`, not the canonical `Bash` surface matched by `^Bash$`. Using `/bin/bash` as the interpreter does not change the model-visible tool identity.
 
 Final certification result:
 
@@ -75,68 +80,72 @@ Final certification result:
 Linux/Bash hook-active certification: DEFERRED
 Bash Hook status: NOT VERIFIED
 Protection mode: skill-only
-Reason: the actual Codex tool was exec_command, not the canonical Bash surface matched by ^Bash$
+Reason: remote shellToolObserved was exec_command, not Bash
 ```
 
-No allow or deny probe was attempted after the topology gate failed. No package manager, fixture content, network request, product edit, plugin edit, or Hook configuration change occurred. The project makes no Linux Hook-enforcement claim from this attempt.
+No allow, deny, or scanner probe was attempted after the hard gate failed. Probe-network access, package-manager execution during probes, fixture execution, product source modification, and plugin source modification all remained zero. Installation metadata created `.codex-marketplace-install.json`, so the installed marketplace worktree was not clean; this is recorded as installation metadata rather than a product-source change.
 
-## Safe Synthetic Judge Path
+## BW5 Accepted-Plan Conformance Correction
 
-The accepted-plan path completed with the planned command `npm install` treated only as data.
+The previously reported accepted-plan attempt demonstrated repair mechanics but cannot satisfy BW5 conformance.
 
-Before repair:
+Invalid attempt timing:
 
 ```text
-Decision: BLOCK
-Risk score: 50
+createdAt: 2026-07-21T01:29:06Z
+expiresAt: 2026-07-21T02:24:06Z
+validity duration: 55 minutes / 3300 seconds
+contract maximum: 15 minutes / 900 seconds
+conformance result: FAIL
+```
+
+The previous approval and plan identities from that attempt must not be reused.
+
+What remains valid from the attempt:
+
+```text
+Initial decision: BLOCK
+Initial risk score: 50
 Blocking rule: NODE_LIFECYCLE_REMOTE_EXEC
-Command digest: sha256:fea6b934e37748291bdea99a3dbb76b3c889a7c00d06eced4516a6442abd954a
-```
-
-Plan and approval:
-
-```text
-Plan ID: guardian-plan-v1:sha256:4a115d1234d504bd5a2b9f577589d01f62994a9439d12aad7bf28b1e5894dc15
-Approval ID: guardian-approval-v1:sha256:f4424a85e512a35119fb9f1e32f5798dd6c552f518ab621235908e3e357a9284
-Approval records created: 1
-Approval consumption count: 1
-Approval replay: REJECTED
-```
-
-Repair verification:
-
-```text
+Repair mode: verified-isolated-repair
 Approved paths: package.json
 Actual changed paths: package.json
 Actual content matched approved postimage: yes
+Approval records created: 1
+Approval consumption count: 1
+Approval replay: REJECTED
+After decision: ALLOW
+After risk score: 0
+Command digest unchanged: yes
 Unexpected changes: 0
 Outside-target changes: 0
-Target drift: false
-```
-
-After repair:
-
-```text
-Decision: ALLOW
-Risk score: 0
-Command digest unchanged: yes
-Removed rule: NODE_LIFECYCLE_REMOTE_EXEC
-New blocking findings: none
-Uncertainty: false
-```
-
-Safety counters:
-
-```text
 command_execution: 0
 npm install executed: 0
 fixture content executed: 0
 fixtureCommandsExecuted: 0
 network access: 0
-product source modifications: 0
 ```
 
-The user-rejection path was also exercised separately. Rejecting the exact plan created no approval, consumed no authority, changed no file, and left the deterministic result at `BLOCK`.
+These results establish accepted-repair mechanics only. They do not establish accepted-plan validity conformance.
+
+The separate user-rejection branch remains valid: rejecting the exact plan created no approval, consumed no authority, changed no file, and left the deterministic result at `BLOCK`.
+
+## Required BW5 Rerun
+
+The fresh rerun must use:
+
+- a fresh isolated target;
+- fresh `targetId`, `sessionId`, `rootDigest`, and `reportDigest`;
+- a fresh plan and fresh `planId`;
+- a validity interval of at most 900 seconds;
+- the same planned `npm install` command treated only as data;
+- exact `package.json`-only operation and complete postimage;
+- one approval record, one successful consumption, and replay rejection;
+- deterministic rescan of the same command digest;
+- final `ALLOW` or `WARN` with maximum risk score `0` and no blockers;
+- zero command, package-manager, fixture, and network execution.
+
+The executable plan is documented in `docs/bw5-accepted-plan-rerun.md`.
 
 ## Evidence Boundary
 
@@ -146,20 +155,21 @@ The deterministic scanner remains the sole authority for `ALLOW`, `WARN`, `ASK_U
 
 ## Exact-Head CI Record
 
-Candidate `be56dbd5a258c63abd60866c1fed3955042306e1` passed both:
+Candidate `de73ebb0fc1cba85fabf0b7ebf7bbdac3c289e0d` passed both:
 
 - `CI`
 - `Build plugin runtime`
 
-This documentation update creates a newer candidate commit, so those workflows must pass again before final exact-head acceptance.
+This correction and rerun-plan update create newer candidate commits, so exact-head workflows must pass again before any final acceptance.
 
 ## Remaining Release Gates
 
 Before the Draft PR can be marked ready:
 
-1. Fold the final status and installation guidance into `README.md` and `BUILD_WEEK.md`.
-2. Package redacted evidence and the final demo script.
-3. Confirm video, Devpost, repository links, supported-platform wording, and known limitations.
-4. Record the final candidate commit.
-5. Run Windows and Linux CI, packaged-runtime smoke tests, marketplace synchronization checks, release diagnostics, and exact-head review on that candidate.
-6. Keep merge, tag, and release disabled until all gates pass.
+1. Complete the fresh BW5 accepted-plan rerun and record a validity-conformant PASS.
+2. Fold the final corrected status and installation guidance into `README.md` and `BUILD_WEEK.md`.
+3. Package redacted evidence and the final demo script.
+4. Confirm video, Devpost, repository links, supported-platform wording, and known limitations.
+5. Record the final candidate commit.
+6. Run Windows and Linux CI, packaged-runtime smoke tests, marketplace synchronization checks, release diagnostics, and exact-head review on that candidate.
+7. Keep merge, tag, release, auto-merge, and ready-for-review disabled until all gates pass.
